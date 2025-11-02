@@ -60,7 +60,7 @@ def get_session_token():
             if response.status_code == 400:
                 error("\n💡 Возможные причины:")
                 error("   1. Неверный API ключ (CAP_API_KEY)")
-                error("   2. Неверные учетные данные (DEMO_USERNAME/DEMO_PASSWORD)")
+                error("   2. Неверные учетные данные (CAP_API_USERNAME/CAP_API_PASSWORD)")
                 error("   3. API ключ заблокирован или истек")
                 error("   4. Аккаунт заблокирован или приостановлен")
 

@@ -41,7 +41,7 @@ def check_prerequisites():
         errors.append("❌ DEEPSEEK_API_KEY не настроен. Установите переменную окружения DEEPSEEK_API_KEY")
 
     if not USERNAME or not PASSWORD or USERNAME == "" or PASSWORD == "":
-        errors.append("❌ Учетные данные Capital.com не настроены. Установите DEMO_USERNAME и DEMO_PASSWORD")
+        errors.append("❌ Учетные данные Capital.com не настроены. Установите CAP_API_USERNAME и CAP_API_PASSWORD")
 
     if not CAP_API_KEY or CAP_API_KEY == "":
         errors.append("❌ CAP_API_KEY не настроен. Получите API ключ в Settings > API Integrations на Capital.com")
@@ -50,8 +50,8 @@ def check_prerequisites():
         print("\n".join(errors))
         print("\n⚠️ Для настройки экспортируйте переменные:")
         print("   export DEEPSEEK_API_KEY='ваш_ключ'")
-        print("   export DEMO_USERNAME='ваш_email'")
-        print("   export DEMO_PASSWORD='ваш_пароль'")
+        print("   export CAP_API_USERNAME='ваш_email'")
+        print("   export CAP_API_PASSWORD='ваш_пароль'")
         print("   export CAP_API_KEY='ваш_api_ключ_из_capital_com'")
         print("\n📋 Как получить CAP_API_KEY:")
         print("   1. Войдите в аккаунт Capital.com")

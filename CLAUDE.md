@@ -33,7 +33,7 @@ This is an automated trading system that integrates with Capital.com API for tra
 ### Configuration Management
 
 - `MODE` controls demo vs real trading (default: "demo")
-- Environment variables: `DEMO_USERNAME`, `DEMO_PASSWORD`, `DEEPSEEK_API_KEY`, `CAP_API_KEY`
+- Environment variables: `CAP_API_USERNAME`, `CAP_API_PASSWORD`, `DEEPSEEK_API_KEY`, `CAP_API_KEY`
 - Trading parameters: position size (0.1 lots), take profit (1.5%), stop loss (2.0%)
 - Supported symbols: EUR/USD, BTC/USD (default, can add AAPL, GOLD, OIL up to 5 max)
 - Maximum concurrent positions: 5
@@ -61,8 +61,8 @@ python3 plotter.py    # Test chart generation
 ```bash
 # Set required environment variables
 export DEEPSEEK_API_KEY="your_deepseek_api_key"
-export DEMO_USERNAME="your_demo_username"
-export DEMO_PASSWORD="your_demo_password"
+export CAP_API_USERNAME="your_demo_username"
+export CAP_API_PASSWORD="your_demo_password"
 export CAP_API_KEY="your_capital_api_key"  # From Settings > API Integrations
 export MODE="demo"  # or "real"
 ```

@@ -50,11 +50,11 @@ wc -l data/trades.log                    # Количество сделок
 
 ```bash
 # Переменные окружения
-export DEMO_USERNAME="email"             # Настроить username
-export DEMO_PASSWORD="pass"              # Настроить password
+export CAP_API_USERNAME="email"             # Настроить username
+export CAP_API_PASSWORD="pass"              # Настроить password
 export CAP_API_KEY="key"                 # API ключ Capital.com (ОБЯЗАТЕЛЬНО!)
 export DEEPSEEK_API_KEY="key"            # Настроить API ключ
-echo $DEMO_USERNAME                      # Проверить переменную
+echo $CAP_API_USERNAME                      # Проверить переменную
 
 # Права доступа
 chmod +x *.sh                            # Сделать скрипты исполняемыми

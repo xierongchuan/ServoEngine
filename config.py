@@ -25,8 +25,8 @@ MODE = os.getenv("MODE", "demo")  # "demo" для тестов, "real" для р
 
 # Ваши учетные данные Capital.com (обязательно установите переменные окружения)
 # НЕ используйте fallback значения в коде - это небезопасно!
-USERNAME = os.getenv("DEMO_USERNAME", "")
-PASSWORD = os.getenv("DEMO_PASSWORD", "")
+USERNAME = os.getenv("CAP_API_USERNAME", "")
+PASSWORD = os.getenv("CAP_API_PASSWORD", "")
 CAP_API_KEY = os.getenv("CAP_API_KEY", "")  # API ключ из Settings > API Integrations
 
 # Настройки трейдинга

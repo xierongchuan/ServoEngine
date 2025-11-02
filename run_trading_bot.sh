@@ -29,11 +29,11 @@ if ! command -v python3 &> /dev/null; then
 fi
 
 # Проверка наличия переменных окружения
-if [ -z "$DEMO_USERNAME" ] || [ -z "$DEMO_PASSWORD" ] || [ -z "$DEEPSEEK_API_KEY" ]; then
+if [ -z "$CAP_API_USERNAME" ] || [ -z "$CAP_API_PASSWORD" ] || [ -z "$DEEPSEEK_API_KEY" ]; then
     log_error "Переменные окружения не настроены!"
     log_warning "Убедитесь что установлены:"
-    log_warning "  - DEMO_USERNAME"
-    log_warning "  - DEMO_PASSWORD"
+    log_warning "  - CAP_API_USERNAME"
+    log_warning "  - CAP_API_PASSWORD"
     log_warning "  - DEEPSEEK_API_KEY"
     log_warning ""
     log_warning "Для настройки отредактируйте .env файл или экспортируйте переменные:"

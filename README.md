@@ -67,7 +67,7 @@ OpenProducer/
 ### Управление конфигурацией
 
 - `MODE` - управляет демо vs реальной торговлей (по умолчанию "demo")
-- Переменные окружения: `DEMO_USERNAME`, `DEMO_PASSWORD`, `DEEPSEEK_API_KEY`
+- Переменные окружения: `CAP_API_USERNAME`, `CAP_API_PASSWORD`, `DEEPSEEK_API_KEY`
 - Торговые параметры: размер позиции (0.1 лота), TP (1.5%), SL (2.0%)
 - Поддерживаемые символы: EUR/USD, BTC/USD (по умолчанию, можно добавить AAPL, GOLD, OIL до 5 макс)
 - Максимум одновременных позиций: 5
@@ -103,8 +103,8 @@ pip install -r requirements.txt
 
 ```bash
 # Capital.com API (только ДЕМО-счет для безопасности!)
-export DEMO_USERNAME="ваш_email_демо_аккаунта"
-export DEMO_PASSWORD="ваш_пароль_демо_аккаунта"
+export CAP_API_USERNAME="ваш_email_демо_аккаунта"
+export CAP_API_PASSWORD="ваш_пароль_демо_аккаунта"
 export CAP_API_KEY="ваш_api_ключ_из_capital_com"
 
 # DeepSeek API (для AI-анализа рынка)
@@ -142,7 +142,7 @@ source .env
 
 ```bash
 # Проверьте переменные окружения
-echo $DEMO_USERNAME
+echo $CAP_API_USERNAME
 echo $DEEPSEEK_API_KEY
 
 # Проверьте синтаксис файлов
@@ -483,7 +483,7 @@ python3 executor.py   # Тест управления позициями
 ❌ Ошибка авторизации: Invalid credentials
 ```
 **Решение:**
-- Проверьте DEMO_USERNAME и DEMO_PASSWORD
+- Проверьте CAP_API_USERNAME и CAP_API_PASSWORD
 - В демо-режиме система использует https://demo-api-capital.backend-capital.com/api/v1/
 
 **2. Ошибка DeepSeek API**
@@ -638,8 +638,8 @@ OpenProducer/
 pip install pandas matplotlib python-dateutil requests
 
 # 2. Настроить переменные
-export DEMO_USERNAME="your_email"
-export DEMO_PASSWORD="your_password"
+export CAP_API_USERNAME="your_email"
+export CAP_API_PASSWORD="your_password"
 export DEEPSEEK_API_KEY="your_key"
 export MODE="demo"
 
