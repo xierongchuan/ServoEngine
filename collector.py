@@ -63,7 +63,7 @@ def fetch_prices(symbol):
             error(f"   Доступные поля: {list(prices[0].keys())}")
             raise ValueError(f"В данных отсутствует обязательное поле: {field}")
 
-    info(f"   ✅ Получено {len(prices)} свечей для {symbol}")
+    info(f"✅ Получено {len(prices)} свечей для {symbol}")
     info(f"   Диапазон: {prices[0]['snapshotTimeUTC']} → {prices[-1]['snapshotTimeUTC']}")
 
     return prices
@@ -72,12 +72,12 @@ def fetch_news(symbol):
     """Получает новости для символа (только реальные!)"""
     # Используем новый модуль для получения новостей
     news = get_news_for_symbol(symbol)
-    info(f"   ✅ Получено {len(news)} новостей для {symbol}")
+    info(f"✅ Получено {len(news)} новостей для {symbol}")
 
     # Логируем источник новостей
     if news:
         source = news[0].get("source", "Unknown")
-        info(f"   📰 Источник: {source}")
+        info(f"📰 Источник: {source}")
 
     return news
 

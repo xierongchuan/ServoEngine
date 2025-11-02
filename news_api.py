@@ -285,11 +285,11 @@ def main():
         info(f"\n📊 Тестируем {symbol}:")
         try:
             news = get_news_for_symbol(symbol)
-            info(f"   ✅ Получено {len(news)} новостей")
+            info(f"✅ Получено {len(news)} новостей")
             for i, item in enumerate(news[:3], 1):
                 info(f"   {i}. {item['title'][:50]}... (sentiment={item['sentiment']})")
         except Exception as e:
-            error(f"   ❌ Ошибка: {str(e)}")
+            error(f"❌ Ошибка: {str(e)}")
 
 if __name__ == "__main__":
     main()

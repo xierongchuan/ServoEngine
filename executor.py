@@ -199,7 +199,7 @@ def create_order(symbol, direction, price, hold_minutes=DEFAULT_HOLD_TIME_MINUTE
 
 def main(predictions):
     """Основная функция исполнения ордеров"""
-    info("\n🚀 Начинаем исполнение ордеров...")
+    info("🚀 Начинаем исполнение ордеров...")
     positions = get_open_positions()
     info(f"📊 Открытые позиции: {list(positions.keys())}")
 
