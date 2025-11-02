@@ -136,7 +136,7 @@ def select_account():
             if account_type in ["CFD", "SPREADBET", "DEMO"]:
                 target_account = account
                 # Проверяем, есть ли demo аккаунт в списке аккаунтов
-                info(f"   ✅ Выбран демо-счет: {account_type} (ID: {account_id})")
+                info(f"✅ Выбран демо-счет: {account_type} (ID: {account_id})")
                 # Берем первый подходящий аккаунт
                 break
         else:
@@ -144,7 +144,7 @@ def select_account():
             is_real = account_type in ["CFD", "SPREADBET"]
             if is_real:
                 target_account = account
-                info(f"   ✅ Выбран реальный счет: {account_type} (ID: {account_id})")
+                info(f"✅ Выбран реальный счет: {account_type} (ID: {account_id})")
                 break
 
     if not target_account:

@@ -8,6 +8,7 @@
 SYMBOL_TO_EPIC = {
     "EUR/USD": "EURUSD",
     "BTC/USD": "BTCUSD",
+    "SOL/USD": "SOLUSD",
     "AAPL": "AAPL",
     "GOLD": "GOLD",
     "OIL": "BRENTOIL"
