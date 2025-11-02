@@ -2,3 +2,58 @@
 __pycache__
 .claude
 .env
+
+# ========================================
+# OpenProducer Project Specific
+# ========================================
+
+# Trading data and logs
+data/code.log
+data/trades.log
+data/cron.log
+data/prices/
+data/news/
+
+# Generated charts
+charts/
+
+# API Keys and Credentials
+*.key
+credentials.json
+secrets.json
+
+# Python bytecode
+*.pyc
+*.pyo
+*.pyd
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+.pytest_cache/
+.tox/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
