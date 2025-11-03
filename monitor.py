@@ -45,7 +45,7 @@ def close_position(deal_id):
 
 def main():
     """Основная функция мониторинга"""
-    info("\n👀 Запуск мониторинга открытых позиций...")
+    info("👀 Запуск мониторинга открытых позиций...")
     positions = executor.get_open_positions()
 
     if not positions:

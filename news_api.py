@@ -7,28 +7,29 @@ import json
 import time
 import requests
 from datetime import datetime, timedelta
+from typing import Union
 from config import NEWSAPI_KEY, ALPHAVANTAGE_KEY, FINNHUB_KEY, NEWS_SETTINGS, SYMBOLS
 from logger import info, error, warning
 
-# Проверяем наличие TextBlob
-try:
-    from textblob import TextBlob
-    TEXTBLOB_AVAILABLE = True
-except ImportError:
-    TEXTBLOB_AVAILABLE = False
-    warning("⚠️ TextBlob не установлен. Анализ тональности будет упрощенным.")
-
-def analyze_sentiment(text):
+def analyze_sentiment(text: str) -> float:
     """Анализирует тональность текста"""
-    if TEXTBLOB_AVAILABLE:
+    # Проверяем наличие TextBlob и импортируем только при использовании
+    try:
+        from textblob import TextBlob
         try:
             blob = TextBlob(text)
-            polarity = blob.sentiment.polarity  # от -1 (негативно) до 1 (позитивно)
+            # Используем getattr для безопасного доступа к атрибуту
+            sentiment_obj = blob.sentiment
+            polarity = getattr(sentiment_obj, 'polarity', 0)
+            # Явно приводим к float для Pyright
+            polarity = float(polarity)  # от -1 (негативно) до 1 (позитивно)
             # Нормализуем от -0.5 до 0.5, затем переводим в 0-1
             normalized = (polarity + 1) / 2
             return round(normalized, 2)
         except:
             pass
+    except ImportError:
+        warning("⚠️ TextBlob не установлен. Анализ тональности будет упрощенным.")
 
     # Упрощенный анализ без TextBlob
     positive_words = ["рост", "покупать", "buy", "увеличение", "прибыль", "bullish", "up", "gain", "rise"]
