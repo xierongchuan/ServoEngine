@@ -27,18 +27,20 @@ echo -e "${GREEN}✅ Скрипт сделан исполняемым${NC}"
 
 echo ""
 echo -e "${YELLOW}Выберите интервал запуска бота:${NC}"
-echo "1) Каждые 10 минут"
-echo "2) Каждый час"
-echo "3) Каждые 2 часа"
-echo "4) Отменить"
+echo "1) Каждые 5 минут"
+echo "2) Каждые 10 минут"
+echo "3) Каждый час"
+echo "4) Каждые 2 часа"
+echo "5) Отменить"
 
-read -p "Введите номер (1-4): " choice
+read -p "Введите номер (1-5): " choice
 
 case $choice in
-    1) CRON_SCHEDULE="*/10 * * * *"; CRON_DESC="каждые 10 минут";;
-    2) CRON_SCHEDULE="0 * * * *"; CRON_DESC="каждый час";;
-    3) CRON_SCHEDULE="0 */2 * * *"; CRON_DESC="каждые 2 часа";;
-    4) echo -e "${YELLOW}Отменено${NC}"; exit 0;;
+    1) CRON_SCHEDULE="*/5 * * * *"; CRON_DESC="каждые 5 минут";;
+    2) CRON_SCHEDULE="*/10 * * * *"; CRON_DESC="каждые 10 минут";;
+    3) CRON_SCHEDULE="0 * * * *"; CRON_DESC="каждый час";;
+    4) CRON_SCHEDULE="0 */2 * * *"; CRON_DESC="каждые 2 часа";;
+    5) echo -e "${YELLOW}Отменено${NC}"; exit 0;;
     *) echo -e "${RED}❌ Неверный выбор${NC}"; exit 1;;
 esac
 
