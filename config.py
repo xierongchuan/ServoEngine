@@ -30,7 +30,7 @@ PASSWORD = os.getenv("CAP_API_PASSWORD", "")
 CAP_API_KEY = os.getenv("CAP_API_KEY", "")  # API ключ из Settings > API Integrations
 
 # Настройки трейдинга
-SYMBOLS = ["SOL/USD", "BTC/USD"]     # Активы для торговли (макс 5)
+SYMBOLS = ["SOL/USD", "BTC/USD", "EUR/USD"]     # Активы для торговли (макс 5)
 POSITION_SIZE = 0.1                  # Размер ордера в лотах
 TAKE_PROFIT_PERCENT = 1.5            # Take Profit в процентах
 STOP_LOSS_PERCENT = 2.0              # Stop Loss в процентах

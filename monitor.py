@@ -7,7 +7,7 @@ from utils import init_api_session, make_request, get_headers
 import executor
 from logger import info, error, warning, log_trade
 
-def close_position(deal_id):
+def close_position(deal_id, working_order_id=None):
     """Закрывает позицию через API"""
     # Сессия уже инициализирована в get_open_positions(), нет необходимости инициализировать снова
     url = f"{API_BASE}positions/{deal_id}"
@@ -25,9 +25,20 @@ def close_position(deal_id):
         try:
             from executor import load_position_cache, save_position_cache
             cache = load_position_cache()
+
+            # Удаляем deal_id
             if deal_id in cache:
                 del cache[deal_id]
-                save_position_cache(cache)
+
+            # Удаляем working_order_id если он передан и отличается от deal_id
+            if working_order_id and working_order_id != deal_id:
+                if working_order_id in cache:
+                    del cache[working_order_id]
+
+            save_position_cache(cache)
+            info(f"🗑️ Удалены записи из кэша: deal_id={deal_id[:20]}...")
+            if working_order_id and working_order_id != deal_id:
+                info(f"🗑️ Удален working_order_id из кэша: {working_order_id[:20]}...")
         except Exception as e:
             warning(f"⚠️ Не удалось удалить {deal_id} из кэша: {e}")
 
@@ -55,8 +66,8 @@ def main():
     info(f"📊 Отслеживаем позиции: {list(positions.keys())}")
 
     # Для каждого символа и его списка позиций
-    for symbol, position_list in positions.items():
-        # Теперь positions[symbol] это список позиций
+    for sym, position_list in positions.items():
+        # Теперь positions[sym] это список позиций
         for i, position in enumerate(position_list):
             # Проверяем время удержания позиции
             try:
@@ -84,16 +95,16 @@ def main():
                     # Закрываем позицию если она открыта дольше планируемого времени
                     # (Capital.com должен автоматически закрывать по TP/SL, но страхуемся)
                     if minutes_held > hold_minutes:
-                        info(f"⏰ {symbol} [позиция {i+1}]: закрываем позицию, открыта {int(minutes_held)} мин (планировалось {hold_minutes} мин)")
-                        log_trade(f"⏰ {symbol}: автоматическое закрытие позиции (открыта {int(minutes_held)} мин, планировалось {hold_minutes} мин)")
-                        close_position(deal_id)
+                        info(f"⏰ {sym} [позиция {i+1}]: закрываем позицию, открыта {int(minutes_held)} мин (планировалось {hold_minutes} мин)")
+                        log_trade(f"⏰ {sym}: автоматическое закрытие позиции (открыта {int(minutes_held)} мин, планировалось {hold_minutes} мин)")
+                        close_position(deal_id, working_order_id)
                     else:
-                        info(f"⏳ {symbol} [позиция {i+1}]: позиция открыта {int(minutes_held)} мин, ждем до {hold_minutes} мин")
+                        info(f"⏳ {sym} [позиция {i+1}]: позиция открыта {int(minutes_held)} мин, ждем до {hold_minutes} мин")
                 else:
-                    warning(f"⚠️ {symbol} [позиция {i+1}]: не удалось определить время или ID позиции")
+                    warning(f"⚠️ {sym} [позиция {i+1}]: не удалось определить время или ID позиции")
 
             except Exception as e:
-                warning(f"⚠️ {symbol} [позиция {i+1}]: ошибка проверки времени: {str(e)}")
+                warning(f"⚠️ {sym} [позиция {i+1}]: ошибка проверки времени: {str(e)}")
 
 if __name__ == "__main__":
     main()

@@ -250,7 +250,7 @@ def make_request(url, method="get", **kwargs):
 
             # Логирование ответа при ошибке
             if response.status_code >= 400:
-                error(f"   ❌ HTTP {response.status_code} (попытка {attempt + 1}/{max_retries})")
+                error(f"❌ HTTP {response.status_code} (попытка {attempt + 1}/{max_retries})")
                 try:
                     error(f"   Response: {response.text[:300]}")
                 except:

@@ -174,7 +174,7 @@ def create_order(symbol, direction, price, hold_minutes=DEFAULT_HOLD_TIME_MINUTE
 
         # 2. Получаем позиции чтобы найти workingOrderId и сохранить его тоже
         positions = get_open_positions()
-        for symbol, pos_list in positions.items():
+        for sym, pos_list in positions.items():
             for pos in pos_list:
                 if pos.get("dealId") == deal_id:
                     working_order_id = pos.get("workingOrderId", deal_id)  # Если нет workingOrderId, используем dealId
