@@ -33,8 +33,8 @@ CAP_API_KEY = os.getenv("CAP_API_KEY", "")  # API ключ из Settings > API I
 SYMBOLS = ["SOL/USD", "BTC/USD", "EUR/USD"]     # Активы для торговли (макс 5)
 POSITION_SIZE = 0.1                  # Размер ордера в лотах
 TAKE_PROFIT_PERCENT = 1.5            # Take Profit в процентах
-STOP_LOSS_PERCENT = 2.0              # Stop Loss в процентах
-MIN_CONFIDENCE_THRESHOLD = 0.6       # Минимальная уверенность AI для открытия позиции (0.0-1.0)
+STOP_LOSS_PERCENT = 1.5              # Stop Loss в процентах
+MIN_CONFIDENCE_THRESHOLD = 0.7       # Минимальная уверенность AI для открытия позиции (0.0-1.0)
 DEFAULT_HOLD_TIME_MINUTES = 60       # Время удержания позиции по умолчанию (в минутах)
 
 # Пороговые значения для AI-анализа
