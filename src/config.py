@@ -3,18 +3,22 @@ import os
 # Загружаем переменные из .env файла если он существует
 # (небезопасно загружать .env в продакшене, используйте переменные окружения)
 try:
-    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    # Look for .env in the project root (one level up from src)
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
     if os.path.exists(env_path):
         with open(env_path, 'r') as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith('#') and '=' in line:
                     key, value = line.split('=', 1)
-                    os.environ[key.strip()] = value.strip().strip('"').strip("'")
+                    key = key.strip()
+                    # Don't override if already set in environment
+                    if key not in os.environ:
+                        os.environ[key] = value.strip().strip('"').strip("'")
 
     # Инициализируем логгер только после загрузки конфигурации
     try:
-        import logger
+        from src.utils import logger
     except:
         pass  # Логгер может быть еще не готов
 except Exception as e:
@@ -30,7 +34,7 @@ PASSWORD = os.getenv("CAP_API_PASSWORD", "")
 CAP_API_KEY = os.getenv("CAP_API_KEY", "")  # API ключ из Settings > API Integrations
 
 # Настройки трейдинга
-SYMBOLS = ["SOL/USD", "BTC/USD", "EUR/USD"]     # Активы для торговли (макс 5)
+SYMBOLS = ["BTC/USD"]     # Активы для торговли (макс 5)
 POSITION_SIZE = 0.1                  # Размер ордера в лотах
 TAKE_PROFIT_PERCENT = 1.5            # Take Profit в процентах
 STOP_LOSS_PERCENT = 1.5              # Stop Loss в процентах
@@ -83,6 +87,7 @@ NEWS_SETTINGS = {
     "provider": "newsapi",          # newsapi, alphavantage, finnhub
     "max_news_items": 10,                # Максимум новостей для анализа
     "news_timeout_seconds": 30,          # Таймаут запроса новостей
+    "extract_full_content": True,        # Извлекать полный текст из URL (требует newspaper3k)
 }
 
 # API Endpoint для демо и реального режима
@@ -92,5 +97,21 @@ NEWS_SETTINGS = {
 # Реальный: https://api-capital.backend-capital.com/api/v1/
 API_BASE = "https://demo-api-capital.backend-capital.com/api/v1/" if MODE == "demo" else "https://api-capital.backend-capital.com/api/v1/"
 
+# Выбор биржи
+EXCHANGE = os.getenv("EXCHANGE", "capital")  # "capital" или "bingx"
+
+# BingX API настройки
+BINGX_API_KEY = os.getenv("BINGX_API_KEY", "")
+BINGX_SECRET_KEY = os.getenv("BINGX_SECRET_KEY", "")
+
+# BingX API URLs
+# Standard Futures: https://open-api.bingx.com
+# VST Futures (Demo): https://open-api-vst.bingx.com
+BINGX_API_URL = "https://open-api-vst.bingx.com" if MODE == "demo" else "https://open-api.bingx.com"
+
 # Логируем выбранный endpoint для отладки
-print(f"🌐 Используется {'Demo' if MODE == 'demo' else 'Real'} API endpoint: {API_BASE}")
+print(f"🌐 Используется биржа: {EXCHANGE}")
+if EXCHANGE == "capital":
+    print(f"🌐 Capital.com API endpoint: {API_BASE} ({'Demo' if MODE == 'demo' else 'Real'})")
+else:
+    print(f"🌐 BingX API endpoint: {BINGX_API_URL} ({'Demo (VST)' if MODE == 'demo' else 'Real'})")

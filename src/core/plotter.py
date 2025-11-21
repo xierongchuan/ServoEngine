@@ -11,9 +11,9 @@ try:
 except ImportError:
     PANDAS_AVAILABLE = False
 
-from config import SYMBOLS, DATA_DIR, CHARTS_DIR, CLEANUP_SETTINGS, AI_THRESHOLDS
-from logger import info, error
-from symbols import get_filename
+from src.config import SYMBOLS, DATA_DIR, CHARTS_DIR, CLEANUP_SETTINGS, AI_THRESHOLDS
+from src.utils.logger import info, error
+from src.utils.symbols import get_filename
 
 def calculate_rsi(closes, period=14):
     """Рассчитывает RSI индикатор для всех точек как скользящее окно"""

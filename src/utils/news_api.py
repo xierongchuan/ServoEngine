@@ -1,6 +1,7 @@
 """
 Модуль для получения реальных новостей из различных API источников
 Поддерживает: NewsAPI, Alpha Vantage, Finnhub
+Извлекает полный контент новостей из URL
 """
 
 import json
@@ -8,8 +9,16 @@ import time
 import requests
 from datetime import datetime, timedelta
 from typing import Union
-from config import NEWSAPI_KEY, ALPHAVANTAGE_KEY, FINNHUB_KEY, NEWS_SETTINGS, SYMBOLS
-from logger import info, error, warning
+from src.config import NEWSAPI_KEY, ALPHAVANTAGE_KEY, FINNHUB_KEY, NEWS_SETTINGS, SYMBOLS
+from src.utils.logger import info, error, warning
+
+# Импортируем newspaper3k только при использовании
+try:
+    from newspaper import Article
+    NEWSPAPER3K_AVAILABLE = True
+except ImportError:
+    NEWSPAPER3K_AVAILABLE = False
+    warning("⚠️ newspaper3k не установлен. Полный контент новостей недоступен.")
 
 def analyze_sentiment(text: str) -> float:
     """Анализирует тональность текста"""
@@ -46,6 +55,43 @@ def analyze_sentiment(text: str) -> float:
     else:
         return 0.5  # нейтрально
 
+def extract_full_article(url):
+    """
+    Извлекает полный текст статьи из URL с помощью newspaper3k
+
+    Args:
+        url: URL статьи
+
+    Returns:
+        str: Полный текст статьи или пустая строка при ошибке
+    """
+    # Проверяем, включено ли извлечение полного контента
+    if not NEWS_SETTINGS.get("extract_full_content", False):
+        return ""
+
+    if not NEWSPAPER3K_AVAILABLE:
+        warning("⚠️ newspaper3k не установлен. Невозможно извлечь полный контент.")
+        warning("   Установите: pip install newspaper3k")
+        return ""
+
+    try:
+        article = Article(url)
+        article.download()
+        article.parse()
+
+        # Получаем полный текст статьи
+        full_text = article.text.strip()
+
+        # Проверяем, что текст достаточно длинный
+        if len(full_text) > 100:  # Минимум 100 символов
+            info(f"   📄 Извлечен полный текст: {len(full_text)} символов")
+            return full_text
+
+    except Exception as e:
+        warning(f"⚠️ Не удалось извлечь полный текст из {url}: {str(e)}")
+
+    return ""
+
 def get_news_newsapi(symbol):
     """Получает новости через NewsAPI.org"""
     if not NEWSAPI_KEY:
@@ -81,14 +127,32 @@ def get_news_newsapi(symbol):
     for article in data.get("articles", []):
         title = article.get("title", "")
         description = article.get("description", "") or ""
+        url = article.get("url", "") or ""
         published_at = article.get("publishedAt", "")
 
-        # Анализируем тональность заголовка и описания
-        sentiment = analyze_sentiment(f"{title}. {description}")
+        # Извлекаем полный текст статьи из URL
+        full_content = ""
+        if url:
+            full_content = extract_full_article(url)
+
+        # Если удалось получить полный контент, используем его
+        # Иначе используем description
+        if full_content and len(full_content) > len(description):
+            content_text = full_content
+            info(f"   ✅ Используется полный текст статьи ({len(content_text)} символов)")
+        else:
+            content_text = description
+            if description:
+                info(f"   ⚠️ Используется краткое описание ({len(content_text)} символов)")
+            else:
+                info(f"   ⚠️ Текст недоступен")
+
+        # Анализируем тональность заголовка и полного текста
+        sentiment = analyze_sentiment(f"{title}. {content_text}")
 
         news_items.append({
             "title": title,
-            "description": description,
+            "description": content_text,  # Полный текст или краткое описание
             "sentiment": sentiment,
             "timestamp": published_at,
             "source": "NewsAPI"

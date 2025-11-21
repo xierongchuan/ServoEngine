@@ -1,8 +1,8 @@
 import json
 import requests
 import time
-from config import DEEPSEEK_API_KEY
-from logger import info, error
+from src.config import DEEPSEEK_API_KEY
+from src.utils.logger import info, error
 
 def get_prediction(prompt):
     """Отправляет промпт в DeepSeek и получает ответ"""
@@ -50,13 +50,33 @@ def parse_response(response):
         if isinstance(response, dict):
             data = response.copy()
         else:
-            # Извлекаем JSON из ответа
-            start = response.find('{')
-            end = response.rfind('}') + 1
-            if start == -1 or end == 0:
+            # Очищаем ответ от markdown блоков ```json```
+            # Удаляем все блоки кода с пометкой json
+            import re
+            cleaned = re.sub(r'```json\s*', '', response)
+            cleaned = re.sub(r'```', '', cleaned)
+
+            # Улучшенное извлечение JSON - ищем первую открывающую скобку и соответствующую закрывающую
+            start = cleaned.find('{')
+            if start == -1:
                 raise ValueError("Нет JSON в ответе")
 
-            json_str = response[start:end]
+            # Считаем глубину скобок для поиска соответствующей закрывающей
+            brace_count = 0
+            end = -1
+            for i in range(start, len(cleaned)):
+                if cleaned[i] == '{':
+                    brace_count += 1
+                elif cleaned[i] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end = i + 1
+                        break
+
+            if end == -1:
+                raise ValueError("Некорректный JSON в ответе")
+
+            json_str = cleaned[start:end]
             data = json.loads(json_str)
         
         # Валидация данных
@@ -95,13 +115,15 @@ def main(analyses):
         info(f"🧠 Генерация прогноза для {analysis['symbol']}...")
         response = get_prediction(analysis["prompt"])
 
-        # TODO: Убрать костыль
-        # Безопасное логирование ответа (может быть dict или str)
-        # if isinstance(response, str):
-        #     info(f"📨 Ответ DeepSeek: {response[:200]}...")
-        # else:
-        #     info(f"📨 Ответ DeepSeek: (dict) {response}")
-        info(f"📨 Ответ DeepSeek: (dict) {response}")
+        # Логируем очищенный ответ от DeepSeek (без markdown)
+        if isinstance(response, str):
+            import re
+            cleaned = re.sub(r'```json\s*', '', response)
+            cleaned = re.sub(r'```', '', cleaned)
+            # Показываем первые 500 символов очищенного ответа
+            info(f"📨 Ответ DeepSeek: {cleaned[:500]}{'...' if len(cleaned) > 500 else ''}")
+        else:
+            info(f"📨 Ответ DeepSeek: (dict) {response}")
 
         prediction = parse_response(response)
         

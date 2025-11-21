@@ -38,16 +38,25 @@ if ! command -v python3 &> /dev/null; then
 fi
 
 # Проверка наличия переменных окружения
-if [ -z "$CAP_API_USERNAME" ] || [ -z "$CAP_API_PASSWORD" ] || [ -z "$DEEPSEEK_API_KEY" ]; then
-    log_error "Переменные окружения не настроены!"
-    log_warning "Убедитесь что установлены:"
-    log_warning "  - CAP_API_USERNAME"
-    log_warning "  - CAP_API_PASSWORD"
-    log_warning "  - DEEPSEEK_API_KEY"
-    log_warning ""
-    log_warning "Для настройки отредактируйте .env файл или экспортируйте переменные:"
-    log_warning "  source .env"
+EXCHANGE=${EXCHANGE:-capital}
+
+if [ -z "$DEEPSEEK_API_KEY" ]; then
+    log_error "DEEPSEEK_API_KEY не настроен!"
     exit 1
+fi
+
+if [ "$EXCHANGE" == "capital" ]; then
+    if [ -z "$CAP_API_USERNAME" ] || [ -z "$CAP_API_PASSWORD" ] || [ -z "$CAP_API_KEY" ]; then
+        log_error "Capital.com credentials missing!"
+        log_warning "Required: CAP_API_USERNAME, CAP_API_PASSWORD, CAP_API_KEY"
+        exit 1
+    fi
+elif [ "$EXCHANGE" == "bingx" ]; then
+    if [ -z "$BINGX_API_KEY" ] || [ -z "$BINGX_SECRET_KEY" ]; then
+        log_error "BingX credentials missing!"
+        log_warning "Required: BINGX_API_KEY, BINGX_SECRET_KEY"
+        exit 1
+    fi
 fi
 
 # Создаем директории если их нет
@@ -55,11 +64,11 @@ mkdir -p data/prices data/news charts
 
 # Логируем начало
 log_message "Запуск торгового бота OpenProducer..."
+log_message "Биржа: $EXCHANGE"
 log_message "Режим: $MODE"
-log_message "Активы: EUR/USD, BTC/USD"
 
-# Запускаем бота
-if python3 main.py; then
+# Запускаем бота с использованием виртуального окружения
+if ./venv/bin/python3 run.py; then
     log_message "✅ Торговый бот успешно завершил работу"
 else
     log_error "❌ Торговый бот завершился с ошибкой"

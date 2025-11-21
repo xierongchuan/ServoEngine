@@ -1,8 +1,8 @@
 import json
 import os
-from config import SYMBOLS, DATA_DIR, AI_THRESHOLDS
-from logger import info, error
-from symbols import get_filename
+from src.config import SYMBOLS, DATA_DIR, AI_THRESHOLDS
+from src.utils.logger import info, error
+from src.utils.symbols import get_filename
 
 def calculate_indicators(prices):
     """Рассчитывает ключевые индикаторы"""
@@ -53,11 +53,6 @@ def calculate_indicators(prices):
 
     return round(sma, 5), round(rsi, 2)
 
-def get_news_sentiment(news):
-    """Анализирует тональность новостей"""
-    sentiment = sum(item["sentiment"] for item in news) / len(news)
-    return round(sentiment, 2)
-
 def analyze_symbol(symbol):
     """Анализирует один символ и готовит промпт для DeepSeek"""
     # Загружаем данные
@@ -66,20 +61,19 @@ def analyze_symbol(symbol):
 
     with open(f"{DATA_DIR}/news/{get_filename(symbol)}.json") as f:
         news = json.load(f)
-    
+
     # Рассчитываем индикаторы
     sma, rsi = calculate_indicators(prices)
-    sentiment = get_news_sentiment(news)
-    
-    # Формируем ключевые слова из новостей
-    positive_count = sum(1 for item in news if item["sentiment"] > 0)
-    negative_count = len(news) - positive_count
-    keywords = [item["title"].split()[0] for item in news[:3]]
-    
+
     # Текущая цена
     current_price = float(prices[-1]["closePrice"]["bid"])
-    
-    # Формируем промпт с конфигурируемыми порогами
+
+    # Формируем сырые новостные данные для анализа ИИ
+    news_text = ""
+    for item in news:
+        news_text += f"\n- [{item['timestamp']}] {item['title']}\n  {item['description']}\n"
+
+    # Формируем промпт с сырыми новостными данными
     prompt = f"""
     Ты — профессиональный трейдер с 10-летним опытом. Проанализируй {symbol} строго по этим правилам:
 
@@ -87,22 +81,27 @@ def analyze_symbol(symbol):
     - Текущая цена: {current_price:.5f}
     - SMA({AI_THRESHOLDS['SMA_PERIOD']}): {sma:.5f} | Тренд: {'восходящий' if current_price > sma else 'нисходящий'}
     - RSI({AI_THRESHOLDS['RSI_PERIOD']}): {rsi:.2f} | Состояние: {'перекупленность' if rsi > AI_THRESHOLDS['RSI_OVERBOUGHT'] else 'перепроданность' if rsi < AI_THRESHOLDS['RSI_OVERSOLD'] else 'нейтрально'}
-    - Новости: {positive_count} позитивных, {negative_count} негативных (ключевые: {', '.join(keywords)})
+
+    ### НОВОСТИ (самостоятельно проанализируй тональность каждой новости):
+    {news_text.strip()}
 
     ### ПРАВИЛА АНАЛИЗА:
     1. Если RSI > {AI_THRESHOLDS['RSI_OVERBOUGHT']} И новостной фон негативный → сильный сигнал SELL
     2. Если RSI < {AI_THRESHOLDS['RSI_OVERSOLD']} И новостной фон позитивный → сильный сигнал BUY
-    3. Если цена выше SMA({AI_THRESHOLDS['SMA_PERIOD']}) И {AI_THRESHOLDS['MIN_POSITIVE_NEWS']}+ позитивных новости → умеренный сигнал BUY
-    4. Если цена ниже SMA({AI_THRESHOLDS['SMA_PERIOD']}) И {AI_THRESHOLDS['MIN_NEGATIVE_NEWS']}+ негативных новости → умеренный сигнал SELL
+    3. Если цена выше SMA({AI_THRESHOLDS['SMA_PERIOD']}) И новостной фон позитивный → умеренный сигнал BUY
+    4. Если цена ниже SMA({AI_THRESHOLDS['SMA_PERIOD']}) И новостной фон негативный → умеренный сигнал SELL
     5. При конфликте индикаторов → приоритет у новостей
+    6. Актуальные новости (последние 2-4 часа) имеют больший вес
 
     ### ТРЕБОВАНИЯ К ОТВЕТУ:
     - Действие ТОЛЬКО: buy/sell/close/hold
     - Confidence: 0.0-1.0 ({AI_THRESHOLDS['STRONG_SIGNAL_CONFIDENCE']}+ = сильный сигнал)
     - Время удержания: {', '.join(map(str, AI_THRESHOLDS['HOLD_TIMES']))} минут
     - Обязательно укажи причину из правил выше
+    - ВАЖНО: НЕ используй markdown блоки ```json или ```
+    - Возвращай ТОЛЬКО чистый JSON без форматирования
 
-    Верни ТОЛЬКО валидный JSON без пояснений:
+    Пример ответа (используй именно этот формат, без ```json):
     {{"action": "значение", "confidence": число, "hold_minutes": число, "reason": "причина"}}
     """
     
@@ -111,7 +110,6 @@ def analyze_symbol(symbol):
         "current_price": current_price,
         "sma": sma,
         "rsi": rsi,
-        "sentiment": sentiment,
         "prompt": prompt.strip()
     }
 

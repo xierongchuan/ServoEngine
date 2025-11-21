@@ -12,7 +12,7 @@
 
 ## 📋 Описание системы
 
-**OpenProducer** - это полнофункциональная автоматизированная торговая система, которая интегрируется с Capital.com API для торговых операций и использует DeepSeek API для AI-анализа рынка. Система работает в демо-режиме по умолчанию и поддерживает торговлю на нескольких активах (forex, криптовалюты, акции, товары). Особенностью системы является централизованная двухуровая архитектура логирования для комплексного мониторинга.
+**OpenProducer** - это полнофункциональная автоматизированная торговая система, которая интегрируется с Capital.com API и **BingX API** для торговых операций и использует DeepSeek API для AI-анализа рынка. Система работает в демо-режиме по умолчанию и поддерживает торговлю на нескольких активах (forex, криптовалюты, акции, товары). Особенностью системы является централизованная двухуровая архитектура логирования для комплексного мониторинга.
 
 ### Основные возможности
 
@@ -36,16 +36,21 @@
 
 ```
 OpenProducer/
-├── main.py          # Точка входа в систему, оркестрация пайплайна
-├── config.py        # Централизованная конфигурация
-├── logger.py        # Система логирования с двумя уровнями
-├── utils.py         # Утилиты для Capital.com API (сессии, запросы)
-├── collector.py     # Сбор рыночных данных и новостей
-├── analyzer.py      # Технический анализ (SMA, RSI)
-├── predict.py       # AI-прогнозирование через DeepSeek
-├── executor.py      # Исполнение торговых ордеров с TP/SL
-├── monitor.py       # Мониторинг с управлением рисками (60 мин)
-└── plotter.py       # Генерация графиков с индикаторами
+- **`exchange_client.py`**: Абстрактный базовый класс для всех клиентов бирж.
+- **`exchange_factory.py`**: Фабрика для создания экземпляра клиента биржи на основе конфигурации.
+- **`capital_client.py`**: Реализация клиента для Capital.com.
+- **`bingx_client.py`**: Реализация клиента для BingX.
+- **`collector.py`**: Сбор данных (цены, новости) через унифицированный интерфейс.
+- **`analyzer.py`**: Расчет технических индикаторов (RSI, MACD, Bollinger Bands, SMA/EMA).
+- **`predict.py`**: Генерация торговых сигналов с помощью DeepSeek AI.
+- **`executor.py`**: Исполнение ордеров (открытие позиций, TP/SL) через унифицированный интерфейс.
+- **`monitor.py`**: Мониторинг открытых позиций и управление рисками.
+- **`plotter.py`**: Визуализация данных и результатов анализа.
+- **`main.py`**: Оркестратор всего процесса.
+- **`config.py`**: Централизованная конфигурация.
+- **`logger.py`**: Система логирования.
+- **`symbols.py`**: Управление списком активов и маппинг символов.
+- **`news_api.py`**: Клиент для получения новостей.
 ```
 
 ### Пайплайн обработки данных
@@ -111,7 +116,15 @@ export CAP_API_KEY="ваш_api_ключ_из_capital_com"
 export DEEPSEEK_API_KEY="ваш_ключ_deepseek"
 
 # Режим работы (ВАЖНО: всегда demo для тестирования!)
+# Режим работы (ВАЖНО: всегда demo для тестирования!)
 export MODE="demo"
+
+# Выбор биржи (capital или bingx)
+export EXCHANGE="bingx"
+
+# BingX API (для торговли на BingX)
+export BINGX_API_KEY="ваш_api_ключ_bingx"
+export BINGX_SECRET_KEY="ваш_secret_key_bingx"
 ```
 
 **📋 Как получить CAP_API_KEY:**
@@ -440,6 +453,13 @@ python3 executor.py   # Тест управления позициями
 - Authentication: CST + Security Token (cached for 10 minutes)
 - Endpoints: /session, /prices/{epic}, /positions, /positions/otc
 - Epic mapping: EUR/USD → CS.D.EURUSD.TODAY.IP, BTC/USD → Crypto.BTCUSD
+
+**BingX API**
+- Demo (VST) Base URL: `https://open-api-vst.bingx.com`
+- Real (Standard Futures) Base URL: `https://open-api.bingx.com`
+- Authentication: HMAC SHA256 signing
+- Endpoints: /openApi/swap/v2/user/balance, /openApi/swap/v3/quote/klines, /openApi/swap/v2/trade/order
+- Symbol mapping: BTC/USD → BTC-USDT
 
 **DeepSeek API**
 - Endpoint: `https://api.deepseek.com/v1/chat/completions`

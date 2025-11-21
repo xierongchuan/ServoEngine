@@ -11,6 +11,7 @@ python3 predict.py                       # Только прогноз
 python3 executor.py                      # Только торговля
 python3 monitor.py                       # Только мониторинг
 python3 plotter.py                       # Только графики
+python3 test_bingx.py                    # Тест BingX API
 ```
 
 ### Автозапуск
@@ -53,6 +54,15 @@ wc -l data/trades.log                    # Количество сделок
 export CAP_API_USERNAME="email"             # Настроить username
 export CAP_API_PASSWORD="pass"              # Настроить password
 export CAP_API_KEY="key"                 # API ключ Capital.com (ОБЯЗАТЕЛЬНО!)
+export BINGX_API_KEY="key"               # API ключ BingX
+export BINGX_SECRET_KEY="secret"    # Запуск с выбором биржи
+export EXCHANGE=bingx && python3 main.py
+export EXCHANGE=capital && python3 main.py
+
+# Тестирование интеграции
+export EXCHANGE=bingx && python3 test_integration.py
+export EXCHANGE=capital && python3 test_integration.py
+                # Выбор биржи (capital/bingx)
 export DEEPSEEK_API_KEY="key"            # Настроить API ключ
 echo $CAP_API_USERNAME                      # Проверить переменную
 
@@ -96,6 +106,7 @@ pip install pandas matplotlib requests   # Установить зависимо
 # Проверка API
 curl -I https://demo-api-capital.backend-capital.com/api/v1/  # Статус Capital.com API (Demo)
 curl -I https://api-capital.backend-capital.com/api/v1/        # Статус Capital.com API (Real)
+curl -I https://open-api-vst.bingx.com/openApi/swap/v2/server/time # Статус BingX API (Demo)
 curl -I https://api.deepseek.com                                # Статус DeepSeek API
 
 # Логи системы

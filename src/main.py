@@ -12,14 +12,16 @@ import sys
 import json
 from datetime import datetime
 
-import collector
-import analyzer
-import predict
-import executor
-import monitor
-import plotter
+from src.core import collector
+from src.core import analyzer
+from src.core import predict
+from src.core import executor
+from src.core import monitor
+from src.core import plotter
 
-from logger import info, error
+from src.utils.logger import info, error
+from src.exchanges.exchange_factory import get_exchange_client
+from src.config import DEEPSEEK_API_KEY
 
 def print_banner():
     """Печатает приветственное сообщение"""
@@ -33,31 +35,19 @@ def check_prerequisites():
     """Проверяет наличие всех необходимых условий для запуска"""
     print("\n🔍 Проверка предварительных условий...")
 
-    from config import DEEPSEEK_API_KEY, USERNAME, PASSWORD, CAP_API_KEY
-
     errors = []
 
     if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY == "":
         errors.append("❌ DEEPSEEK_API_KEY не настроен. Установите переменную окружения DEEPSEEK_API_KEY")
 
-    if not USERNAME or not PASSWORD or USERNAME == "" or PASSWORD == "":
-        errors.append("❌ Учетные данные Capital.com не настроены. Установите CAP_API_USERNAME и CAP_API_PASSWORD")
-
-    if not CAP_API_KEY or CAP_API_KEY == "":
-        errors.append("❌ CAP_API_KEY не настроен. Получите API ключ в Settings > API Integrations на Capital.com")
+    # Check exchange prerequisites
+    client = get_exchange_client()
+    if not client.check_prerequisites():
+        errors.append("❌ Ошибка проверки предварительных условий биржи")
 
     if errors:
         print("\n".join(errors))
-        print("\n⚠️ Для настройки экспортируйте переменные:")
-        print("   export DEEPSEEK_API_KEY='ваш_ключ'")
-        print("   export CAP_API_USERNAME='ваш_email'")
-        print("   export CAP_API_PASSWORD='ваш_пароль'")
-        print("   export CAP_API_KEY='ваш_api_ключ_из_capital_com'")
-        print("\n📋 Как получить CAP_API_KEY:")
-        print("   1. Войдите в аккаунт Capital.com")
-        print("   2. Settings > API Integrations")
-        print("   3. Generate API key")
-        print("   4. Скопируйте API ключ и установите его в CAP_API_KEY")
+        print("\n⚠️ Для настройки экспортируйте необходимые переменные окружения.")
         error("❌ Проверка предварительных условий не пройдена")
         return False
 

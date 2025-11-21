@@ -2,61 +2,60 @@
 import time
 import json
 from datetime import datetime
-from config import *
-from utils import init_api_session, make_request, get_headers
-import executor
-from logger import info, error, warning, log_trade
+from src.config import *
+from . import executor
+from src.utils.logger import info, error, warning, log_trade
+from src.exchanges.exchange_factory import get_exchange_client
 
-def close_position(deal_id, working_order_id=None):
-    """Закрывает позицию через API"""
-    # Сессия уже инициализирована в get_open_positions(), нет необходимости инициализировать снова
-    url = f"{API_BASE}positions/{deal_id}"
-    headers = get_headers()
-
+def close_position(symbol, deal_id, working_order_id=None):
+    """Закрывает позицию через ExchangeClient"""
+    client = get_exchange_client()
+    
     try:
-        response = make_request(url, method="delete", headers=headers)
-        if response is None:
-            error(f"❌ Не удалось закрыть позицию {deal_id} - пустой ответ от сервера")
+        result = client.close_position(symbol, deal_id)
+        
+        if result:
+            # Удаляем из кэша (импортируем функцию из executor)
+            try:
+                from executor import load_position_cache, save_position_cache
+                cache = load_position_cache()
+
+                # Удаляем deal_id
+                if str(deal_id) in cache:
+                    del cache[str(deal_id)]
+
+                # Удаляем working_order_id если он передан и отличается от deal_id
+                if working_order_id and str(working_order_id) != str(deal_id):
+                    if str(working_order_id) in cache:
+                        del cache[str(working_order_id)]
+
+                save_position_cache(cache)
+                info(f"🗑️ Удалены записи из кэша: deal_id={str(deal_id)[:20]}...")
+            except Exception as e:
+                warning(f"⚠️ Не удалось удалить {deal_id} из кэша: {e}")
+
+            # Логируем закрытие в trades.log
+            log_trade(f"✅ Позиция {deal_id} ({symbol}) закрыта")
+            info(f"✅ Позиция {deal_id} ({symbol}) закрыта")
+            return True
+        else:
+            error(f"❌ Не удалось закрыть позицию {deal_id} ({symbol})")
             return False
-
-        response.raise_for_status()
-
-        # Удаляем из кэша (импортируем функцию из executor)
-        try:
-            from executor import load_position_cache, save_position_cache
-            cache = load_position_cache()
-
-            # Удаляем deal_id
-            if deal_id in cache:
-                del cache[deal_id]
-
-            # Удаляем working_order_id если он передан и отличается от deal_id
-            if working_order_id and working_order_id != deal_id:
-                if working_order_id in cache:
-                    del cache[working_order_id]
-
-            save_position_cache(cache)
-            info(f"🗑️ Удалены записи из кэша: deal_id={deal_id[:20]}...")
-            if working_order_id and working_order_id != deal_id:
-                info(f"🗑️ Удален working_order_id из кэша: {working_order_id[:20]}...")
-        except Exception as e:
-            warning(f"⚠️ Не удалось удалить {deal_id} из кэша: {e}")
-
-        # Логируем закрытие в trades.log
-        log_trade(f"✅ Позиция {deal_id} закрыта")
-
-        info(f"✅ Позиция {deal_id} закрыта")
-        return True
+            
     except Exception as e:
         # Логируем ошибку в trades.log
-        log_trade(f"❌ Ошибка закрытия позиции: {str(e)}", level='ERROR')
-
-        error(f"❌ Ошибка закрытия позиции: {str(e)}")
+        log_trade(f"❌ Ошибка закрытия позиции {symbol}: {str(e)}", level='ERROR')
+        error(f"❌ Ошибка закрытия позиции {symbol}: {str(e)}")
         return False
 
 def main():
     """Основная функция мониторинга"""
     info("👀 Запуск мониторинга открытых позиций...")
+    
+    client = get_exchange_client()
+    if not client.check_prerequisites():
+        return
+
     all_positions = executor.get_open_positions()
 
     if not all_positions:
@@ -70,8 +69,8 @@ def main():
     for sym, position_list in all_positions.items():
         filtered_positions = []
         for position in position_list:
-            deal_id = position.get("dealId", "")
-            working_order_id = position.get("workingOrderId", "")
+            deal_id = str(position.get("dealId", ""))
+            working_order_id = str(position.get("workingOrderId", ""))
 
             # Проверяем, есть ли эта позиция в кэше бота
             if deal_id in cache or (working_order_id and working_order_id in cache):
@@ -94,11 +93,11 @@ def main():
             # Проверяем время удержания позиции
             try:
                 created_time = position.get("created", "")
-                deal_id = position.get("dealId", "")
+                deal_id = str(position.get("dealId", ""))
 
                 # Получаем hold_minutes из кэша для этой сделки
                 # РЕШЕНИЕ: Используем workingOrderId (стабильный) вместо dealId (меняется)
-                working_order_id = position.get("workingOrderId", "")
+                working_order_id = str(position.get("workingOrderId", ""))
 
                 # Ищем в кэше по workingOrderId (приоритет)
                 hold_minutes = cache.get(working_order_id, None)
@@ -109,7 +108,21 @@ def main():
 
                 if created_time and deal_id:
                     # Парсим время создания позиции
-                    created_date = datetime.fromisoformat(created_time.replace('Z', '+00:00'))
+                    # Capital format: 2023-10-27T10:00:00 (no Z usually, but let's be safe)
+                    # BingX format: timestamp (ms) or ISO?
+                    # ExchangeClient should normalize this!
+                    # But for now let's try to parse ISO.
+                    try:
+                        if isinstance(created_time, (int, float)):
+                             # Timestamp in ms
+                             created_date = datetime.fromtimestamp(created_time / 1000)
+                        else:
+                            created_date = datetime.fromisoformat(created_time.replace('Z', '+00:00'))
+                    except ValueError:
+                         # Fallback or error
+                         warning(f"⚠️ Could not parse date: {created_time}")
+                         continue
+                         
                     now = datetime.now(created_date.tzinfo) if created_date.tzinfo else datetime.now()
                     minutes_held = (now - created_date).total_seconds() / 60
 
@@ -118,7 +131,7 @@ def main():
                     if minutes_held > hold_minutes:
                         info(f"⏰ {sym} [позиция {i+1}]: закрываем позицию, открыта {int(minutes_held)} мин (планировалось {hold_minutes} мин)")
                         log_trade(f"⏰ {sym}: автоматическое закрытие позиции (открыта {int(minutes_held)} мин, планировалось {hold_minutes} мин)")
-                        close_position(deal_id, working_order_id)
+                        close_position(sym, deal_id, working_order_id)
                     else:
                         info(f"⏳ {sym} [позиция {i+1}]: позиция открыта {int(minutes_held)} мин, ждем до {hold_minutes} мин")
                 else:

@@ -19,6 +19,7 @@ This is an automated trading system that integrates with Capital.com API for tra
 - **monitor.py**: Tracks open positions and implements time-based risk management (auto-close at 60 min)
 - **plotter.py**: Generates price charts with technical indicators
 - **utils.py**: Shared utilities for Capital.com API (session management, request handling)
+- **bingx_client.py**: BingX API client for Futures trading (Demo/Real)
 - **config.py**: Central configuration with API endpoints, trading parameters, and paths
 
 ### Data Flow Pipeline
@@ -33,7 +34,8 @@ This is an automated trading system that integrates with Capital.com API for tra
 ### Configuration Management
 
 - `MODE` controls demo vs real trading (default: "demo")
-- Environment variables: `CAP_API_USERNAME`, `CAP_API_PASSWORD`, `DEEPSEEK_API_KEY`, `CAP_API_KEY`
+- `EXCHANGE` controls the exchange to use ("capital" or "bingx")
+- Environment variables: `CAP_API_USERNAME`, `CAP_API_PASSWORD`, `DEEPSEEK_API_KEY`, `CAP_API_KEY`, `BINGX_API_KEY`, `BINGX_SECRET_KEY`
 - Trading parameters: position size (0.1 lots), take profit (1.5%), stop loss (2.0%)
 - Supported symbols: EUR/USD, BTC/USD (default, can add AAPL, GOLD, OIL up to 5 max)
 - Maximum concurrent positions: 5
@@ -46,14 +48,21 @@ This is an automated trading system that integrates with Capital.com API for tra
 ```bash
 # Run complete trading pipeline
 python3 main.py
-
-# Run individual components for testing
-python3 collector.py  # Test data collection
-python3 analyzer.py   # Test analysis functions
-python3 predict.py    # Test AI predictions
-python3 executor.py   # Test position management
-python3 monitor.py    # Test monitoring
-python3 plotter.py    # Test chart generation
+- `exchange_client.py`: Abstract base class for exchange clients
+- `exchange_factory.py`: Factory to create exchange clients
+- `capital_client.py`: Capital.com implementation
+- `bingx_client.py`: BingX implementation
+- `collector.py`: Data collection (prices, news)
+- `analyzer.py`: Technical analysis (RSI, MACD, BB, SMA)
+- `predict.py`: AI prediction (DeepSeek)
+- `executor.py`: Order execution
+- `monitor.py`: Position monitoring & risk management
+- `plotter.py`: Chart generation
+- `main.py`: Orchestrator
+- `config.py`: Configuration
+- `logger.py`: Logging system
+- `symbols.py`: Symbol mapping
+- `news_api.py`: News fetching chart generation
 ```
 
 ### Environment Setup
@@ -125,6 +134,14 @@ OpenProducer/
 - Endpoints: /session, /prices/{epic}, /positions, /positions/otc
 - Epic mapping: EUR/USD → EURUSD, BTC/USD → BTCUSD
 - Demo mode is determined by the API endpoint URL (demo URL = demo account, real URL = real account)
+
+### BingX API
+- Demo (VST) Base URL: `https://open-api-vst.bingx.com`
+- Real (Standard Futures) Base URL: `https://open-api.bingx.com`
+- Authentication: HMAC SHA256 signing
+- Endpoints: /openApi/swap/v2/user/balance, /openApi/swap/v3/quote/klines, /openApi/swap/v2/trade/order
+- Supports: Isolated Futures, VST (Demo), Standard Futures
+- Symbol mapping: BTC/USD → BTC-USDT
 
 ### DeepSeek API
 - Endpoint: `https://api.deepseek.com/v1/chat/completions`
