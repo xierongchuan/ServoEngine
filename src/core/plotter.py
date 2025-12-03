@@ -11,9 +11,9 @@ try:
 except ImportError:
     PANDAS_AVAILABLE = False
 
-from src.config import SYMBOLS, DATA_DIR, CHARTS_DIR, CLEANUP_SETTINGS, AI_THRESHOLDS
+from src.config import DATA_DIR, CHARTS_DIR, CHART_RANGES, DEFAULT_CHART_RANGE, CLEANUP_SETTINGS
 from src.utils.logger import info, error
-from src.utils.symbols import get_filename
+from src.utils.helpers import get_filename
 
 def calculate_rsi(closes, period=14):
     """Рассчитывает RSI индикатор для всех точек как скользящее окно"""
@@ -108,7 +108,15 @@ def plot_symbol(symbol):
 
     # Подготавливаем данные
     timestamps = [candle["snapshotTimeUTC"] for candle in prices]
-    closes = [float(candle["closePrice"]["bid"]) for candle in prices]
+    
+    # Handle different price formats (Capital.com dict vs BingX float)
+    closes = []
+    for candle in prices:
+        price_data = candle["closePrice"]
+        if isinstance(price_data, dict):
+            closes.append(float(price_data["bid"]))
+        else:
+            closes.append(float(price_data))
 
     # Конвертируем временные метки в datetime объекты
     if PANDAS_AVAILABLE:

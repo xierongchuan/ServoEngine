@@ -1,8 +1,8 @@
 import json
 import os
-from src.config import SYMBOLS, DATA_DIR, AI_THRESHOLDS
+from src.config import DATA_DIR, AI_THRESHOLDS
 from src.utils.logger import info, error
-from src.utils.symbols import get_filename
+from src.utils.helpers import get_filename
 
 def calculate_indicators(prices):
     """Рассчитывает ключевые индикаторы"""
@@ -11,7 +11,14 @@ def calculate_indicators(prices):
         raise ValueError("Нет данных о ценах")
 
     try:
-        closes = [float(candle["closePrice"]["bid"]) for candle in prices]
+        # Handle different price formats (Capital.com dict vs BingX float)
+        closes = []
+        for candle in prices:
+            price_data = candle["closePrice"]
+            if isinstance(price_data, dict):
+                closes.append(float(price_data["bid"]))
+            else:
+                closes.append(float(price_data))
     except (KeyError, TypeError, ValueError) as e:
         raise ValueError(f"Некорректная структура данных о ценах: {str(e)}")
 
@@ -66,7 +73,11 @@ def analyze_symbol(symbol):
     sma, rsi = calculate_indicators(prices)
 
     # Текущая цена
-    current_price = float(prices[-1]["closePrice"]["bid"])
+    last_close = prices[-1]["closePrice"]
+    if isinstance(last_close, dict):
+        current_price = float(last_close["bid"])
+    else:
+        current_price = float(last_close)
 
     # Формируем сырые новостные данные для анализа ИИ
     news_text = ""

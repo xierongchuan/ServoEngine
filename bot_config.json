@@ -1,0 +1,69 @@
+{
+  "EXCHANGE_SYMBOLS": {
+    "capital": [
+      "BTCUSD",
+      "EURUSD",
+      "ETHUSD",
+      "XRPUSD",
+      "SOLUSD"
+    ],
+    "bingx": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "BNBUSDT"
+    ]
+  },
+  "POSITION_SIZE": 0.1,
+  "TAKE_PROFIT_PERCENT": 1.5,
+  "STOP_LOSS_PERCENT": 1.5,
+  "MIN_CONFIDENCE_THRESHOLD": 0.7,
+  "DEFAULT_HOLD_TIME_MINUTES": 60,
+  "AI_THRESHOLDS": {
+    "RSI_OVERSOLD": 30,
+    "RSI_OVERBOUGHT": 70,
+    "MIN_POSITIVE_NEWS": 3,
+    "MIN_NEGATIVE_NEWS": 3,
+    "STRONG_SIGNAL_CONFIDENCE": 0.8,
+    "SMA_PERIOD": 20,
+    "RSI_PERIOD": 14,
+    "HOLD_TIMES": [
+      10,
+      15,
+      30,
+      45,
+      60,
+      90,
+      120
+    ]
+  },
+  "CHART_RANGES": {
+    "1D": {
+      "days": 1,
+      "candles": 288
+    },
+    "3D": {
+      "days": 3,
+      "candles": 864
+    },
+    "1W": {
+      "days": 7,
+      "candles": 2016
+    }
+  },
+  "DEFAULT_CHART_RANGE": "1D",
+  "CLEANUP_SETTINGS": {
+    "cleanup_old_charts": true,
+    "charts_retention_days": 7,
+    "cleanup_old_data": true,
+    "data_retention_days": 30
+  },
+  "NEWS_SETTINGS": {
+    "use_real_news": true,
+    "provider": "newsapi",
+    "max_news_items": 15,
+    "news_timeout_seconds": 30,
+    "extract_full_content": true
+  }
+}

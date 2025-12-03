@@ -174,13 +174,11 @@ class CapitalClient(ExchangeClient):
         positions = {}
         
         if response:
-            data = response.json().get("positions", [])
-            from src.utils.symbols import get_symbol
             
             for p in data:
                 market = p.get("market", {})
                 epic = market.get("epic", "")
-                symbol = get_symbol(epic)
+                symbol = epic
                 
                 if symbol not in positions:
                     positions[symbol] = []
@@ -200,7 +198,7 @@ class CapitalClient(ExchangeClient):
     def place_order(self, symbol, side, price, quantity, type="MARKET", sl=None, tp=None):
         """Place order and return dealId"""
         self._init_session()
-        from symbols import get_epic
+        from src.utils.symbols import get_epic
         epic = get_epic(symbol)
         
         payload = {

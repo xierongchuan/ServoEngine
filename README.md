@@ -364,36 +364,35 @@ wc -l data/steps.log data/trades.log
 
 ## ⚙️ Настройка параметров
 
-### Файл src/config.py
+### Файл bot_config.json
 
-```python
-# Торгуемые активы (максимум 5)
-SYMBOLS = ["EUR/USD", "BTC/USD"]
+Все настройки торговых параметров теперь вынесены в файл `bot_config.json` в корне проекта.
 
-# Параметры риск-менеджмента
-POSITION_SIZE = 0.1              # Размер ордера в лотах
-TAKE_PROFIT_PERCENT = 1.5        # Take Profit в %
-STOP_LOSS_PERCENT = 2.0          # Stop Loss в %
-
-# Максимум одновременных позиций
-MAX_POSITIONS = 5
-
-# Время удержания позиции (минуты)
-POSITION_TIMEOUT_MINUTES = 60
+```json
+{
+    "EXCHANGE_SYMBOLS": {
+        "capital": ["BTC/USD", "EUR/USD"],
+        "bingx": ["BTC-USDT", "ETH-USDT"]
+    },
+    "POSITION_SIZE": 0.1,
+    "TAKE_PROFIT_PERCENT": 1.5,
+    "STOP_LOSS_PERCENT": 1.5,
+    "MIN_CONFIDENCE_THRESHOLD": 0.7,
+    "DEFAULT_HOLD_TIME_MINUTES": 60
+}
 ```
+
+Вы можете изменять эти параметры без редактирования кода.
 
 ### Добавление новых активов
 
-```python
-# В src/config.py добавьте в SYMBOLS:
-SYMBOLS = [
-    "EUR/USD",      # Forex
-    "BTC/USD",      # Криптовалюта
-    "AAPL",         # Акции Apple
-    "GOLD",         # Золото
-    "BRENTOIL"           # Нефть
-]
-# Поддерживаются максимум 5 активов!
+```json
+"EXCHANGE_SYMBOLS": {
+    "capital": ["BTC/USD", "EUR/USD", "AAPL", "GOLD", "BRENTOIL"],
+    "bingx": ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
+}
+```
+# Поддерживаются максимум 5 активов для каждой биржи!
 ```
 
 ---

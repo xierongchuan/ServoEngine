@@ -3,7 +3,7 @@ import json
 import time
 from src.config import SYMBOLS, DATA_DIR, NEWS_SETTINGS, ENABLE_NEWS
 from src.utils.logger import info, error
-from src.utils.symbols import get_filename
+from src.utils.helpers import get_filename
 from src.utils.news_api import get_news_for_symbol
 from src.exchanges.exchange_factory import get_exchange_client
 

@@ -33,48 +33,93 @@ USERNAME = os.getenv("CAP_API_USERNAME", "")
 PASSWORD = os.getenv("CAP_API_PASSWORD", "")
 CAP_API_KEY = os.getenv("CAP_API_KEY", "")  # API ключ из Settings > API Integrations
 
-# Настройки трейдинга
-SYMBOLS = ["BTC/USD"]     # Активы для торговли (макс 5)
-POSITION_SIZE = 0.1                  # Размер ордера в лотах
-TAKE_PROFIT_PERCENT = 1.5            # Take Profit в процентах
-STOP_LOSS_PERCENT = 1.5              # Stop Loss в процентах
-MIN_CONFIDENCE_THRESHOLD = 0.7       # Минимальная уверенность AI для открытия позиции (0.0-1.0)
-DEFAULT_HOLD_TIME_MINUTES = 60       # Время удержания позиции по умолчанию (в минутах)
+import json
+
+# Функция для загрузки конфигурации
+def load_bot_config():
+    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bot_config.json')
+    default_config = {
+        "EXCHANGE_SYMBOLS": {
+            "capital": ["BTC/USD"],
+            "bingx": ["BTC-USDT"]
+        },
+        "POSITION_SIZE": 0.1,
+        "TAKE_PROFIT_PERCENT": 1.5,
+        "STOP_LOSS_PERCENT": 1.5,
+        "MIN_CONFIDENCE_THRESHOLD": 0.7,
+        "DEFAULT_HOLD_TIME_MINUTES": 60,
+        "AI_THRESHOLDS": {
+            "RSI_OVERSOLD": 30,
+            "RSI_OVERBOUGHT": 70,
+            "MIN_POSITIVE_NEWS": 3,
+            "MIN_NEGATIVE_NEWS": 3,
+            "STRONG_SIGNAL_CONFIDENCE": 0.8,
+            "SMA_PERIOD": 20,
+            "RSI_PERIOD": 14,
+            "HOLD_TIMES": [10, 15, 30, 45, 60, 90, 120]
+        },
+        "CHART_RANGES": {
+            "1D": {"days": 1, "candles": 288},
+            "3D": {"days": 3, "candles": 864},
+            "1W": {"days": 7, "candles": 2016}
+        },
+        "DEFAULT_CHART_RANGE": "1D",
+        "CLEANUP_SETTINGS": {
+            "cleanup_old_charts": True,
+            "charts_retention_days": 7,
+            "cleanup_old_data": True,
+            "data_retention_days": 30
+        },
+        "NEWS_SETTINGS": {
+            "use_real_news": True,
+            "provider": "newsapi",
+            "max_news_items": 10,
+            "news_timeout_seconds": 30,
+            "extract_full_content": True
+        }
+    }
+    
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                user_config = json.load(f)
+                # Обновляем дефолтный конфиг пользовательским (глубокое слияние не делаем, просто верхний уровень)
+                default_config.update(user_config)
+                print(f"✅ Загружена конфигурация из {config_path}")
+        except Exception as e:
+            print(f"⚠️ Ошибка загрузки {config_path}: {e}. Используются настройки по умолчанию.")
+    
+    return default_config
+
+# Загружаем конфиг
+BOT_CONFIG = load_bot_config()
+
+# Выбор биржи (нужен для определения списка символов)
+EXCHANGE = os.getenv("EXCHANGE", "capital")  # "capital" или "bingx"
+
+# Настройки трейдинга из конфига
+EXCHANGE_SYMBOLS = BOT_CONFIG.get("EXCHANGE_SYMBOLS", {})
+SYMBOLS = EXCHANGE_SYMBOLS.get(EXCHANGE, ["BTC/USD"])
+
+POSITION_SIZE = BOT_CONFIG.get("POSITION_SIZE", 0.1)
+TAKE_PROFIT_PERCENT = BOT_CONFIG.get("TAKE_PROFIT_PERCENT", 1.5)
+STOP_LOSS_PERCENT = BOT_CONFIG.get("STOP_LOSS_PERCENT", 1.5)
+MIN_CONFIDENCE_THRESHOLD = BOT_CONFIG.get("MIN_CONFIDENCE_THRESHOLD", 0.7)
+DEFAULT_HOLD_TIME_MINUTES = BOT_CONFIG.get("DEFAULT_HOLD_TIME_MINUTES", 60)
 
 # Пороговые значения для AI-анализа
-AI_THRESHOLDS = {
-    "RSI_OVERSOLD": 30,              # RSI перепроданность (сигнал BUY)
-    "RSI_OVERBOUGHT": 70,            # RSI перекупленность (сигнал SELL)
-    "MIN_POSITIVE_NEWS": 3,          # Минимум позитивных новостей для умеренного BUY
-    "MIN_NEGATIVE_NEWS": 3,          # Минимум негативных новостей для умеренного SELL
-    "STRONG_SIGNAL_CONFIDENCE": 0.8, # Порог для "сильного сигнала" (0.8+)
-    "SMA_PERIOD": 20,                # Период SMA для анализа тренда
-    "RSI_PERIOD": 14,                # Период RSI для анализа
-    "HOLD_TIMES": [10, 15, 30, 45, 60, 90, 120], # Время удержания в минутах
-}
-
-# DeepSeek API (обязательно установите DEEPSEEK_API_KEY)
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+AI_THRESHOLDS = BOT_CONFIG.get("AI_THRESHOLDS", {})
 
 # Пути к данным
 DATA_DIR = "data"
 CHARTS_DIR = "charts"
 
 # Настройки графиков
-CHART_RANGES = {
-    "1D": {"days": 1, "candles": 288},   # 288 свечей * 5 минут = 24 часа
-    "3D": {"days": 3, "candles": 864},   # 3 дня
-    "1W": {"days": 7, "candles": 2016},  # 1 неделя
-}
-DEFAULT_CHART_RANGE = "1D"  # По умолчанию показываем 1 день
+CHART_RANGES = BOT_CONFIG.get("CHART_RANGES", {})
+DEFAULT_CHART_RANGE = BOT_CONFIG.get("DEFAULT_CHART_RANGE", "1D")
 
 # Настройки очистки старых файлов
-CLEANUP_SETTINGS = {
-    "cleanup_old_charts": True,     # Удалять старые графики
-    "charts_retention_days": 7,     # Хранить графики 7 дней
-    "cleanup_old_data": True,       # Удалять старые данные
-    "data_retention_days": 30,      # Хранить данные 30 дней
-}
+CLEANUP_SETTINGS = BOT_CONFIG.get("CLEANUP_SETTINGS", {})
 
 # News API настройки (для получения реальных новостей)
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY", "")
@@ -84,13 +129,10 @@ FINNHUB_KEY = os.getenv("FINNHUB_KEY", "")
 # Настройки новостей
 ENABLE_NEWS = os.getenv("ENABLE_NEWS", "true").lower() == "true"
 
-NEWS_SETTINGS = {
-    "use_real_news": True,               # Использовать реальные новости (нужны API ключи)
-    "provider": "newsapi",          # newsapi, alphavantage, finnhub
-    "max_news_items": 10,                # Максимум новостей для анализа
-    "news_timeout_seconds": 30,          # Таймаут запроса новостей
-    "extract_full_content": True,        # Извлекать полный текст из URL (требует newspaper3k)
-}
+NEWS_SETTINGS = BOT_CONFIG.get("NEWS_SETTINGS", {})
+
+# DeepSeek API (обязательно установите DEEPSEEK_API_KEY)
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 
 # API Endpoint для демо и реального режима
 # ВАЖНО: Демо-счет - это НЕ отдельный тип аккаунта!
@@ -100,7 +142,6 @@ NEWS_SETTINGS = {
 API_BASE = "https://demo-api-capital.backend-capital.com/api/v1/" if MODE == "demo" else "https://api-capital.backend-capital.com/api/v1/"
 
 # Выбор биржи
-EXCHANGE = os.getenv("EXCHANGE", "capital")  # "capital" или "bingx"
 
 # BingX API настройки
 BINGX_API_KEY = os.getenv("BINGX_API_KEY", "")
