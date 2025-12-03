@@ -79,11 +79,20 @@ def create_order(symbol, direction, price, hold_minutes=DEFAULT_HOLD_TIME_MINUTE
         
         info(f"🎯 Calculated TP: {tp_price}, SL: {sl_price}")
 
+        # Calculate quantity based on USDT amount
+        quantity = TRADE_AMOUNT_USDT / price
+        
+        # Round quantity to appropriate precision (e.g., 4 decimals for crypto)
+        # In a real scenario, this should be symbol-specific
+        quantity = round(quantity, 4)
+        
+        info(f"🧮 Calculated quantity: {quantity} (Amount: ${TRADE_AMOUNT_USDT} / Price: ${price})")
+
         order_id = client.place_order(
             symbol=symbol,
             side=direction,
             price=price,
-            quantity=POSITION_SIZE,
+            quantity=quantity,
             type="MARKET",
             sl=sl_price,
             tp=tp_price

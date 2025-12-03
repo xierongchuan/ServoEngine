@@ -132,6 +132,9 @@ class BingXClient(ExchangeClient):
         # Если символ заканчивается на /USD, меняем на -USDT
         if symbol.endswith("/USD"):
             formatted_symbol = symbol.replace("/USD", "-USDT")
+        elif symbol.endswith("USDT") and "-" not in symbol and "/" not in symbol:
+             # Handle BTCUSDT -> BTC-USDT
+            formatted_symbol = symbol[:-4] + "-USDT"
         else:
             formatted_symbol = symbol.replace("/", "-")
         
@@ -252,12 +255,56 @@ class BingXClient(ExchangeClient):
                 
         return positions
 
-    def place_order(self, symbol, side, price, quantity, type="MARKET", sl=None, tp=None):
-        """Размещает ордер"""
+    def set_leverage(self, symbol, leverage, side="LONG"):
+        """Устанавливает кредитное плечо"""
+        # Endpoint: /openApi/swap/v2/trade/leverage
+        endpoint = "/openApi/swap/v2/trade/leverage"
+        
         if symbol.endswith("/USD"):
             formatted_symbol = symbol.replace("/USD", "-USDT")
+        elif symbol.endswith("USDT") and "-" not in symbol and "/" not in symbol:
+            formatted_symbol = symbol[:-4] + "-USDT"
         else:
             formatted_symbol = symbol.replace("/", "-")
+            
+        params = {
+            "symbol": formatted_symbol,
+            "leverage": leverage,
+            "side": side.upper() # LONG or SHORT
+        }
+        
+        try:
+            response = self.make_request("post", endpoint, params)
+            if response and response.get("code") == 0:
+                info(f"✅ Leverage set to {leverage}x for {symbol} ({side})")
+                return True
+            else:
+                # Code 80001 usually means leverage already set or not modified
+                if response and response.get("code") == 80001:
+                     return True
+                error(f"❌ Failed to set leverage: {response}")
+                return False
+        except Exception as e:
+            error(f"❌ Error setting leverage: {e}")
+            return False
+
+    def place_order(self, symbol, side, price, quantity, type="MARKET", sl=None, tp=None):
+        """Размещает ордер"""
+        from src.config import LEVERAGE
+        
+        if symbol.endswith("/USD"):
+            formatted_symbol = symbol.replace("/USD", "-USDT")
+        elif symbol.endswith("USDT") and "-" not in symbol and "/" not in symbol:
+            formatted_symbol = symbol[:-4] + "-USDT"
+        else:
+            formatted_symbol = symbol.replace("/", "-")
+            
+        # Set leverage before placing order
+        # For One-Way mode, we might need to set for "LONG" (Buy) or "SHORT" (Sell) 
+        # or just "LONG" if it applies to both in some modes. 
+        # Safe bet: set for the direction we are trading.
+        leverage_side = "LONG" if side.upper() == "BUY" else "SHORT"
+        self.set_leverage(symbol, LEVERAGE, leverage_side)
             
         endpoint = "/openApi/swap/v2/trade/order"
         

@@ -11,7 +11,7 @@ try:
 except ImportError:
     PANDAS_AVAILABLE = False
 
-from src.config import DATA_DIR, CHARTS_DIR, CHART_RANGES, DEFAULT_CHART_RANGE, CLEANUP_SETTINGS
+from src.config import DATA_DIR, CHARTS_DIR, CHART_RANGES, DEFAULT_CHART_RANGE, CLEANUP_SETTINGS, SYMBOLS, AI_THRESHOLDS
 from src.utils.logger import info, error
 from src.utils.helpers import get_filename
 

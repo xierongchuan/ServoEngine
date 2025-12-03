@@ -1,6 +1,6 @@
 import json
 import os
-from src.config import DATA_DIR, AI_THRESHOLDS
+from src.config import DATA_DIR, AI_THRESHOLDS, SYMBOLS
 from src.utils.logger import info, error
 from src.utils.helpers import get_filename
 
@@ -60,7 +60,9 @@ def calculate_indicators(prices):
 
     return round(sma, 5), round(rsi, 2)
 
-def analyze_symbol(symbol):
+from src.exchanges.exchange_factory import get_exchange_client
+
+def analyze_symbol(symbol, position=None):
     """Анализирует один символ и готовит промпт для DeepSeek"""
     # Загружаем данные
     with open(f"{DATA_DIR}/prices/{get_filename(symbol)}.json") as f:
@@ -79,44 +81,78 @@ def analyze_symbol(symbol):
     else:
         current_price = float(last_close)
 
+    # Определяем тренд
+    trend = "UP" if current_price > sma else "DOWN"
+
     # Формируем сырые новостные данные для анализа ИИ
     news_text = ""
+    has_news = False
     if news:
+        has_news = True
         for item in news:
             news_text += f"\n- [{item['timestamp']}] {item['title']}\n  {item['description']}\n"
     else:
-        news_text = "Новости отключены или недоступны. Анализируй только технические индикаторы."
+        news_text = "НОВОСТИ НЕДОСТУПНЫ. ИСПОЛЬЗУЙ СТРАТЕГИЮ 'NO NEWS' (ЧИСТЫЙ ТЕХНИЧЕСКИЙ АНАЛИЗ)."
 
-    # Формируем промпт с сырыми новостными данными
+    # Информация о текущей позиции
+    position_text = "НЕТ ОТКРЫТОЙ ПОЗИЦИИ"
+    if position:
+        pnl_emoji = "🟢" if position['pnl'] >= 0 else "🔴"
+        position_text = f"""
+        ЕСТЬ ОТКРЫТАЯ ПОЗИЦИЯ:
+        - Тип: {position['type'].upper()}
+        - Вход: {position['entry']}
+        - PnL: {position['pnl']} {pnl_emoji}
+        - Размер: {position['size']}
+        """
+
+    # Формируем промпт
     prompt = f"""
-    Ты — профессиональный трейдер с 10-летним опытом. Проанализируй {symbol} строго по этим правилам:
+    Ты — профессиональный алгоритмический трейдер. Твоя задача — принять торговое решение для {symbol} на основе предоставленных данных.
 
-    ### ДАННЫЕ (последние 300 свечей 5-минутного таймфрейма - 24 часа истории):
-    - Текущая цена: {current_price:.5f}
-    - SMA({AI_THRESHOLDS['SMA_PERIOD']}): {sma:.5f} | Тренд: {'восходящий' if current_price > sma else 'нисходящий'}
-    - RSI({AI_THRESHOLDS['RSI_PERIOD']}): {rsi:.2f} | Состояние: {'перекупленность' if rsi > AI_THRESHOLDS['RSI_OVERBOUGHT'] else 'перепроданность' if rsi < AI_THRESHOLDS['RSI_OVERSOLD'] else 'нейтрально'}
+    ### ТЕКУЩАЯ ПОЗИЦИЯ:
+    {position_text}
 
-    ### НОВОСТИ (самостоятельно проанализируй тональность каждой новости):
+    ### РЫНОЧНЫЕ ДАННЫЕ (5m таймфрейм):
+    - Цена: {current_price:.5f}
+    - SMA({AI_THRESHOLDS['SMA_PERIOD']}): {sma:.5f}
+    - RSI({AI_THRESHOLDS['RSI_PERIOD']}): {rsi:.2f}
+    - ТЕКУЩИЙ ТРЕНД: {trend} (Цена {'выше' if trend == 'UP' else 'ниже'} SMA)
+
+    ### НОВОСТНОЙ ФОН:
     {news_text.strip()}
 
-    ### ПРАВИЛА АНАЛИЗА:
-    1. Если RSI > {AI_THRESHOLDS['RSI_OVERBOUGHT']} И новостной фон негативный → сильный сигнал SELL
-    2. Если RSI < {AI_THRESHOLDS['RSI_OVERSOLD']} И новостной фон позитивный → сильный сигнал BUY
-    3. Если цена выше SMA({AI_THRESHOLDS['SMA_PERIOD']}) И новостной фон позитивный → умеренный сигнал BUY
-    4. Если цена ниже SMA({AI_THRESHOLDS['SMA_PERIOD']}) И новостной фон негативный → умеренный сигнал SELL
-    5. При конфликте индикаторов → приоритет у новостей
-    6. Актуальные новости (последние 2-4 часа) имеют больший вес
+    ### ТОРГОВАЯ СТРАТЕГИЯ:
 
-    ### ТРЕБОВАНИЯ К ОТВЕТУ:
-    - Действие ТОЛЬКО: buy/sell/close/hold
-    - Confidence: 0.0-1.0 ({AI_THRESHOLDS['STRONG_SIGNAL_CONFIDENCE']}+ = сильный сигнал)
-    - Время удержания: {', '.join(map(str, AI_THRESHOLDS['HOLD_TIMES']))} минут
-    - Обязательно укажи причину из правил выше
-    - ВАЖНО: НЕ используй markdown блоки ```json или ```
-    - Возвращай ТОЛЬКО чистый JSON без форматирования
+    **ЕСЛИ ЕСТЬ ПОЗИЦИЯ:**
+    1.  **CLOSE**: Если тренд изменился против позиции ИЛИ достигнута цель по прибыли/убытку.
+    2.  **HOLD**: Если тренд сохраняется и нет сигналов на выход.
 
-    Пример ответа (используй именно этот формат, без ```json):
-    {{"action": "значение", "confidence": число, "hold_minutes": число, "reason": "причина"}}
+    **ЕСЛИ НЕТ ПОЗИЦИИ (ВХОД):**
+    
+    **СЦЕНАРИЙ А: НОВОСТИ ЕСТЬ**
+    1.  **BUY**: Позитивные новости + RSI < 70.
+    2.  **SELL**: Негативные новости + RSI > 30.
+    3.  **HOLD**: Противоречивые новости или нейтральный фон.
+
+    **СЦЕНАРИЙ Б: НОВОСТЕЙ НЕТ (ЧИСТАЯ ТЕХНИКА)**
+    *Работаем по тренду на откатах (Trend Following + Pullback)*
+    1.  **BUY**: Тренд UP (Цена > SMA) **И** RSI < 45 (Локальная перепроданность/Откат).
+    2.  **SELL**: Тренд DOWN (Цена < SMA) **И** RSI > 55 (Локальная перекупленность/Коррекция).
+    3.  **HOLD**: Если условия входа не выполнены.
+
+    ### ТВОЯ ЗАДАЧА:
+    1.  Учти наличие открытой позиции.
+    2.  Если позиции нет, определи сценарий (А или Б) и проверь условия входа.
+    3.  Прими решение: buy, sell, close, или hold.
+
+    ### ФОРМАТ ОТВЕТА (JSON ONLY):
+    {{
+        "action": "buy" | "sell" | "close" | "hold",
+        "confidence": 0.0-1.0 (0.8+ для сильных сигналов),
+        "hold_minutes": {AI_THRESHOLDS['HOLD_TIMES'][-1]},
+        "reason": "Краткое объяснение: Позиция, Сценарий (А/Б), Тренд, RSI, Новости."
+    }}
     """
     
     return {
@@ -130,9 +166,28 @@ def analyze_symbol(symbol):
 def main():
     """Основная функция анализа"""
     results = []
+    
+    # Получаем открытые позиции
+    try:
+        client = get_exchange_client()
+        positions = client.get_positions()
+        info(f"📊 Получено {sum(len(p) for p in positions.values())} открытых позиций")
+    except Exception as e:
+        error(f"❌ Ошибка получения позиций: {str(e)}")
+        positions = {}
+
     for symbol in SYMBOLS:
         try:
-            results.append(analyze_symbol(symbol))
+            # Ищем позицию для символа
+            # BingX symbols might need mapping if they differ from config SYMBOLS
+            # But client should handle normalization or we check carefully
+            # For now assume exact match or simple mapping
+            
+            symbol_positions = positions.get(symbol, [])
+            # Take the first position if multiple (simplified)
+            current_position = symbol_positions[0] if symbol_positions else None
+            
+            results.append(analyze_symbol(symbol, position=current_position))
             info(f"🔍 Анализ {symbol} завершен")
         except Exception as e:
             error(f"❌ Ошибка анализа {symbol}: {str(e)}")
