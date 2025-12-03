@@ -108,10 +108,55 @@ def parse_response(response):
             "reason": "Ошибка парсинга ответа DeepSeek"
         }
 
+def should_call_ai(analysis):
+    """
+    Определяет, нужно ли вызывать ИИ на основе технических индикаторов.
+    Возвращает True, если нужен анализ ИИ.
+    Возвращает False, если ситуация нейтральная (можно просто HOLD).
+    """
+    symbol = analysis["symbol"]
+    has_position = analysis.get("has_position", False)
+    rsi = analysis["rsi"]
+    current_price = analysis["current_price"]
+    sma = analysis["sma"]
+
+    # 1. Если есть открытая позиция - ВСЕГДА вызываем ИИ (нужен менеджмент позиции)
+    if has_position:
+        info(f"⚠️ {symbol}: Есть открытая позиция -> Вызываем ИИ")
+        return True
+
+    # 2. Фильтр по RSI (Нейтральная зона 40-60)
+    # Если RSI в середине, и нет позиции -> скорее всего флэт, просто держим
+    if 40 <= rsi <= 60:
+        # Дополнительная проверка: Цена прилипла к SMA? (в пределах 0.5%)
+        if abs(current_price - sma) / sma < 0.005:
+            info(f"💤 {symbol}: Нейтральный рынок (RSI={rsi}, Цена~SMA) -> Пропуск ИИ (Auto-HOLD)")
+            return False
+        
+        info(f"💤 {symbol}: RSI в нейтральной зоне ({rsi}) -> Пропуск ИИ (Auto-HOLD)")
+        return False
+
+    # Если условия выше не сработали (RSI < 40 или RSI > 60) -> Вызываем ИИ
+    info(f"⚡ {symbol}: Активный рынок (RSI={rsi}) -> Вызываем ИИ")
+    return True
+
 def main(analyses):
     """Основная функция прогнозирования"""
     predictions = []
+    from src.config import DEFAULT_HOLD_TIME_MINUTES
+
     for analysis in analyses:
+        # Технический пре-фильтр
+        if not should_call_ai(analysis):
+            predictions.append({
+                **analysis,
+                "action": "hold",
+                "confidence": 0.0,
+                "hold_minutes": DEFAULT_HOLD_TIME_MINUTES,
+                "reason": f"Auto-HOLD: Нейтральный рынок (RSI={analysis['rsi']})"
+            })
+            continue
+
         info(f"🧠 Генерация прогноза для {analysis['symbol']}...")
         response = get_prediction(analysis["prompt"])
 

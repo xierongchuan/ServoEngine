@@ -160,6 +160,7 @@ def analyze_symbol(symbol, position=None):
         "current_price": current_price,
         "sma": sma,
         "rsi": rsi,
+        "has_position": bool(position),
         "prompt": prompt.strip()
     }
 
