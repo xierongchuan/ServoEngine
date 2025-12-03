@@ -157,7 +157,8 @@ def plot_symbol(symbol):
     rsi = calculate_rsi(closes, rsi_period)
 
     # Создаем фигуру с тремя subplot'ами (Цена, Объем, RSI)
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(16, 12), gridspec_kw={'height_ratios': [3, 1, 1]}, sharex=True)
+    # Увеличиваем размер фигуры для высокого разрешения
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(24, 18), gridspec_kw={'height_ratios': [3, 1, 1]}, sharex=True)
 
     # --- 1. График Цены (Candlesticks + SMAs) ---
     
@@ -221,15 +222,15 @@ def plot_symbol(symbol):
         ax1.plot(dates, smas[period], label=f"SMA({period})", color=sma_colors[period], linewidth=1.5, alpha=0.9)
 
     # Оформление графика цены
-    ax1.set_title(f"{symbol} - {datetime.now().strftime('%Y-%m-%d %H:%M')}", fontsize=16, pad=20)
-    ax1.set_ylabel("Цена", fontsize=12, labelpad=10)
-    ax1.legend(fontsize=10, loc='upper left')
+    ax1.set_title(f"{symbol} - {datetime.now().strftime('%Y-%m-%d %H:%M')}", fontsize=20, pad=20)
+    ax1.set_ylabel("Цена", fontsize=14, labelpad=10)
+    ax1.legend(fontsize=12, loc='upper left')
     ax1.grid(alpha=0.2)
     
     # Текущая цена
     current_price = closes[-1]
     ax1.text(0.98, 0.98, f"Цена: {current_price:.5f}",
-             transform=ax1.transAxes, fontsize=12,
+             transform=ax1.transAxes, fontsize=14,
              verticalalignment='top', horizontalalignment='right',
              bbox=dict(boxstyle='round', facecolor='#d62728', alpha=0.1))
 
@@ -239,7 +240,7 @@ def plot_symbol(symbol):
     if down_vol_dates:
         ax2.bar(down_vol_dates, down_volumes, width, color=col_down, alpha=0.5)
         
-    ax2.set_ylabel("Объем", fontsize=10, labelpad=10)
+    ax2.set_ylabel("Объем", fontsize=12, labelpad=10)
     ax2.grid(alpha=0.2)
 
     # --- 3. График RSI ---
@@ -250,20 +251,19 @@ def plot_symbol(symbol):
     ax3.fill_between(dates, 0, 30, alpha=0.1, color='green')
 
     # Оформление RSI
-    ax3.set_ylabel("RSI", fontsize=10, labelpad=10)
-    ax3.set_xlabel("Время", fontsize=12, labelpad=10)
+    ax3.set_ylabel("RSI", fontsize=12, labelpad=10)
+    ax3.set_xlabel("Время", fontsize=14, labelpad=10)
     ax3.set_ylim(0, 100)
-    ax3.legend(fontsize=9, loc='upper left')
+    ax3.legend(fontsize=11, loc='upper left')
     ax3.grid(alpha=0.2)
 
     # Форматирование оси X
     ax3.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
     fig.autofmt_xdate()
 
-    # Сохраняем
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    filename = f"{CHARTS_DIR}/{get_filename(symbol)}_{timestamp}.png"
-    plt.savefig(filename, dpi=150, bbox_inches='tight')
+    # Сохраняем с высоким разрешением (перезаписываем файл)
+    filename = f"{CHARTS_DIR}/{get_filename(symbol)}.png"
+    plt.savefig(filename, dpi=200, bbox_inches='tight')
     plt.close()
 
     info(f"🖼️ График для {symbol} сохранен как {filename}")
