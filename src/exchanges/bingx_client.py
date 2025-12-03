@@ -64,23 +64,38 @@ class BingXClient(ExchangeClient):
 
         url = f"{self.base_url}{endpoint}"
 
-        try:
-            if method.lower() == "get":
-                response = requests.get(url, params=params, headers=headers)
-            elif method.lower() == "post":
-                response = requests.post(url, params=params, headers=headers)
-            elif method.lower() == "delete":
-                response = requests.delete(url, params=params, headers=headers)
-            else:
-                raise ValueError(f"Unsupported method: {method}")
+        max_retries = 3
+        retry_delay = 1
 
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            error(f"❌ BingX API request failed: {e}")
-            if 'response' in locals():
-                error(f"   Response: {response.text}")
-            return None
+        for attempt in range(max_retries):
+            try:
+                if method.lower() == "get":
+                    response = requests.get(url, params=params, headers=headers, timeout=20)
+                elif method.lower() == "post":
+                    response = requests.post(url, params=params, headers=headers, timeout=20)
+                elif method.lower() == "delete":
+                    response = requests.delete(url, params=params, headers=headers, timeout=20)
+                else:
+                    raise ValueError(f"Unsupported method: {method}")
+
+                response.raise_for_status()
+                return response.json()
+
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.ChunkedEncodingError) as e:
+                warning(f"⚠️ Network error (attempt {attempt+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            except Exception as e:
+                error(f"❌ BingX API request failed: {e}")
+                if 'response' in locals():
+                    try:
+                        error(f"   Response: {response.text}")
+                    except:
+                        pass
+                return None
+        
+        error(f"❌ Failed to connect to BingX after {max_retries} attempts.")
+        return None
 
     def get_perpetual_balance(self):
         """Получает баланс Perpetual Futures (Swap)"""
