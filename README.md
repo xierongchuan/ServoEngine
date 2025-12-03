@@ -554,6 +554,9 @@ OpenProducer/
 │   ├── core/                 # Основная логика
 │   ├── exchanges/            # Клиенты бирж
 │   └── utils/                # Утилиты
+├── tests/                    # Интеграционные тесты
+│   ├── test_bingx_actions.py
+│   └── test_partial_close.py
 ├── scripts/                  # Скрипты (bash)
 └── *.md                      # Документация
 ```
