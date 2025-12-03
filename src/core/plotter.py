@@ -107,16 +107,29 @@ def plot_symbol(symbol):
         prices = json.load(f)
 
     # Подготавливаем данные
-    timestamps = [candle["snapshotTimeUTC"] for candle in prices]
-    
-    # Handle different price formats (Capital.com dict vs BingX float)
+    timestamps = []
+    opens = []
+    highs = []
+    lows = []
     closes = []
+    volumes = []
+
     for candle in prices:
-        price_data = candle["closePrice"]
-        if isinstance(price_data, dict):
-            closes.append(float(price_data["bid"]))
+        timestamps.append(candle["snapshotTimeUTC"])
+        
+        # Handle different price formats
+        if isinstance(candle["closePrice"], dict):
+            opens.append(float(candle["openPrice"]["bid"]))
+            highs.append(float(candle["highPrice"]["bid"]))
+            lows.append(float(candle["lowPrice"]["bid"]))
+            closes.append(float(candle["closePrice"]["bid"]))
+            volumes.append(float(candle.get("lastTradedVolume", 0)))
         else:
-            closes.append(float(price_data))
+            opens.append(float(candle["openPrice"]))
+            highs.append(float(candle["highPrice"]))
+            lows.append(float(candle["lowPrice"]))
+            closes.append(float(candle["closePrice"]))
+            volumes.append(float(candle.get("volume", 0)))
 
     # Конвертируем временные метки в datetime объекты
     if PANDAS_AVAILABLE:
@@ -130,57 +143,122 @@ def plot_symbol(symbol):
             dates = [datetime.fromisoformat(ts.replace('Z', '+00:00')) for ts in timestamps]
 
     # Рассчитываем индикаторы
-    sma_period = AI_THRESHOLDS["SMA_PERIOD"]
-    rsi_period = AI_THRESHOLDS["RSI_PERIOD"]
-
-    # SMA
-    if len(closes) >= sma_period:
-        sma = [sum(closes[max(0, i-sma_period+1):i+1])/min(sma_period, i+1)
-               for i in range(len(closes))]
-    else:
-        sma = [sum(closes) / len(closes)] * len(closes)
+    # SMAs
+    smas = {}
+    sma_periods = [10, 20, 50, 100, 200]
+    for period in sma_periods:
+        if len(closes) >= period:
+            smas[period] = [sum(closes[max(0, i-period+1):i+1])/min(period, i+1) for i in range(len(closes))]
+        else:
+            smas[period] = [sum(closes) / len(closes)] * len(closes)
 
     # RSI
+    rsi_period = AI_THRESHOLDS["RSI_PERIOD"]
     rsi = calculate_rsi(closes, rsi_period)
 
-    # Создаем фигуру с двумя subplot'ами
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), gridspec_kw={'height_ratios': [3, 1]})
+    # Создаем фигуру с тремя subplot'ами (Цена, Объем, RSI)
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(16, 12), gridspec_kw={'height_ratios': [3, 1, 1]}, sharex=True)
 
-    # Верхний график - цена и SMA
-    ax1.plot(dates, closes, label="Цена", color="#1f77b4", linewidth=2)
-    ax1.plot(dates, sma, label=f"SMA({sma_period})", color="#ff7f0e", linestyle="--", linewidth=1.5)
+    # --- 1. График Цены (Candlesticks + SMAs) ---
+    
+    # Разделяем на растущие и падающие свечи для покраски
+    up_dates, up_opens, up_closes, up_highs, up_lows = [], [], [], [], []
+    down_dates, down_opens, down_closes, down_highs, down_lows = [], [], [], [], []
+    
+    # Для объема
+    up_volumes, down_volumes = [], []
+    up_vol_dates, down_vol_dates = [], []
 
-    # Оформление верхнего графика
+    for i in range(len(dates)):
+        if closes[i] >= opens[i]:
+            up_dates.append(dates[i])
+            up_opens.append(opens[i])
+            up_closes.append(closes[i])
+            up_highs.append(highs[i])
+            up_lows.append(lows[i])
+            up_volumes.append(volumes[i])
+            up_vol_dates.append(dates[i])
+        else:
+            down_dates.append(dates[i])
+            down_opens.append(opens[i])
+            down_closes.append(closes[i])
+            down_highs.append(highs[i])
+            down_lows.append(lows[i])
+            down_volumes.append(volumes[i])
+            down_vol_dates.append(dates[i])
+
+    # Цвета свечей
+    col_up = '#26a69a'   # Green
+    col_down = '#ef5350' # Red
+    width = 0.0025       # Ширина свечи (примерно 3.5 минуты для 5м таймфрейма)
+
+    # Рисуем растущие свечи
+    if up_dates:
+        # Тело свечи
+        heights = [c - o for c, o in zip(up_closes, up_opens)]
+        ax1.bar(up_dates, heights, width, bottom=up_opens, color=col_up, edgecolor=col_up)
+        # Тени свечи
+        ax1.vlines(up_dates, up_lows, up_highs, color=col_up, linewidth=1)
+
+    # Рисуем падающие свечи
+    if down_dates:
+        # Тело свечи
+        heights = [o - c for o, c in zip(down_opens, down_closes)]
+        ax1.bar(down_dates, heights, width, bottom=down_closes, color=col_down, edgecolor=col_down)
+        # Тени свечи
+        ax1.vlines(down_dates, down_lows, down_highs, color=col_down, linewidth=1)
+
+    # Рисуем SMA с градиентом (Hot palette: Yellow -> Red)
+    sma_colors = {
+        10: '#fff7bc',  # Light Yellow
+        20: '#fec44f',  # Orange-Yellow
+        50: '#fe9929',  # Orange
+        100: '#d95f0e', # Red-Orange
+        200: '#993404'  # Dark Red
+    }
+    
+    for period in sma_periods:
+        ax1.plot(dates, smas[period], label=f"SMA({period})", color=sma_colors[period], linewidth=1.5, alpha=0.9)
+
+    # Оформление графика цены
     ax1.set_title(f"{symbol} - {datetime.now().strftime('%Y-%m-%d %H:%M')}", fontsize=16, pad=20)
     ax1.set_ylabel("Цена", fontsize=12, labelpad=10)
     ax1.legend(fontsize=10, loc='upper left')
     ax1.grid(alpha=0.2)
-
-    # Добавляем текущую цену (перемещаем в правый верхний угол)
+    
+    # Текущая цена
     current_price = closes[-1]
-    ax1.text(0.98, 0.98, f"Текущая цена: {current_price:.5f}",
+    ax1.text(0.98, 0.98, f"Цена: {current_price:.5f}",
              transform=ax1.transAxes, fontsize=12,
              verticalalignment='top', horizontalalignment='right',
              bbox=dict(boxstyle='round', facecolor='#d62728', alpha=0.1))
 
-    # Нижний график - RSI
-    ax2.plot(dates, rsi, label=f"RSI({rsi_period})", color="#2ca02c", linewidth=2)
-    ax2.axhline(y=70, color='r', linestyle=':', alpha=0.7, label="Перекупленность (70)")
-    ax2.axhline(y=30, color='g', linestyle=':', alpha=0.7, label="Перепроданность (30)")
-    ax2.fill_between(dates, 70, 100, alpha=0.1, color='red')
-    ax2.fill_between(dates, 0, 30, alpha=0.1, color='green')
-
-    # Оформление нижнего графика
-    ax2.set_ylabel("RSI", fontsize=12, labelpad=10)
-    ax2.set_xlabel("Время", fontsize=12, labelpad=10)
-    ax2.set_ylim(0, 100)
-    ax2.legend(fontsize=9, loc='upper left')
+    # --- 2. График Объема ---
+    if up_vol_dates:
+        ax2.bar(up_vol_dates, up_volumes, width, color=col_up, alpha=0.5)
+    if down_vol_dates:
+        ax2.bar(down_vol_dates, down_volumes, width, color=col_down, alpha=0.5)
+        
+    ax2.set_ylabel("Объем", fontsize=10, labelpad=10)
     ax2.grid(alpha=0.2)
 
-    # Форматирование оси X для обоих графиков
-    for ax in [ax1, ax2]:
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-        fig.autofmt_xdate()  # Поворот меток для всего figure
+    # --- 3. График RSI ---
+    ax3.plot(dates, rsi, label=f"RSI({rsi_period})", color="#2ca02c", linewidth=2)
+    ax3.axhline(y=70, color='r', linestyle=':', alpha=0.7, label="Перекупленность (70)")
+    ax3.axhline(y=30, color='g', linestyle=':', alpha=0.7, label="Перепроданность (30)")
+    ax3.fill_between(dates, 70, 100, alpha=0.1, color='red')
+    ax3.fill_between(dates, 0, 30, alpha=0.1, color='green')
+
+    # Оформление RSI
+    ax3.set_ylabel("RSI", fontsize=10, labelpad=10)
+    ax3.set_xlabel("Время", fontsize=12, labelpad=10)
+    ax3.set_ylim(0, 100)
+    ax3.legend(fontsize=9, loc='upper left')
+    ax3.grid(alpha=0.2)
+
+    # Форматирование оси X
+    ax3.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    fig.autofmt_xdate()
 
     # Сохраняем
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
