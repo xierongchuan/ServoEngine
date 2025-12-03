@@ -51,15 +51,25 @@ class BingXClient(ExchangeClient):
 
         params["timestamp"] = int(time.time() * 1000)
         
-        # Если есть ключи, добавляем подпись
+        # Manually construct the query string to ensure exact match for signature
         if self.api_key and self.secret_key:
             params["apiKey"] = self.api_key
-            params["signature"] = self._get_sign(params)
+            # Sort and encode params
+            query_string = urlencode(sorted(params.items()))
+            # Calculate signature on the exact string we will send
+            signature = hmac.new(
+                self.secret_key.encode("utf-8"),
+                query_string.encode("utf-8"),
+                digestmod=hashlib.sha256
+            ).hexdigest()
+            # Append signature
+            final_query_string = f"{query_string}&signature={signature}"
+            
             headers = {
                 "X-BX-APIKEY": self.api_key,
             }
         else:
-            # Для публичных эндпоинтов без ключей
+            final_query_string = urlencode(sorted(params.items()))
             headers = {}
 
         url = f"{self.base_url}{endpoint}"
@@ -70,11 +80,18 @@ class BingXClient(ExchangeClient):
         for attempt in range(max_retries):
             try:
                 if method.lower() == "get":
-                    response = requests.get(url, params=params, headers=headers, timeout=20)
+                    # For GET, append to URL
+                    full_url = f"{url}?{final_query_string}"
+                    response = requests.get(full_url, headers=headers, timeout=20)
                 elif method.lower() == "post":
-                    response = requests.post(url, params=params, headers=headers, timeout=20)
+                    # For POST, send as body
+                    # Ensure correct content type
+                    headers["Content-Type"] = "application/x-www-form-urlencoded"
+                    response = requests.post(url, data=final_query_string, headers=headers, timeout=20)
                 elif method.lower() == "delete":
-                    response = requests.delete(url, params=params, headers=headers, timeout=20)
+                    # For DELETE, BingX might expect params in URL
+                    full_url = f"{url}?{final_query_string}"
+                    response = requests.delete(full_url, headers=headers, timeout=20)
                 else:
                     raise ValueError(f"Unsupported method: {method}")
 
@@ -104,6 +121,8 @@ class BingXClient(ExchangeClient):
         
         if response and response.get("code") == 0:
             return response.get("data", {}).get("balance", {})
+        
+        error(f"❌ Failed to get perpetual balance. Response: {response}")
         return None
 
     def get_spot_balance(self):
@@ -330,6 +349,7 @@ class BingXClient(ExchangeClient):
         params = {
             "symbol": formatted_symbol,
             "side": side.upper(), # BUY or SELL
+            "positionSide": "LONG" if side.upper() == "BUY" else "SHORT", # Required for Hedge Mode / V2
             "type": type.upper(),
             "quantity": quantity,
         }
@@ -356,29 +376,76 @@ class BingXClient(ExchangeClient):
         
         if response and response.get("code") == 0:
             order_data = response.get("data", {})
+            # BingX response structure might be data: { order: { orderId: ... } } or data: { orderId: ... }
             order_id = order_data.get("orderId")
+            if not order_id and "order" in order_data:
+                order_id = order_data["order"].get("orderId")
+            
             info(f"✅ BingX Order Placed: {order_id}")
             return order_id
         else:
             error(f"❌ Failed to place BingX order: {response}")
             return None
 
-    def close_position(self, symbol, position_id):
-        """Закрывает позицию"""
-        # In BingX, to close a position, you place an opposing order
-        # Or use the "close all" endpoint if available
-        # Or use /openApi/swap/v2/trade/closeAll (Close All Positions)
+    def get_open_orders(self, symbol=None):
+        """Получает список открытых ордеров"""
+        endpoint = "/openApi/swap/v2/trade/openOrders"
+        params = {}
+        if symbol:
+            if symbol.endswith("/USD"):
+                formatted_symbol = symbol.replace("/USD", "-USDT")
+            elif symbol.endswith("USDT") and "-" not in symbol and "/" not in symbol:
+                formatted_symbol = symbol[:-4] + "-USDT"
+            else:
+                formatted_symbol = symbol.replace("/", "-")
+            params["symbol"] = formatted_symbol
+
+        response = self.make_request("get", endpoint, params)
         
-        # To close a specific position, we usually place a market order in opposite direction
-        # But we need to know the size.
+        if response and response.get("code") == 0:
+            return response.get("data", {}).get("orders", [])
+        return []
+
+    def cancel_order(self, symbol, order_id):
+        """Отменяет ордер"""
+        endpoint = "/openApi/swap/v2/trade/order"
         
+        if symbol.endswith("/USD"):
+            formatted_symbol = symbol.replace("/USD", "-USDT")
+        elif symbol.endswith("USDT") and "-" not in symbol and "/" not in symbol:
+            formatted_symbol = symbol[:-4] + "-USDT"
+        else:
+            formatted_symbol = symbol.replace("/", "-")
+            
+        params = {
+            "symbol": formatted_symbol,
+            "orderId": order_id
+        }
+        
+        response = self.make_request("delete", endpoint, params)
+        
+        if response and response.get("code") == 0:
+            info(f"✅ Order {order_id} cancelled")
+            return True
+        else:
+            error(f"❌ Failed to cancel order {order_id}: {response}")
+            return False
+
+    def close_position(self, symbol, position_id, percentage=1.0):
+        """
+        Закрывает позицию (полностью или частично).
+        :param percentage: Доля закрытия (0.0 - 1.0). По умолчанию 1.0 (100%).
+        """
         # Let's fetch the position first to get size
         positions = self.get_positions()
         target_pos = None
         
-        if symbol in positions:
-            for p in positions[symbol]:
-                if p["dealId"] == position_id:
+        # Normalize symbol for lookup
+        lookup_symbol = symbol.replace("-", "/")
+        
+        if lookup_symbol in positions:
+            for p in positions[lookup_symbol]:
+                if str(p["dealId"]) == str(position_id):
                     target_pos = p
                     break
         
@@ -387,10 +454,63 @@ class BingXClient(ExchangeClient):
             return False
             
         formatted_symbol = symbol.replace("/", "-")
-        side = "SELL" if target_pos["type"] == "buy" else "BUY"
-        size = target_pos["size"]
         
-        return self.place_order(symbol, side, 0, size, "MARKET")
+        # Determine side and positionSide for closing
+        # To close a LONG, we SELL with positionSide=LONG
+        # To close a SHORT, we BUY with positionSide=SHORT
+        if target_pos["type"] == "buy":
+            side = "SELL"
+            position_side = "LONG"
+        else:
+            side = "BUY"
+            position_side = "SHORT"
+            
+        # Calculate quantity to close
+        full_size = target_pos["size"]
+        qty_to_close = full_size * percentage
+        
+        # Ensure quantity respects precision (assuming 4 decimals for now, ideally should come from exchange info)
+        qty_to_close = float(f"{qty_to_close:.4f}")
+        
+        if qty_to_close <= 0:
+            error(f"❌ Quantity to close is too small: {qty_to_close}")
+            return False
+            
+        info(f"📉 Closing {percentage*100}% of position {position_id} ({qty_to_close} / {full_size})")
+
+        # We need to manually call place_order logic but with specific positionSide
+        # Since place_order currently auto-calculates positionSide, we need to modify place_order OR 
+        # manually construct params here. 
+        # Better to modify place_order to accept positionSide override.
+        
+        # For now, let's use a direct request here to avoid breaking place_order signature if we don't want to change it yet,
+        # OR better: update place_order to accept **kwargs or explicit positionSide.
+        
+        # Let's update place_order signature in a separate step if needed, but for now I will duplicate the request logic 
+        # here for safety and precision, or better yet, I will use place_order if I update it.
+        
+        # Actually, I'll update place_order in the next step. For now, let's assume place_order supports it 
+        # or I'll pass it via a new argument if I change it. 
+        # Wait, I can't change place_order in this same tool call easily without conflict.
+        # I will implement the request directly here to be self-contained and safe.
+        
+        endpoint = "/openApi/swap/v2/trade/order"
+        params = {
+            "symbol": formatted_symbol,
+            "side": side,
+            "positionSide": position_side,
+            "type": "MARKET",
+            "quantity": qty_to_close,
+        }
+        
+        response = self.make_request("post", endpoint, params)
+        
+        if response and response.get("code") == 0:
+            info(f"✅ Position {position_id} closed (partial: {percentage})")
+            return True
+        else:
+            error(f"❌ Failed to close position {position_id}: {response}")
+            return False
 
 # Global instance
 bingx_client = BingXClient()
