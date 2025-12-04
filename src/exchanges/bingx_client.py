@@ -533,6 +533,7 @@ class BingXClient(ExchangeClient):
         if response and response.get("code") == 0:
             info(f"✅ Position {position_id} closed (partial: {percentage})")
             return True
+        else:
             error(f"❌ Failed to close position {position_id}: {response}")
             return False
 
