@@ -305,6 +305,10 @@ def plot_symbol(symbol):
 
 def main():
     """Основная функция генерации графиков"""
+    from src.config import ENABLE_PARALLEL_PROCESSING
+    import concurrent.futures
+    import multiprocessing
+
     info("📊 Генерация графиков...")
 
     # Убеждаемся что директория существует
@@ -313,11 +317,29 @@ def main():
     # Очищаем старые файлы
     cleanup_old_files()
 
-    for symbol in SYMBOLS:
-        try:
-            plot_symbol(symbol)
-        except Exception as e:
-            error(f"❌ Ошибка генерации графика для {symbol}: {str(e)}")
+    if ENABLE_PARALLEL_PROCESSING:
+        # Use ProcessPoolExecutor for CPU-bound plotting tasks
+        # Matplotlib is NOT thread-safe, so we MUST use processes
+        max_workers = multiprocessing.cpu_count()
+        info(f"🚀 Запуск параллельной генерации графиков (процессов: {max_workers})...")
+
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            future_to_symbol = {executor.submit(plot_symbol, symbol): symbol for symbol in SYMBOLS}
+
+            for future in concurrent.futures.as_completed(future_to_symbol):
+                symbol = future_to_symbol[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    error(f"❌ Ошибка генерации графика для {symbol}: {str(e)}")
+    else:
+        # Sequential execution
+        info("🐌 Запуск последовательной генерации графиков...")
+        for symbol in SYMBOLS:
+            try:
+                plot_symbol(symbol)
+            except Exception as e:
+                error(f"❌ Ошибка генерации графика для {symbol}: {str(e)}")
 
 if __name__ == "__main__":
     main()

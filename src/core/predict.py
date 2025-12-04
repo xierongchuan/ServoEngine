@@ -219,30 +219,41 @@ def process_analysis(analysis):
     }
 
 def main(analyses):
-    """Основная функция прогнозирования (Multi-threaded)"""
+    """Основная функция прогнозирования (Multi-threaded or Sequential)"""
+    from src.config import ENABLE_PARALLEL_PROCESSING
     import concurrent.futures
 
     predictions = []
 
-    # Use ThreadPoolExecutor to run AI requests in parallel
-    # Max workers = number of analyses or a reasonable limit (e.g., 10)
-    max_workers = min(len(analyses), 10)
-    if max_workers == 0:
-        return []
+    if ENABLE_PARALLEL_PROCESSING:
+        # Use ThreadPoolExecutor to run AI requests in parallel
+        # Max workers = number of analyses or a reasonable limit (e.g., 10)
+        max_workers = min(len(analyses), 10)
+        if max_workers == 0:
+            return []
 
-    info(f"🚀 Запуск параллельного анализа для {len(analyses)} активов (потоков: {max_workers})...")
+        info(f"🚀 Запуск параллельного анализа для {len(analyses)} активов (потоков: {max_workers})...")
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
-        future_to_symbol = {executor.submit(process_analysis, analysis): analysis['symbol'] for analysis in analyses}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_symbol = {executor.submit(process_analysis, analysis): analysis['symbol'] for analysis in analyses}
 
-        for future in concurrent.futures.as_completed(future_to_symbol):
-            symbol = future_to_symbol[future]
+            for future in concurrent.futures.as_completed(future_to_symbol):
+                symbol = future_to_symbol[future]
+                try:
+                    result = future.result()
+                    predictions.append(result)
+                except Exception as exc:
+                    error(f"❌ Ошибка при обработке {symbol}: {exc}")
+    else:
+        # Sequential execution
+        info(f"🐌 Запуск последовательного анализа для {len(analyses)} активов...")
+        for analysis in analyses:
             try:
-                result = future.result()
+                result = process_analysis(analysis)
                 predictions.append(result)
             except Exception as exc:
-                error(f"❌ Ошибка при обработке {symbol}: {exc}")
+                error(f"❌ Ошибка при обработке {analysis['symbol']}: {exc}")
 
     return predictions
 
