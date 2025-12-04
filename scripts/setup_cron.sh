@@ -45,7 +45,7 @@ case $choice in
     *) echo -e "${RED}❌ Неверный выбор${NC}"; exit 1;;
 esac
 
-CRON_LINE="$CRON_SCHEDULE $SCRIPT_PATH"
+CRON_LINE="$CRON_SCHEDULE $SCRIPT_PATH --once"
 TEMP_CRON=$(mktemp)
 crontab -l 2>/dev/null > "$TEMP_CRON" || true
 

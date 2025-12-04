@@ -48,7 +48,14 @@ log_message "Запуск торгового бота OpenProducer..."
 log_message "Биржа: $EXCHANGE"
 log_message "Режим: $MODE"
 
-# Бесконечный цикл запуска
+# Проверка аргументов запуска
+SINGLE_RUN=false
+if [[ "$1" == "--once" ]]; then
+    SINGLE_RUN=true
+    log_message "Режим одиночного запуска (для CRON)"
+fi
+
+# Бесконечный цикл запуска (или один раз если SINGLE_RUN)
 while true; do
     log_message "🚀 Запуск цикла торгового бота..."
     
@@ -58,6 +65,11 @@ while true; do
     else
         log_error "❌ Торговый цикл завершился с ошибкой"
         log_warning "Проверьте логи: data/steps.log"
+    fi
+    
+    # Если это одиночный запуск, выходим из цикла
+    if [ "$SINGLE_RUN" = true ]; then
+        break
     fi
     
     log_message "⏳ Ожидание 60 секунд перед следующим запуском..."
