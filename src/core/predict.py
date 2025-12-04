@@ -180,19 +180,35 @@ def main(analyses):
             continue
 
         info(f"🧠 Генерация прогноза для {analysis['symbol']}...")
-        response = get_prediction(analysis["prompt"])
+        # Retry logic for API/Parsing errors
+        max_retries = 1
+        prediction = None
 
-        # Логируем очищенный ответ от DeepSeek (без markdown)
-        if isinstance(response, str):
-            import re
-            cleaned = re.sub(r'```json\s*', '', response)
-            cleaned = re.sub(r'```', '', cleaned)
-            # Показываем первые 500 символов очищенного ответа
-            info(f"📨 Ответ DeepSeek: {cleaned}")
-        else:
-            info(f"📨 Ответ DeepSeek: (dict) {response}")
+        for attempt in range(max_retries + 1):
+            response = get_prediction(analysis["prompt"])
 
-        prediction = parse_response(response)
+            # Логируем очищенный ответ от DeepSeek (без markdown)
+            if isinstance(response, str):
+                import re
+                cleaned = re.sub(r'```json\s*', '', response)
+                cleaned = re.sub(r'```', '', cleaned)
+                info(f"📨 Ответ DeepSeek (Попытка {attempt+1}/{max_retries+1}): {cleaned[:500]}...") # Truncate log
+            else:
+                info(f"📨 Ответ DeepSeek (Попытка {attempt+1}/{max_retries+1}): (dict) {response}")
+
+            prediction = parse_response(response)
+
+            # Check if parsing failed (it returns a default dict with specific reason)
+            if prediction["reason"] == "Ошибка парсинга ответа DeepSeek" or prediction["reason"].startswith("Ошибка API"):
+                if attempt < max_retries:
+                    warning(f"⚠️ Ошибка парсинга/API. Повторная попытка через 2 сек...")
+                    time.sleep(2)
+                    continue
+                else:
+                    error(f"❌ Не удалось получить корректный ответ после {max_retries+1} попыток.")
+            else:
+                # Success
+                break
 
         predictions.append({
             **analysis,
