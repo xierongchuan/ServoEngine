@@ -140,33 +140,72 @@ def plot_symbol(symbol, time_range=None):
         # Default fallback
         cutoff_time = now - timedelta(days=1)
 
-    # Подготавливаем данные
-    dates = [] # Store datetime objects directly
+    # Parse all data first
+    all_dates = []
+    all_opens = []
+    all_highs = []
+    all_lows = []
+    all_closes = []
+    all_volumes = []
+
+    for candle in prices:
+        ts_str = candle["snapshotTimeUTC"]
+        try:
+            if ts_str.endswith('Z'):
+                ts_dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+            else:
+                ts_dt = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
+        except ValueError:
+             try:
+                 from dateutil import parser
+                 ts_dt = parser.parse(ts_str).replace(tzinfo=timezone.utc)
+             except:
+                 continue
+
+        all_dates.append(ts_dt)
+
+        if isinstance(candle["closePrice"], dict):
+            all_opens.append(float(candle["openPrice"]["bid"]))
+            all_highs.append(float(candle["highPrice"]["bid"]))
+            all_lows.append(float(candle["lowPrice"]["bid"]))
+            all_closes.append(float(candle["closePrice"]["bid"]))
+            all_volumes.append(float(candle.get("lastTradedVolume", 0)))
+        else:
+            all_opens.append(float(candle["openPrice"]))
+            all_highs.append(float(candle["highPrice"]))
+            all_lows.append(float(candle["lowPrice"]))
+            all_closes.append(float(candle["closePrice"]))
+            all_volumes.append(float(candle.get("volume", 0)))
+
+    if not all_dates:
+        info(f"⚠️ Нет данных для {symbol}")
+        return
+
+    # Calculate indicators on FULL dataset
+    # SMAs
+    all_smas = {}
+    sma_periods = [10, 20, 50, 100, 200]
+    for period in sma_periods:
+        if len(all_closes) >= period:
+            all_smas[period] = [sum(all_closes[max(0, i-period+1):i+1])/min(period, i+1) for i in range(len(all_closes))]
+        else:
+            all_smas[period] = [sum(all_closes) / len(all_closes)] * len(all_closes)
+
+    # RSI
+    rsi_period = AI_THRESHOLDS["RSI_PERIOD"]
+    all_rsi = calculate_rsi(all_closes, rsi_period)
+
+    # Now filter for display
+    dates = []
     opens = []
     highs = []
     lows = []
     closes = []
     volumes = []
+    smas = {p: [] for p in sma_periods}
+    rsi = []
 
-    for candle in prices:
-        # Parse timestamp first to filter
-        ts_str = candle["snapshotTimeUTC"]
-        try:
-            # Try parsing ISO format
-            if ts_str.endswith('Z'):
-                ts_dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
-            else:
-                # Assume UTC if no tz info
-                ts_dt = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
-        except ValueError:
-             # Fallback for other formats if needed
-             try:
-                 from dateutil import parser
-                 ts_dt = parser.parse(ts_str).replace(tzinfo=timezone.utc)
-             except:
-                 continue # Skip if can't parse
-
-        # Filter by time (compare UTC to UTC)
+    for i, ts_dt in enumerate(all_dates):
         if ts_dt < cutoff_time:
             continue
 
@@ -174,40 +213,21 @@ def plot_symbol(symbol, time_range=None):
         ts_local = ts_dt.astimezone().replace(tzinfo=None)
         dates.append(ts_local)
 
-        # Handle different price formats
-        if isinstance(candle["closePrice"], dict):
-            opens.append(float(candle["openPrice"]["bid"]))
-            highs.append(float(candle["highPrice"]["bid"]))
-            lows.append(float(candle["lowPrice"]["bid"]))
-            closes.append(float(candle["closePrice"]["bid"]))
-            volumes.append(float(candle.get("lastTradedVolume", 0)))
-        else:
-            opens.append(float(candle["openPrice"]))
-            highs.append(float(candle["highPrice"]))
-            lows.append(float(candle["lowPrice"]))
-            closes.append(float(candle["closePrice"]))
-            volumes.append(float(candle.get("volume", 0)))
+        opens.append(all_opens[i])
+        highs.append(all_highs[i])
+        lows.append(all_lows[i])
+        closes.append(all_closes[i])
+        volumes.append(all_volumes[i])
+
+        for p in sma_periods:
+            smas[p].append(all_smas[p][i])
+
+        rsi.append(all_rsi[i])
 
     # Check if we have data after filtering
     if not dates:
         info(f"⚠️ Нет данных для {symbol} за период {time_range}")
         return
-
-    # dates is already a list of datetime objects, no need for further conversion
-
-    # Рассчитываем индикаторы
-    # SMAs
-    smas = {}
-    sma_periods = [10, 20, 50, 100, 200]
-    for period in sma_periods:
-        if len(closes) >= period:
-            smas[period] = [sum(closes[max(0, i-period+1):i+1])/min(period, i+1) for i in range(len(closes))]
-        else:
-            smas[period] = [sum(closes) / len(closes)] * len(closes)
-
-    # RSI
-    rsi_period = AI_THRESHOLDS["RSI_PERIOD"]
-    rsi = calculate_rsi(closes, rsi_period)
 
     # Determine chart width based on duration
     # > 12h: 48 (Original)
@@ -357,15 +377,18 @@ def plot_symbol(symbol, time_range=None):
     ax3.grid(alpha=0.2)
 
     # Форматирование оси X
-    # Форматирование оси X
-    def custom_date_formatter(x, pos):
-        dt = mdates.num2date(x)
-        # Если время 00:00, показываем дату (день и месяц)
-        if dt.hour == 0 and dt.minute == 0:
-            return dt.strftime('%d %b')
-        return dt.strftime('%H:%M')
+    # Используем стандартный AutoDateFormatter, он лучше адаптируется
+    import matplotlib.dates as mdates
+    locator = mdates.AutoDateLocator()
+    formatter = mdates.AutoDateFormatter(locator)
+    # Настраиваем форматтер чтобы показывать часы и минуты
+    formatter.scaled[1/(24*60)] = '%H:%M' # Minutes
+    formatter.scaled[1/24] = '%H:%M'      # Hours
+    formatter.scaled[1] = '%d %b'         # Days
 
-    ax3.xaxis.set_major_formatter(plt.FuncFormatter(custom_date_formatter))
+    ax3.xaxis.set_major_locator(locator)
+    ax3.xaxis.set_major_formatter(formatter)
+
     fig.autofmt_xdate()
 
     # Убираем отступы по краям (слева и справа)

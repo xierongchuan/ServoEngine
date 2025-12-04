@@ -2,7 +2,7 @@ import sys
 import os
 import json
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 
 # Add src to path
@@ -13,7 +13,7 @@ from src.core.plotter import plot_symbol, PLOTTER_RANGES
 class TestPlotterRanges(unittest.TestCase):
     def setUp(self):
         self.symbol = "BTCUSDT"
-        self.now = datetime.now()
+        self.now = datetime.now(timezone.utc)
 
         # Create mock data
         self.prices = []
