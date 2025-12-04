@@ -66,6 +66,21 @@ def run_pipeline():
     info("📊 ШАГ 1: Сбор данных о ценах и новостях")
     collector.main()
 
+    # Log open positions at startup
+    from src.core.executor import get_open_positions
+    positions = get_open_positions()
+    if not positions:
+        info("📊 Текущие позиции: Нет")
+    else:
+        pos_details = []
+        for sym, pos_list in positions.items():
+            for p in pos_list:
+                side = p.get('type', '?').upper()
+                size = p.get('size', 0)
+                pnl = p.get('pnl', 0)
+                pos_details.append(f"{sym} ({side} {size} | PnL: {pnl})")
+        info(f"📊 Текущие позиции: {', '.join(pos_details)}")
+
     # Шаг 2: Анализ данных
     print("\n🔍 ШАГ 2: Анализ технических индикаторов")
     info("🔍 ШАГ 2: Анализ технических индикаторов")

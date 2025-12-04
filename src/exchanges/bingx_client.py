@@ -277,8 +277,18 @@ class BingXClient(ExchangeClient):
                     positions[symbol] = []
 
                 # Adapt to Capital.com format structure
+                # Determine side based on positionSide if available, else fallback to amount sign
+                pos_side = pos.get("positionSide", "").upper()
+                if pos_side == "SHORT":
+                    side = "sell"
+                elif pos_side == "LONG":
+                    side = "buy"
+                else:
+                    # Fallback for One-Way mode where positionSide might be BOTH or empty
+                    side = "buy" if size > 0 else "sell"
+
                 positions[symbol].append({
-                    "type": "buy" if size > 0 else "sell",
+                    "type": side,
                     "entry": float(pos.get("avgPrice", 0)),
                     "dealId": pos.get("positionId", ""), # Use positionId as dealId
                     "workingOrderId": pos.get("positionId", ""),

@@ -18,6 +18,8 @@ def debug_positions():
     for sym in SYMBOLS:
         if sym in positions:
             print(f"✅ Symbol {sym} found in positions")
+            for p in positions[sym]:
+                print(f"   Details: {p}")
         else:
             print(f"❌ Symbol {sym} NOT found in positions")
             # Check for partial matches or formatting differences
