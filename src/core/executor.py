@@ -79,14 +79,53 @@ def create_order(symbol, direction, price, hold_minutes=DEFAULT_HOLD_TIME_MINUTE
         
         info(f"🎯 Calculated TP: {tp_price}, SL: {sl_price}")
 
-        # Calculate quantity based on USDT amount
-        quantity = TRADE_AMOUNT_USDT / price
+        # Calculate quantity based on Balance Percentage
+        balance_data = client.get_balance()
+        
+        # Extract equity/balance based on exchange response structure
+        # BingX get_balance (perpetual) returns dict with 'balance' or 'equity'
+        # Capital.com returns list of accounts
+        
+        total_balance = 0.0
+        
+        if isinstance(balance_data, dict):
+            # BingX Perpetual: {'balance': 1000, 'equity': 1000, ...}
+            # BingX Standard: {'balance': 1000, ...}
+            # Try equity first, then balance
+            total_balance = float(balance_data.get("equity", balance_data.get("balance", 0.0)))
+        elif isinstance(balance_data, list):
+            # Capital.com or BingX Spot/Standard list
+            # Sum up available balances or take the first one
+            for acc in balance_data:
+                # Capital: 'balance' or 'available'
+                # BingX Spot: 'balance'
+                b = float(acc.get("equity", acc.get("balance", 0.0)))
+                total_balance += b
+                
+        if total_balance <= 0:
+            error(f"❌ Balance is 0 or could not be retrieved. Cannot calculate position size.")
+            return None
+            
+        # Calculate trade amount in USDT
+        trade_amount = total_balance * (POSITION_SIZE_PERCENT / 100.0)
+        
+        # Enforce Minimum Trade Amount
+        if trade_amount < MIN_TRADE_AMOUNT_USDT:
+            info(f"⚠️ Calculated amount ${trade_amount:.2f} is less than min ${MIN_TRADE_AMOUNT_USDT}. Using min amount.")
+            trade_amount = MIN_TRADE_AMOUNT_USDT
+            
+        # Check if we have enough balance for this trade (simplified check)
+        if trade_amount > total_balance:
+             warning(f"⚠️ Trade amount ${trade_amount:.2f} exceeds balance ${total_balance:.2f}. Adjusting to 95% of balance.")
+             trade_amount = total_balance * 0.95
+
+        quantity = trade_amount / price
         
         # Round quantity to appropriate precision (e.g., 4 decimals for crypto)
         # In a real scenario, this should be symbol-specific
         quantity = round(quantity, 4)
         
-        info(f"🧮 Calculated quantity: {quantity} (Amount: ${TRADE_AMOUNT_USDT} / Price: ${price})")
+        info(f"🧮 Calculated quantity: {quantity} (Balance: ${total_balance:.2f} | Amount: ${trade_amount:.2f} [{POSITION_SIZE_PERCENT}%])")
 
         order_id = client.place_order(
             symbol=symbol,

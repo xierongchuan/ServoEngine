@@ -29,20 +29,24 @@ def test_order_lifecycle():
     balance = client.get_perpetual_balance()
     if balance is None:
         log("❌ Не удалось получить баланс. Проверьте API ключи и подключение.")
-        # Продолжаем тест, но предупреждаем
-    else:
-        log(f"💰 Баланс: {balance.get('balance', 'N/A')} USDT")
-
     symbol = "BTC-USDT"
     
-    # 2. Получаем текущую цену
+    # 1. Получаем текущую цену и баланс
     klines = client.get_kline_data(symbol, limit=1)
+    balance_data = client.get_balance()
+    
     if not klines:
         log("❌ Не удалось получить цену")
         return
-    
+        
     current_price = klines[-1]["closePrice"]
+    
+    total_balance = 0.0
+    if isinstance(balance_data, dict):
+        total_balance = float(balance_data.get("equity", balance_data.get("balance", 0.0)))
+        
     log(f"📈 Текущая цена {symbol}: {current_price}")
+    log(f"💰 Баланс: {total_balance} USDT")
 
     # 3. Создаем БЕЗОПАСНЫЙ лимитный ордер (на 50% ниже текущей цены)
     safe_price = int(current_price * 0.5)
