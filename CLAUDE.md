@@ -4,23 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an automated trading system that integrates with Capital.com API for trading operations and DeepSeek API for AI-powered market analysis. The system operates in demo mode by default and supports multi-asset trading (forex, crypto, stocks, commodities). The system features a centralized dual-level logging architecture for comprehensive monitoring.
+This is an automated trading system that integrates with Capital.com API for trading operations and DeepSeek API for AI-powered market analysis. The system operates in demo mode by default and supports multi-asset trading (forex, crypto, stocks, commodities). The system features a centralized dual-level logging architecture for comprehensive monitoring. News analysis can be toggled via `ENABLE_NEWS`.
 
 ## Key Architecture
 
 ### Core Components
 
-- **main.py**: Entry point, orchestrates the complete trading pipeline
-- **logger.py**: Centralized logging system with dual-level logging (steps.log for all events, trades.log for trading operations only)
-- **collector.py**: Fetches price data and news from Capital.com API
-- **analyzer.py**: Calculates technical indicators (SMA, RSI) and generates analysis prompts
-- **predict.py**: Sends prompts to DeepSeek API for trading predictions
-- **executor.py**: Opens/closes positions via Capital.com API with TP/SL management
-- **monitor.py**: Tracks open positions and implements time-based risk management (auto-close at 60 min)
-- **plotter.py**: Generates price charts with technical indicators
-- **utils.py**: Shared utilities for Capital.com API (session management, request handling)
-- **bingx_client.py**: BingX API client for Futures trading (Demo/Real)
-- **config.py**: Central configuration with API endpoints, trading parameters, and paths
+- **run.py**: CLI entry point, sets up environment and runs main
+- **src/main.py**: Orchestrates the complete trading pipeline
+- **src/utils/logger.py**: Centralized logging system with dual-level logging (steps.log for all events, trades.log for trading operations only)
+- **src/core/collector.py**: Fetches price data and news from Capital.com API
+- **src/core/analyzer.py**: Calculates technical indicators (SMA, RSI) and generates analysis prompts
+- **src/core/predict.py**: Sends prompts to DeepSeek API for trading predictions
+- **src/core/executor.py**: Opens/closes positions via Capital.com API with TP/SL management
+- **src/core/monitor.py**: Tracks open positions and implements time-based risk management (auto-close at 60 min)
+- **src/core/plotter.py**: Generates price charts with technical indicators
+- **src/utils/utils.py**: Shared utilities for Capital.com API (session management, request handling)
+- **src/exchanges/**: Exchange implementations (Capital.com, BingX)
+- **src/config.py**: Central configuration with API endpoints, trading parameters, and paths
 
 ### Data Flow Pipeline
 
@@ -35,6 +36,7 @@ This is an automated trading system that integrates with Capital.com API for tra
 
 - `MODE` controls demo vs real trading (default: "demo")
 - `EXCHANGE` controls the exchange to use ("capital" or "bingx")
+- `ENABLE_NEWS` toggles news analysis ("true" or "false")
 - Environment variables: `CAP_API_USERNAME`, `CAP_API_PASSWORD`, `DEEPSEEK_API_KEY`, `CAP_API_KEY`, `BINGX_API_KEY`, `BINGX_SECRET_KEY`
 - Trading parameters: position size (0.1 lots), take profit (1.5%), stop loss (2.0%)
 - Supported symbols: EUR/USD, BTC/USD (default, can add AAPL, GOLD, OIL up to 5 max)
@@ -47,22 +49,15 @@ This is an automated trading system that integrates with Capital.com API for tra
 
 ```bash
 # Run complete trading pipeline
-python3 main.py
-- `exchange_client.py`: Abstract base class for exchange clients
-- `exchange_factory.py`: Factory to create exchange clients
-- `capital_client.py`: Capital.com implementation
-- `bingx_client.py`: BingX implementation
-- `collector.py`: Data collection (prices, news)
-- `analyzer.py`: Technical analysis (RSI, MACD, BB, SMA)
-- `predict.py`: AI prediction (DeepSeek)
-- `executor.py`: Order execution
-- `monitor.py`: Position monitoring & risk management
-- `plotter.py`: Chart generation
-- `main.py`: Orchestrator
-- `config.py`: Configuration
-- `logger.py`: Logging system
-- `symbols.py`: Symbol mapping
-- `news_api.py`: News fetching chart generation
+python3 run.py
+
+# Run individual modules
+python3 -m src.core.collector    # Data collection
+python3 -m src.core.analyzer     # Technical analysis
+python3 -m src.core.predict      # AI prediction
+python3 -m src.core.executor     # Order execution
+python3 -m src.core.monitor      # Monitoring
+python3 -m src.core.plotter      # Chart generation
 ```
 
 ### Environment Setup
@@ -108,11 +103,17 @@ OpenProducer/
 │   ├── steps.log              # All system events
 │   ├── trades.log            # Trading operations only
 │   ├── prices/               # OHLCV price data
-│   │   ├── EUR_USD.json
-│   │   └── BTC_USD.json
 │   └── news/                 # News data
 ├── charts/                   # Generated price charts
-├── *.py                      # Python modules (10 total)
+├── src/
+│   ├── core/                 # Core logic (analyzer, collector, etc.)
+│   ├── exchanges/            # Exchange adapters
+│   ├── utils/                # Utilities (logger, helpers)
+│   ├── config.py             # Configuration
+│   └── main.py               # Main logic
+├── scripts/                  # Helper scripts
+├── tests/                    # Tests
+├── run.py                    # Entry point
 └── *.md                      # Documentation files
 ```
 

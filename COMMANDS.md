@@ -4,14 +4,14 @@
 
 ### Запуск
 ```bash
-python3 main.py                          # Полный цикл
-python3 collector.py                     # Только сбор данных
-python3 analyzer.py                      # Только анализ
-python3 predict.py                       # Только прогноз
-python3 executor.py                      # Только торговля
-python3 monitor.py                       # Только мониторинг
-python3 plotter.py                       # Только графики
-python3 test_bingx.py                    # Тест BingX API
+python3 run.py                           # Полный цикл
+python3 -m src.core.collector            # Только сбор данных
+python3 -m src.core.analyzer             # Только анализ
+python3 -m src.core.predict              # Только прогноз
+python3 -m src.core.executor             # Только торговля
+python3 -m src.core.monitor              # Только мониторинг
+python3 -m src.core.plotter              # Только графики
+python3 tests/test_bingx.py              # Тест BingX API
 ```
 
 ### Автозапуск
@@ -55,13 +55,16 @@ export CAP_API_USERNAME="email"             # Настроить username
 export CAP_API_PASSWORD="pass"              # Настроить password
 export CAP_API_KEY="key"                 # API ключ Capital.com (ОБЯЗАТЕЛЬНО!)
 export BINGX_API_KEY="key"               # API ключ BingX
-export BINGX_SECRET_KEY="secret"    # Запуск с выбором биржи
-export EXCHANGE=bingx && python3 main.py
-export EXCHANGE=capital && python3 main.py
+export BINGX_SECRET_KEY="secret"         # API секрет BingX
+export ENABLE_NEWS="true"                # Включить/выключить новости
+
+# Запуск с выбором биржи
+export EXCHANGE=bingx && python3 run.py
+export EXCHANGE=capital && python3 run.py
 
 # Тестирование интеграции
-export EXCHANGE=bingx && python3 test_integration.py
-export EXCHANGE=capital && python3 test_integration.py
+export EXCHANGE=bingx && python3 tests/test_integration.py
+export EXCHANGE=capital && python3 tests/test_integration.py
                 # Выбор биржи (capital/bingx)
 export DEEPSEEK_API_KEY="key"            # Настроить API ключ
 echo $CAP_API_USERNAME                      # Проверить переменную
@@ -89,12 +92,12 @@ cat README_QUICKSTART.md                 # Быстрый старт
 cat CLAUDE.md                            # Тех. документация
 
 # Скрипты
-cat run_trading_bot.sh                   # Скрипт запуска
-cat setup_cron.sh                        # Скрипт настройки cron
-cat monitor_logs.sh                      # Скрипт мониторинга
+cat scripts/run_trading_bot.sh           # Скрипт запуска
+cat scripts/setup_cron.sh                # Скрипт настройки cron
+cat scripts/monitor_logs.sh              # Скрипт мониторинга
 
 # Диагностика
-python3 test_api_structure.py           # Структура API запросов
+python3 tests/test_bingx.py              # Тест BingX
 ```
 
 ## 🔍 Troubleshooting
@@ -118,15 +121,22 @@ sudo journalctl -u cron                 # Логи cron (Linux)
 
 ```
 OpenProducer/
-├── *.py                                # 10 Python модулей
-├── *.sh                                # 3 Bash скрипта
-├── *.md                                # 7 файлов документации
+├── src/                                # Исходный код
+│   ├── core/                           # Ядро (analyzer, collector, etc.)
+│   ├── exchanges/                      # Адаптеры бирж
+│   ├── utils/                          # Утилиты
+│   ├── config.py                       # Конфигурация
+│   └── main.py                         # Основная логика
+├── scripts/                            # Bash скрипты
+├── tests/                              # Тесты
 ├── data/                               # Данные и логи
-│   ├── steps.log                        # Логи системы
+│   ├── steps.log                       # Логи системы
 │   ├── trades.log                      # Логи сделок
 │   ├── prices/                         # Данные о ценах
 │   └── news/                           # Новости
-└── charts/                             # Графики
+├── charts/                             # Графики
+├── run.py                              # Точка входа
+└── *.md                                # Документация
 ```
 
 ## ⚠️ Важные замечания
