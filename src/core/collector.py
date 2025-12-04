@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from src.config import SYMBOLS, DATA_DIR, NEWS_SETTINGS, ENABLE_NEWS
+from src.config import SYMBOLS, DATA_DIR, NEWS_SETTINGS, ENABLE_NEWS, CHART_RANGES, DEFAULT_CHART_RANGE
 from src.utils.logger import info, error
 from src.utils.helpers import get_filename
 from src.utils.news_api import get_news_for_symbol
@@ -20,7 +20,12 @@ def fetch_prices(symbol):
     client = get_exchange_client()
 
     try:
-        prices = client.get_kline_data(symbol, interval="MINUTE_1", limit=288)
+        # Determine interval and limit from config
+        chart_config = CHART_RANGES.get(DEFAULT_CHART_RANGE, {})
+        interval = chart_config.get("interval", "1m") # Default to 1m if not set
+        limit = chart_config.get("candles", 288)
+
+        prices = client.get_kline_data(symbol, interval=interval, limit=limit)
 
         if not prices:
             raise ValueError(f"API вернул пустой список цен для {symbol}")

@@ -40,15 +40,18 @@
   "CHART_RANGES": {
     "1D": {
       "days": 1,
-      "candles": 1440
+      "candles": 1440,
+      "interval": "1m"
     },
     "3D": {
       "days": 3,
-      "candles": 864
+      "candles": 864,
+      "interval": "5m"
     },
     "1W": {
       "days": 7,
-      "candles": 2016
+      "candles": 2016,
+      "interval": "5m"
     }
   },
   "DEFAULT_CHART_RANGE": "1D",

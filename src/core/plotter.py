@@ -116,7 +116,7 @@ def plot_symbol(symbol):
 
     for candle in prices:
         timestamps.append(candle["snapshotTimeUTC"])
-        
+
         # Handle different price formats
         if isinstance(candle["closePrice"], dict):
             opens.append(float(candle["openPrice"]["bid"]))
@@ -161,11 +161,11 @@ def plot_symbol(symbol):
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(24, 18), gridspec_kw={'height_ratios': [3, 1, 1]}, sharex=True)
 
     # --- 1. График Цены (Candlesticks + SMAs) ---
-    
+
     # Разделяем на растущие и падающие свечи для покраски
     up_dates, up_opens, up_closes, up_highs, up_lows = [], [], [], [], []
     down_dates, down_opens, down_closes, down_highs, down_lows = [], [], [], [], []
-    
+
     # Для объема
     up_volumes, down_volumes = [], []
     up_vol_dates, down_vol_dates = [], []
@@ -191,7 +191,30 @@ def plot_symbol(symbol):
     # Цвета свечей
     col_up = '#26a69a'   # Green
     col_down = '#ef5350' # Red
-    width = 0.0025       # Ширина свечи (примерно 3.5 минуты для 5м таймфрейма)
+    # Determine width based on interval
+    chart_config = CHART_RANGES.get(DEFAULT_CHART_RANGE, {})
+    interval = chart_config.get("interval", "1m")
+
+    # Width mapping (approximate days per candle)
+    # 1m = 1/(24*60) = 0.00069
+    # 5m = 0.0035
+    # 15m = 0.01
+    # 1h = 0.04
+    # 4h = 0.16
+    # 1d = 0.8
+
+    width_map = {
+        "1m": 0.0005,
+        "5m": 0.0025,
+        "15m": 0.007,
+        "30m": 0.015,
+        "1h": 0.03,
+        "4h": 0.12,
+        "1d": 0.7,
+        "1w": 5.0
+    }
+
+    width = width_map.get(interval, 0.0025)
 
     # Рисуем растущие свечи
     if up_dates:
@@ -217,7 +240,7 @@ def plot_symbol(symbol):
         100: '#d95f0e', # Red-Orange
         200: '#993404'  # Dark Red
     }
-    
+
     for period in sma_periods:
         ax1.plot(dates, smas[period], label=f"SMA({period})", color=sma_colors[period], linewidth=1.5, alpha=0.9)
 
@@ -226,7 +249,7 @@ def plot_symbol(symbol):
     ax1.set_ylabel("Цена", fontsize=14, labelpad=10)
     ax1.legend(fontsize=12, loc='upper left')
     ax1.grid(alpha=0.2)
-    
+
     # Текущая цена
     current_price = closes[-1]
     ax1.text(0.98, 0.98, f"Цена: {current_price:.5f}",
@@ -239,7 +262,7 @@ def plot_symbol(symbol):
         ax2.bar(up_vol_dates, up_volumes, width, color=col_up, alpha=0.5)
     if down_vol_dates:
         ax2.bar(down_vol_dates, down_volumes, width, color=col_down, alpha=0.5)
-        
+
     ax2.set_ylabel("Объем", fontsize=12, labelpad=10)
     ax2.grid(alpha=0.2)
 
