@@ -207,16 +207,63 @@ def process_analysis(analysis):
             # Success
             break
 
+
+
+    # Валидация прогноза (Risk/Reward)
+    validated_prediction = validate_prediction(prediction, analysis["current_price"])
+
     return {
         **analysis,
-        "action": prediction["action"],
-        "confidence": prediction["confidence"],
-        "percentage": prediction.get("percentage", 1.0),
-        "stop_loss": prediction.get("stop_loss"),
-        "take_profit": prediction.get("take_profit"),
-        "hold_minutes": prediction["hold_minutes"],
-        "reason": prediction["reason"]
+        "action": validated_prediction["action"],
+        "confidence": validated_prediction["confidence"],
+        "percentage": validated_prediction.get("percentage", 1.0),
+        "stop_loss": validated_prediction.get("stop_loss"),
+        "take_profit": validated_prediction.get("take_profit"),
+        "hold_minutes": validated_prediction["hold_minutes"],
+        "reason": validated_prediction["reason"]
     }
+
+def validate_prediction(prediction, current_price):
+    """
+    Валидирует прогноз ИИ, проверяя Risk/Reward Ratio.
+    Если R/R слишком низкий, меняет действие на HOLD или понижает уверенность.
+    """
+    from src.config import MIN_RISK_REWARD_RATIO
+
+    action = prediction.get("action")
+    stop_loss = prediction.get("stop_loss")
+    take_profit = prediction.get("take_profit")
+
+    # Проверяем только для сигналов на вход (BUY/SELL)
+    if action not in ["buy", "sell"]:
+        return prediction
+
+    if not stop_loss or not take_profit:
+        # Если нет SL/TP для входа - это ошибка, меняем на HOLD
+        warning(f"⚠️ Отсутствует SL/TP для сигнала {action}. Меняем на HOLD.")
+        prediction["action"] = "hold"
+        prediction["reason"] += " [AUTO-FIX: Missing SL/TP]"
+        return prediction
+
+    # Расчет риска и прибыли
+    risk = abs(current_price - stop_loss)
+    reward = abs(current_price - take_profit)
+
+    if risk == 0:
+        warning(f"⚠️ SL равен текущей цене. Меняем на HOLD.")
+        prediction["action"] = "hold"
+        prediction["reason"] += " [AUTO-FIX: Zero Risk]"
+        return prediction
+
+    rr_ratio = reward / risk
+
+    if rr_ratio < MIN_RISK_REWARD_RATIO:
+        warning(f"⚠️ Низкий Risk/Reward ({rr_ratio:.2f} < {MIN_RISK_REWARD_RATIO}). Сигнал {action} отклонен.")
+        prediction["action"] = "hold"
+        prediction["reason"] += f" [AUTO-FIX: Low R/R ({rr_ratio:.2f})]"
+        prediction["confidence"] = 0.0
+
+    return prediction
 
 def main(analyses):
     """Основная функция прогнозирования (Multi-threaded or Sequential)"""

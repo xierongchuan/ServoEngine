@@ -266,7 +266,11 @@ def analyze_symbol(symbol, position=None):
     1.  Учти наличие открытой позиции.
     2.  Проверь условия входа согласно стратегии.
     3.  Рассчитай уровни Stop Loss и Take Profit на основе технических уровней (поддержка/сопротивление, SMA).
-    4. ОБЯЗАТЕЛЬНО: Risk/Reward Ratio > 1.5 (Потенциальная прибыль должна быть больше риска).
+    4. ОБЯЗАТЕЛЬНО: Risk/Reward Ratio > 1.5.
+       - Reward = abs(Price - TakeProfit)
+       - Risk = abs(Price - StopLoss)
+       - Reward / Risk должно быть >= 1.5.
+       - Если R/R < 1.5, сигнал будет ОТВЕРГНУТ. Лучше пропустить сделку (HOLD), чем рисковать с плохим соотношением.
     5. Прими решение: buy, sell, close, close_partial, или hold.
 
     ### ФОРМАТ ОТВЕТА (JSON ONLY):
