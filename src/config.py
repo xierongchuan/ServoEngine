@@ -123,6 +123,10 @@ CHARTS_DIR = "charts"
 CHART_RANGES = BOT_CONFIG.get("CHART_RANGES", {})
 DEFAULT_CHART_RANGE = BOT_CONFIG.get("DEFAULT_CHART_RANGE", "1D")
 
+# Настройки для генератора картинок (plotter.py)
+PLOTTER_RANGES = BOT_CONFIG.get("PLOTTER_RANGES", {})
+DEFAULT_PLOTTER_RANGE = BOT_CONFIG.get("DEFAULT_PLOTTER_RANGE", "1D")
+
 # Настройки очистки старых файлов
 CLEANUP_SETTINGS = BOT_CONFIG.get("CLEANUP_SETTINGS", {})
 

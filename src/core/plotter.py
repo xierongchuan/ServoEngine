@@ -11,7 +11,7 @@ try:
 except ImportError:
     PANDAS_AVAILABLE = False
 
-from src.config import DATA_DIR, CHARTS_DIR, CHART_RANGES, DEFAULT_CHART_RANGE, CLEANUP_SETTINGS, SYMBOLS, AI_THRESHOLDS
+from src.config import DATA_DIR, CHARTS_DIR, PLOTTER_RANGES, DEFAULT_PLOTTER_RANGE, CLEANUP_SETTINGS, SYMBOLS, AI_THRESHOLDS
 from src.utils.logger import info, error
 from src.utils.helpers import get_filename
 
@@ -108,9 +108,9 @@ def plot_symbol(symbol, time_range=None):
 
     # Determine time range settings
     if time_range is None:
-        time_range = DEFAULT_CHART_RANGE
+        time_range = DEFAULT_PLOTTER_RANGE
 
-    range_config = CHART_RANGES.get(time_range, CHART_RANGES.get("1D"))
+    range_config = PLOTTER_RANGES.get(time_range, PLOTTER_RANGES.get("1D"))
 
     # Calculate cutoff time
     now = datetime.now()
@@ -201,10 +201,31 @@ def plot_symbol(symbol, time_range=None):
     rsi_period = AI_THRESHOLDS["RSI_PERIOD"]
     rsi = calculate_rsi(closes, rsi_period)
 
+    # Determine chart width based on duration
+    # > 12h: 48 (Original)
+    # > 4h and <= 12h: 36
+    # <= 4h: 24
+
+    chart_width = 48 # Default for > 12h
+
+    # Calculate total minutes for comparison
+    total_minutes = 0
+    if "days" in range_config:
+        total_minutes = range_config["days"] * 24 * 60
+    elif "hours" in range_config:
+        total_minutes = range_config["hours"] * 60
+    elif "minutes" in range_config:
+        total_minutes = range_config["minutes"]
+
+    if total_minutes <= 4 * 60: # <= 4h
+        chart_width = 24
+    elif total_minutes <= 12 * 60: # <= 12h (and > 4h)
+        chart_width = 36
+
     # Создаем фигуру с тремя subplot'ами (Цена, Объем, RSI)
     # Увеличиваем размер фигуры для высокого разрешения
     # Reduced height by 25% (18 -> 13.5)
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(48, 13.5), gridspec_kw={'height_ratios': [3, 1, 1]}, sharex=True)
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(chart_width, 13.5), gridspec_kw={'height_ratios': [3, 1, 1]}, sharex=True)
 
     # --- 1. График Цены (Candlesticks + SMAs) ---
 
@@ -359,7 +380,7 @@ def main():
     if len(sys.argv) > 1:
         chart_range = sys.argv[1]
     else:
-        chart_range = DEFAULT_CHART_RANGE
+        chart_range = DEFAULT_PLOTTER_RANGE
 
     info(f"📊 Генерация графиков (Range: {chart_range})...")
 

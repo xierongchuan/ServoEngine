@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.core.plotter import plot_symbol, CHART_RANGES
+from src.core.plotter import plot_symbol, PLOTTER_RANGES
 
 class TestPlotterRanges(unittest.TestCase):
     def setUp(self):

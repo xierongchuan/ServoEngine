@@ -39,6 +39,23 @@
     ]
   },
   "CHART_RANGES": {
+    "1D": {
+      "days": 1,
+      "candles": 1440,
+      "interval": "5m"
+    },
+    "3D": {
+      "days": 3,
+      "candles": 864,
+      "interval": "15m"
+    },
+    "1W": {
+      "days": 7,
+      "candles": 2016,
+      "interval": "1h"
+    }
+  },
+  "PLOTTER_RANGES": {
     "15m": {
       "minutes": 15,
       "interval": "1m"
@@ -69,26 +86,23 @@
     },
     "1D": {
       "days": 1,
-      "candles": 1440,
       "interval": "5m"
     },
     "2D": {
       "days": 2,
-      "candles": 2880,
       "interval": "15m"
     },
     "3D": {
       "days": 3,
-      "candles": 864,
       "interval": "15m"
     },
     "1W": {
       "days": 7,
-      "candles": 2016,
       "interval": "1h"
     }
   },
   "DEFAULT_CHART_RANGE": "1D",
+  "DEFAULT_PLOTTER_RANGE": "1D",
   "CLEANUP_SETTINGS": {
     "cleanup_old_charts": true,
     "charts_retention_days": 7,
