@@ -190,6 +190,30 @@ def analyze_symbol(symbol, position=None):
         - Размер: {position['size']}
         """
 
+    # --- PnL Analysis & Fees Context ---
+    from src.config import TRADING_FEE, MIN_PARTIAL_CLOSE_PNL
+
+    # Calculate Net PnL (Approximate)
+    # PnL is usually in %, Fee is in % (per trade, so entry+exit = 2 * Fee)
+    # This is a safe estimation for the AI
+    net_pnl_est = 0.0
+    pnl_note = ""
+
+    if position:
+        current_pnl = float(position['pnl'])
+        total_fee_est = TRADING_FEE * 2.0 # Entry + Exit
+        net_pnl_est = current_pnl - total_fee_est
+
+        # Soft Warning / Context Note
+        if current_pnl > 0 and net_pnl_est < MIN_PARTIAL_CLOSE_PNL:
+             pnl_note = f"""
+    > [!NOTE]
+    > **LOW PROFIT WARNING**: Текущий PnL ({current_pnl}%) едва покрывает комиссию (Est. Fee: {total_fee_est}%).
+    > Чистая прибыль ~{net_pnl_est:.2f}%.
+    > **СОВЕТ**: Избегай частичного закрытия (close_partial), так как прибыль ничтожна.
+    > Лучше держи (HOLD) для роста, либо закрывай полностью (CLOSE), если тренд развернулся и нужно бежать.
+    """
+
     # Определяем стратегию в зависимости от настроек новостей и агрессивности
     from src.config import TRADING_FEE, AGGRESSIVE_MODE, AGGRESSIVE_SETTINGS
     min_profit_breakeven = max(0.2, TRADING_FEE * 2.5)
@@ -215,8 +239,9 @@ def analyze_symbol(symbol, position=None):
     if ENABLE_NEWS:
         strategy_text = f"""
     **СТРАТЕГИЯ УПРАВЛЕНИЯ ПОЗИЦИЕЙ (ПРИОРИТЕТ №1):**
+    {pnl_note}
     1.  **SECURE PROFIT**: Если PnL > {min_profit_breakeven:.2f}% (комиссия {TRADING_FEE}% покрыта), РАССМОТРИ перенос Stop Loss в БЕЗУБЫТОК.
-    2.  **CLOSE_PARTIAL**: Если PnL > {min_profit_partial:.2f}%, но импульс затухает -> ЗАКРОЙ 50% позиции.
+    2.  **CLOSE_PARTIAL**: Используй ТОЛЬКО для фиксации **существенной** прибыли. Не фиксируй "копейки" (Net PnL < {MIN_PARTIAL_CLOSE_PNL}%).
     3.  **CLOSE**: Если тренд развернулся против позиции ИЛИ достигнут Take Profit.
     4.  **HOLD**: Если тренд сильный и PnL растет.
 
@@ -233,8 +258,9 @@ def analyze_symbol(symbol, position=None):
     else:
         strategy_text = f"""
     **СТРАТЕГИЯ УПРАВЛЕНИЯ ПОЗИЦИЕЙ (ПРИОРИТЕТ №1):**
+    {pnl_note}
     1.  **SECURE PROFIT**: Если PnL > {min_profit_breakeven:.2f}% (комиссия {TRADING_FEE}% покрыта), РАССМОТРИ перенос Stop Loss в БЕЗУБЫТОК.
-    2.  **CLOSE_PARTIAL**: Если PnL > {min_profit_partial:.2f}%, но импульс затухает -> ЗАКРОЙ 50% позиции.
+    2.  **CLOSE_PARTIAL**: Используй ТОЛЬКО для фиксации **существенной** прибыли. Не фиксируй "копейки" (Net PnL < {MIN_PARTIAL_CLOSE_PNL}%).
     3.  **CLOSE**: Если тренд сломан ИЛИ достигнут Take Profit.
     4.  **HOLD**: Если тренд сохраняется.
 

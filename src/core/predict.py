@@ -216,25 +216,29 @@ def process_analysis(analysis):
         }
 
     info(f"🧠 Генерация прогноза для {analysis['symbol']}...")
-    # Retry logic for API/Parsing errors
+    # Retry logic for API/Parsing errors AND Logic Validation
     max_retries = 1
-    prediction = None
+    current_prompt = analysis["prompt"]
+    final_prediction = None
 
     for attempt in range(max_retries + 1):
-        response = get_prediction(analysis["prompt"])
+        if attempt > 0:
+            info(f"🔄 Повторная попытка (Logic/API Retry) {attempt}/{max_retries}...")
+
+        response = get_prediction(current_prompt)
 
         # Логируем очищенный ответ от DeepSeek (без markdown)
         if isinstance(response, str):
             import re
             cleaned = re.sub(r'```json\s*', '', response)
             cleaned = re.sub(r'```', '', cleaned)
-            info(f"📨 Ответ DeepSeek ({analysis['symbol']}, Попытка {attempt+1}/{max_retries+1}): {cleaned}") # Truncate log
+            info(f"📨 Ответ DeepSeek ({analysis['symbol']}, Попытка {attempt+1}): {cleaned}")
         else:
-            info(f"📨 Ответ DeepSeek ({analysis['symbol']}, Попытка {attempt+1}/{max_retries+1}): (dict) {response}")
+            info(f"📨 Ответ DeepSeek ({analysis['symbol']}, Попытка {attempt+1}): (dict) {response}")
 
         prediction = parse_response(response)
 
-        # Check if parsing failed (it returns a default dict with specific reason)
+        # 1. Check Technical Errors (API/Parsing)
         if prediction["reason"] == "Ошибка парсинга ответа DeepSeek" or prediction["reason"].startswith("Ошибка API"):
             if attempt < max_retries:
                 warning(f"⚠️ {analysis['symbol']}: Ошибка парсинга/API. Повторная попытка через 1 сек...")
@@ -242,23 +246,49 @@ def process_analysis(analysis):
                 continue
             else:
                 error(f"❌ {analysis['symbol']}: Не удалось получить корректный ответ после {max_retries+1} попыток.")
-        else:
-            # Success
-            break
+                final_prediction = prediction
+                break
 
+        # 2. Check Logic/Strategy Validation (e.g. Risk/Reward)
+        validated_prediction = validate_prediction(prediction, analysis["current_price"])
 
+        # If Logic Rejected (Action changed to HOLD from BUY/SELL by validator)
+        if prediction["action"] in ["buy", "sell"] and validated_prediction["action"] == "hold":
+            # Check if it was an auto-fix rejection
+            if "[AUTO-FIX" in validated_prediction["reason"]:
+                reject_reason = validated_prediction["reason"].split("[AUTO-FIX:")[1].strip("]")
+                warning(f"⚠️ {analysis['symbol']}: Сигнал отклонен валидатором: {reject_reason}")
 
-    # Валидация прогноза (Risk/Reward)
-    validated_prediction = validate_prediction(prediction, analysis["current_price"])
+                if attempt < max_retries:
+                    # FEEDBACK LOOP: Update prompt and retry
+                    feedback = f"\n\n> [!IMPORTANT]\n> PREVIOUS RESPONSE REJECTED. REASON: {reject_reason}.\n> Please adjust your params (SL/TP) or finding to fix this. If risk is too high, just HOLD."
+                    current_prompt += feedback
+                    info(f"🔙 Добавляем фидбек в промпт и повторяем...")
+                    time.sleep(1)
+                    continue
+                else:
+                    info(f"🛑 Лимит попыток исчерпан. Оставляем HOLD.")
+
+        # If we got here, result is accepted (or it was already hold, or retries exhausted)
+        final_prediction = validated_prediction
+        break
+
+    # Fallback if loop finishes without assignment (should not happen but safety first)
+    if not final_prediction:
+         final_prediction = {
+             "action": "hold",
+             "confidence": 0.0,
+             "reason": "Unknown Error (Loop Finished)"
+         }
 
     return {
         **analysis,
-        "action": validated_prediction["action"],
-        "confidence": validated_prediction["confidence"],
-        "percentage": validated_prediction.get("percentage", 1.0),
-        "stop_loss": validated_prediction.get("stop_loss"),
-        "take_profit": validated_prediction.get("take_profit"),
-        "reason": validated_prediction["reason"]
+        "action": final_prediction["action"],
+        "confidence": final_prediction["confidence"],
+        "percentage": final_prediction.get("percentage", 1.0),
+        "stop_loss": final_prediction.get("stop_loss"),
+        "take_profit": final_prediction.get("take_profit"),
+        "reason": final_prediction["reason"]
     }
 
 def validate_prediction(prediction, current_price):
