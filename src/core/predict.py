@@ -1,20 +1,20 @@
 import json
 import requests
 import time
-from src.config import DEEPSEEK_API_KEY
+from src.config import AI_API_KEY, AI_BASE_URL, AI_MODEL
 from src.utils.logger import info, error, warning
 
 def get_prediction(prompt):
-    """Отправляет промпт в DeepSeek и получает ответ"""
-    url = "https://api.deepseek.com/v1/chat/completions"
+    """Отправляет промпт в AI (DeepSeek/SiliconFlow) и получает ответ"""
+    url = AI_BASE_URL
     headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Authorization": f"Bearer {AI_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "deepseek-chat",
+        "model": AI_MODEL,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 256,
+        "max_tokens": 512, # Increased for safety
         "temperature": 0.3
     }
 

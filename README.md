@@ -136,6 +136,8 @@
 
     # DeepSeek API (для мозга бота)
     DEEPSEEK_API_KEY="ваш_ключ_deepseek"
+    # ИЛИ SiliconFlow API (альтернативный провайдер)
+    SILICONFLOW_API_KEY="ваш_ключ_siliconflow"
 
     # Режим работы
     # "demo" = VST Futures (Виртуальные деньги BingX)
@@ -203,6 +205,25 @@
 | `LEVERAGE` | Int | Кредитное плечо. | `2` - `5` (Не ставьте выше 10!) |
 | `DEFAULT_HOLD_TIME_MINUTES` | Int | Через сколько минут бот принудительно закроет позицию, если не сработал SL/TP. | `60` - `120` |
 | `DEFAULT_PLOTTER_RANGE` | String | Таймфрейм для генерации графиков по умолчанию (например, "2H", "1D"). | `2H` или `4H` |
+
+### 🤖 Настройка AI Провайдера
+
+Вы можете выбрать источник API для DeepSeek: официальный API или SiliconFlow.
+
+```json
+  "AI_SETTINGS": {
+    "provider": "deepseek_official",
+    "model": "deepseek-chat",
+    "base_url": null
+  }
+```
+
+*   **provider**: `"deepseek_official"` (по умолчанию) или `"siliconflow"`.
+*   **model**: Имя модели (например, `"deepseek-chat"` или `"deepseek-ai/DeepSeek-V3"`).
+*   **base_url**: Опционально. URL для API запросов (если `null`, используется стандартный URL провайдера).
+
+> [!TIP]
+> Для использования SiliconFlow добавьте `SILICONFLOW_API_KEY` в ваш `.env` файл.
 
 ---
 

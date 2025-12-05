@@ -9,7 +9,8 @@
     ],
     "bingx": [
       "BTCUSDT",
-      "ETHUSDT"
+      "ETHUSDT",
+      "XRPUSDT"
     ]
   },
   "EXCHANGE_FEES": {
@@ -123,5 +124,10 @@
     "enabled": true,
     "recent_candles": 30,
     "history_step": 10
+  },
+  "AI_SETTINGS": {
+    "provider": "deepseek_official",
+    "model": "deepseek-chat",
+    "base_url": null
   }
 }

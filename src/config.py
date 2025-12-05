@@ -147,8 +147,29 @@ AGGRESSIVE_MODE = BOT_CONFIG.get("AGGRESSIVE_MODE", False)
 NEWS_SETTINGS = BOT_CONFIG.get("NEWS_SETTINGS", {})
 SMART_SAMPLING = BOT_CONFIG.get("SMART_SAMPLING", {"enabled": True, "recent_candles": 30, "history_step": 10})
 
-# DeepSeek API (обязательно установите DEEPSEEK_API_KEY)
+# DeepSeek / AI API Settings
+AI_SETTINGS = BOT_CONFIG.get("AI_SETTINGS", {})
+AI_PROVIDER = AI_SETTINGS.get("provider", "deepseek_official")
+AI_MODEL = AI_SETTINGS.get("model", "deepseek-chat")
+
+# Load API Keys
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
+
+# Determine API Key and Base URL based on provider
+if AI_PROVIDER == "siliconflow":
+    AI_API_KEY = SILICONFLOW_API_KEY
+    # Default SiliconFlow OpenAI-compatible endpoint
+    AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://api.siliconflow.cn/v1/chat/completions"
+    print(f"🤖 AI Provider: SiliconFlow ({AI_MODEL})")
+else:
+    # Default to DeepSeek Official
+    AI_API_KEY = DEEPSEEK_API_KEY
+    AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://api.deepseek.com/v1/chat/completions"
+    print(f"🤖 AI Provider: DeepSeek Official ({AI_MODEL})")
+
+if not AI_API_KEY:
+    print(f"⚠️ WARNING: API Key for provider '{AI_PROVIDER}' is missing!")
 
 # API Endpoint для демо и реального режима
 # ВАЖНО: Демо-счет - это НЕ отдельный тип аккаунта!
