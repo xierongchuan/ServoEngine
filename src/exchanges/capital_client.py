@@ -1,7 +1,7 @@
 import requests
 import time
 import json
-from src.config import USERNAME, PASSWORD, CAP_API_KEY, API_BASE, MODE, SYMBOLS, DEFAULT_HOLD_TIME_MINUTES
+from src.config import USERNAME, PASSWORD, CAP_API_KEY, API_BASE, MODE, SYMBOLS
 from src.utils.logger import info, error, warning
 from .exchange_client import ExchangeClient
 

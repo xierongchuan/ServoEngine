@@ -48,7 +48,7 @@ def load_bot_config():
         "TAKE_PROFIT_PERCENT": 1.5,
         "STOP_LOSS_PERCENT": 1.5,
         "MIN_CONFIDENCE_THRESHOLD": 0.7,
-        "DEFAULT_HOLD_TIME_MINUTES": 60,
+
         "AI_THRESHOLDS": {
             "RSI_OVERSOLD": 30,
             "RSI_OVERBOUGHT": 70,
@@ -59,7 +59,7 @@ def load_bot_config():
             "RSI_PERIOD": 14,
             "RSI_NEUTRAL_MIN": 45,
             "RSI_NEUTRAL_MAX": 55,
-            "HOLD_TIMES": [10, 15, 30, 45, 60, 90, 120]
+
         },
         "CHART_RANGES": {
             "1D": {"days": 1, "candles": 288},
@@ -113,7 +113,7 @@ LEVERAGE = TRADING_SETTINGS.get("LEVERAGE", 5)
 TAKE_PROFIT_PERCENT = TRADING_SETTINGS.get("TAKE_PROFIT_PERCENT", 1.5)
 STOP_LOSS_PERCENT = BOT_CONFIG.get("STOP_LOSS_PERCENT", 1.5)
 MIN_CONFIDENCE_THRESHOLD = BOT_CONFIG.get("MIN_CONFIDENCE_THRESHOLD", 0.7)
-DEFAULT_HOLD_TIME_MINUTES = BOT_CONFIG.get("DEFAULT_HOLD_TIME_MINUTES", 60)
+
 MIN_RISK_REWARD_RATIO = BOT_CONFIG.get("MIN_RISK_REWARD_RATIO", 1.5)
 
 # Пороговые значения для AI-анализа

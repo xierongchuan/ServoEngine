@@ -293,7 +293,6 @@ class BingXClient(ExchangeClient):
                     "dealId": pos.get("positionId", ""), # Use positionId as dealId
                     "workingOrderId": pos.get("positionId", ""),
                     "created": time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime()), # BingX might not give creation time easily in this endpoint
-                    "hold_minutes": 60, # Default, as we don't store this in BingX
                     "size": abs(size),
                     "pnl": float(pos.get("unrealizedProfit", 0))
                 })

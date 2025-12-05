@@ -22,7 +22,6 @@
   "TAKE_PROFIT_PERCENT": 1.5,
   "STOP_LOSS_PERCENT": 1.5,
   "MIN_CONFIDENCE_THRESHOLD": 0.7,
-  "DEFAULT_HOLD_TIME_MINUTES": 60,
   "MIN_RISK_REWARD_RATIO": 1.5,
   "AI_THRESHOLDS": {
     "RSI_OVERSOLD": 30,
@@ -33,16 +32,7 @@
     "SMA_PERIOD": 20,
     "RSI_PERIOD": 14,
     "RSI_NEUTRAL_MIN": 45,
-    "RSI_NEUTRAL_MAX": 55,
-    "HOLD_TIMES": [
-      10,
-      15,
-      30,
-      45,
-      60,
-      90,
-      120
-    ]
+    "RSI_NEUTRAL_MAX": 55
   },
   "CHART_RANGES": {
     "1D": {

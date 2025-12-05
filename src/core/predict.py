@@ -35,11 +35,9 @@ def get_prediction(prompt):
     except Exception as e:
         error(f"❌ Ошибка DeepSeek API: {str(e)}")
         # Возвращаем dict вместо строки JSON
-        from src.config import DEFAULT_HOLD_TIME_MINUTES
         return {
             "action": "hold",
             "confidence": 0.0,
-            "hold_minutes": DEFAULT_HOLD_TIME_MINUTES,
             "reason": f"Ошибка API: {str(e)}"
         }
 
@@ -88,10 +86,7 @@ def parse_response(response):
         # Нормализация confidence
         data["confidence"] = max(0.0, min(1.0, float(data["confidence"])))
 
-        # Добавляем время удержания по умолчанию
-        if "hold_minutes" not in data:
-            from src.config import DEFAULT_HOLD_TIME_MINUTES
-            data["hold_minutes"] = DEFAULT_HOLD_TIME_MINUTES
+
 
         # Добавляем причину по умолчанию
         # Добавляем процент закрытия (для close_partial)
@@ -122,11 +117,9 @@ def parse_response(response):
         return data
     except Exception as e:
         error(f"❌ Ошибка парсинга ответа: {str(e)}")
-        from src.config import DEFAULT_HOLD_TIME_MINUTES
         return {
             "action": "hold",
             "confidence": 0.0,
-            "hold_minutes": DEFAULT_HOLD_TIME_MINUTES,
             "reason": "Ошибка парсинга ответа DeepSeek"
         }
 
@@ -182,15 +175,12 @@ def should_call_ai(analysis):
 
 def process_analysis(analysis):
     """Обрабатывает один анализ: проверяет условия, делает запрос к ИИ (с ретраями) и возвращает прогноз"""
-    from src.config import DEFAULT_HOLD_TIME_MINUTES
-
     # Технический пре-фильтр
     if not should_call_ai(analysis):
         return {
             **analysis,
             "action": "hold",
             "confidence": 0.0,
-            "hold_minutes": DEFAULT_HOLD_TIME_MINUTES,
             "reason": f"Auto-HOLD: Нейтральный рынок (RSI={analysis['rsi']})"
         }
 
@@ -237,7 +227,6 @@ def process_analysis(analysis):
         "percentage": validated_prediction.get("percentage", 1.0),
         "stop_loss": validated_prediction.get("stop_loss"),
         "take_profit": validated_prediction.get("take_profit"),
-        "hold_minutes": validated_prediction["hold_minutes"],
         "reason": validated_prediction["reason"]
     }
 

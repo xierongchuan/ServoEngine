@@ -305,7 +305,7 @@ def analyze_symbol(symbol, position=None):
         "percentage": 0.1-1.0 (Только для close_partial, например 0.5 для 50%),
         "stop_loss": float (Цена стоп-лосса, ОБЯЗАТЕЛЬНО для buy/sell/hold),
         "take_profit": float (Цена тейк-профита, ОБЯЗАТЕЛЬНО для buy/sell/hold),
-        "hold_minutes": {AI_THRESHOLDS['HOLD_TIMES'][-1]},
+
         "reason": "Краткое объяснение: Позиция, Тренд, RSI, Новости (если есть)."
     }}
     """
