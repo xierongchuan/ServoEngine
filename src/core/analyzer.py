@@ -190,25 +190,42 @@ def analyze_symbol(symbol, position=None):
         - Размер: {position['size']}
         """
 
-    # Определяем стратегию в зависимости от настроек новостей
-    from src.config import TRADING_FEE
-    min_profit_breakeven = max(0.2, TRADING_FEE * 2.5) # Minimum 0.2% or 2.5x fee to be safe
+    # Определяем стратегию в зависимости от настроек новостей и агрессивности
+    from src.config import TRADING_FEE, AGGRESSIVE_MODE
+    min_profit_breakeven = max(0.2, TRADING_FEE * 2.5)
     min_profit_partial = max(0.5, TRADING_FEE * 4.0)
+
+    # Настройки порогов RSI в зависимости от режима
+    if AGGRESSIVE_MODE:
+        rsi_buy_cond = 60
+        rsi_buy_forbidden = 80
+        rsi_sell_cond = 40
+        rsi_sell_forbidden = 20
+        strategy_title = "АГРЕССИВНАЯ СТРАТЕГИЯ (AGGRESSIVE TREND FOLLOWING)"
+        entry_desc = "Ищи возможности для входа по тренду. Допускаются входы при более высоком RSI, если тренд сильный."
+    else:
+        # В обычном режиме берем значения из конфигурации
+        rsi_buy_cond = AI_THRESHOLDS['RSI_NEUTRAL_MAX']
+        rsi_buy_forbidden = AI_THRESHOLDS['RSI_OVERBOUGHT']
+        rsi_sell_cond = AI_THRESHOLDS['RSI_NEUTRAL_MIN']
+        rsi_sell_forbidden = AI_THRESHOLDS['RSI_OVERSOLD']
+        strategy_title = "КОНСЕРВАТИВНАЯ СТРАТЕГИЯ (STRICT TREND FOLLOWING)"
+        entry_desc = "Входим ТОЛЬКО по тренду на глубоких откатах. Контртренд ЗАПРЕЩЕН."
 
     if ENABLE_NEWS:
         strategy_text = f"""
     **СТРАТЕГИЯ УПРАВЛЕНИЯ ПОЗИЦИЕЙ (ПРИОРИТЕТ №1):**
-    1.  **SECURE PROFIT**: Если PnL > {min_profit_breakeven:.2f}% (комиссия {TRADING_FEE}% покрыта), РАССМОТРИ перенос Stop Loss в БЕЗУБЫТОК (на цену входа).
+    1.  **SECURE PROFIT**: Если PnL > {min_profit_breakeven:.2f}% (комиссия {TRADING_FEE}% покрыта), РАССМОТРИ перенос Stop Loss в БЕЗУБЫТОК.
     2.  **CLOSE_PARTIAL**: Если PnL > {min_profit_partial:.2f}%, но импульс затухает -> ЗАКРОЙ 50% позиции.
     3.  **CLOSE**: Если тренд развернулся против позиции ИЛИ достигнут Take Profit.
     4.  **HOLD**: Если тренд сильный и PnL растет.
 
-    **СТРАТЕГИЯ ВХОДА (ТОЛЬКО ЕСЛИ НЕТ ПОЗИЦИИ):**
-    1.  **BUY**: (Позитивные новости + RSI < 60) **И** (Тренд UP + Откат/Консолидация). НЕ ПОКУПАЙ НА ХАЯХ (RSI > 70)!
-    2.  **SELL**: (Негативные новости + RSI > 40) **И** (Тренд DOWN + Отскок/Коррекция). НЕ ПРОДАВАЙ НА ДНЕ (RSI < 30)!
-    3.  **HOLD**: Если нет четкого сигнала или противоречивые данные.
+    **СТРАТЕГИЯ ВХОДА ({strategy_title}):**
+    *{entry_desc}*
+    1.  **BUY**: (Позитивные новости + RSI < {rsi_buy_cond}) **И** (Тренд UP + Откат). НЕ ПОКУПАЙ НА ХАЯХ (RSI > {rsi_buy_forbidden})!
+    2.  **SELL**: (Негативные новости + RSI > {rsi_sell_cond}) **И** (Тренд DOWN + Отскок). НЕ ПРОДАВАЙ НА ДНЕ (RSI < {rsi_sell_forbidden})!
+    3.  **HOLD**: Если нет четкого сигнала.
         """
-
         news_section = f"""
     ### НОВОСТНОЙ ФОН:
     {news_text.strip()}
@@ -216,25 +233,26 @@ def analyze_symbol(symbol, position=None):
     else:
         strategy_text = f"""
     **СТРАТЕГИЯ УПРАВЛЕНИЯ ПОЗИЦИЕЙ (ПРИОРИТЕТ №1):**
-    1.  **SECURE PROFIT**: Если PnL > {min_profit_breakeven:.2f}% (комиссия {TRADING_FEE}% покрыта), РАССМОТРИ перенос Stop Loss в БЕЗУБЫТОК (на цену входа).
-    2.  **CLOSE_PARTIAL**: Если PnL > {min_profit_partial:.2f}%, но импульс затухает (RSI разворачивается) -> ЗАКРОЙ 50% позиции.
-    3.  **CLOSE**: Если тренд сломан (Цена пересекла SMA обратно) ИЛИ достигнут Take Profit.
+    1.  **SECURE PROFIT**: Если PnL > {min_profit_breakeven:.2f}% (комиссия {TRADING_FEE}% покрыта), РАССМОТРИ перенос Stop Loss в БЕЗУБЫТОК.
+    2.  **CLOSE_PARTIAL**: Если PnL > {min_profit_partial:.2f}%, но импульс затухает -> ЗАКРОЙ 50% позиции.
+    3.  **CLOSE**: Если тренд сломан ИЛИ достигнут Take Profit.
     4.  **HOLD**: Если тренд сохраняется.
 
-    **СТРАТЕГИЯ ВХОДА (ЧИСТАЯ ТЕХНИКА - TREND FOLLOWING):**
-    *Входим ТОЛЬКО по тренду на откатах. Контртренд ЗАПРЕЩЕН.*
+    **СТРАТЕГИЯ ВХОДА ({strategy_title}):**
+    *{entry_desc}*
     1.  **BUY**:
         - Тренд: UP (Цена > SMA)
-        - Условие: RSI < 55 (Откат или не перекуплен)
-        - ЗАПРЕТ: Не покупай, если RSI > 70 (Перекупленность).
+        - Условие: RSI < {rsi_buy_cond} (Откат или не перекуплен)
+        - ЗАПРЕТ: Не покупай, если RSI > {rsi_buy_forbidden} (Перекупленность).
     2.  **SELL**:
         - Тренд: DOWN (Цена < SMA)
-        - Условие: RSI > 45 (Коррекция или не перепродан)
-        - ЗАПРЕТ: Не продавай, если RSI < 30 (Перепроданность).
-    3.  **HOLD**: Если условия входа не идеальны. Лучше пропустить сделку, чем потерять деньги.
+        - Условие: RSI > {rsi_sell_cond} (Коррекция или не перепродан)
+        - ЗАПРЕТ: Не продавай, если RSI < {rsi_sell_forbidden} (Перепроданность).
+    3.  **HOLD**: Если условия входа не идеальны.
         """
         news_section = ""
-    from src.config import AI_THRESHOLDS, ENABLE_ADVANCED_ANALYSIS
+
+    from src.config import ENABLE_ADVANCED_ANALYSIS
 
     # Calculate advanced metrics if enabled
     advanced_analysis_text = ""
@@ -259,17 +277,6 @@ def analyze_symbol(symbol, position=None):
     4. Соблюдай Risk/Reward Ratio минимум 1:1.5. Тейк-профит должен быть БОЛЬШЕ, чем Стоп-лосс (в % от цены входа). Не ставь огромные стопы ради безопасности.
         """
 
-    # Aggressive Mode Context
-    from src.config import AGGRESSIVE_MODE
-    aggressive_text = ""
-    if AGGRESSIVE_MODE:
-        aggressive_text = """
-    ⚠️ ВКЛЮЧЕН АГРЕССИВНЫЙ РЕЖИМ:
-    - Ищи возможности для входа по тренду (Trend Continuation).
-    - Если RSI около 50, но цена отскакивает от SMA по тренду -> ЭТО СИГНАЛ.
-    - Не бойся входить на откатах, если структура рынка сохраняется.
-        """
-
     # Формируем промпт
     prompt = f"""
     Ты — профессиональный алгоритмический трейдер. Твоя задача — принять торговое решение для {symbol} на основе предоставленных данных.
@@ -283,7 +290,6 @@ def analyze_symbol(symbol, position=None):
     - RSI({AI_THRESHOLDS['RSI_PERIOD']}): {rsi:.2f}
     - ТЕКУЩИЙ ТРЕНД: {trend} (Цена {'выше' if trend == 'UP' else 'ниже'} SMA)
     {advanced_analysis_text}
-    {aggressive_text}
     {news_section}
     ### ТОРГОВАЯ СТРАТЕГИЯ:
     {strategy_text}
