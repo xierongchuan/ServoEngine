@@ -118,5 +118,10 @@
     "max_news_items": 15,
     "news_timeout_seconds": 30,
     "extract_full_content": true
+  },
+  "SMART_SAMPLING": {
+    "enabled": true,
+    "recent_candles": 30,
+    "history_step": 10
   }
 }

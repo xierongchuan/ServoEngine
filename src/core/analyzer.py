@@ -286,14 +286,55 @@ def analyze_symbol(symbol, position=None):
     history_lines = ["Timestamp | Open | High | Low | Close | Volume"]
 
     # Get context limit from config
-    from src.config import CHART_RANGES, DEFAULT_CHART_RANGE
+    from src.config import CHART_RANGES, DEFAULT_CHART_RANGE, SMART_SAMPLING
     context_limit = 500 # Default fallback
     if DEFAULT_CHART_RANGE in CHART_RANGES:
         context_limit = CHART_RANGES[DEFAULT_CHART_RANGE].get("ai_context_candles", 500)
 
-    recent_prices = prices[-context_limit:]
+    # Smart Sampling Logic
+    if SMART_SAMPLING.get("enabled", True):
+        recent_count = SMART_SAMPLING.get("recent_candles", 30)
+        step = SMART_SAMPLING.get("history_step", 10)
 
-    for p in recent_prices:
+        # 1. Get the full context range first
+        full_context_prices = prices[-context_limit:]
+
+        # 2. Split into recent (high res) and historical (low res)
+        if len(full_context_prices) > recent_count:
+            recent_part = full_context_prices[-recent_count:]
+            history_part = full_context_prices[:-recent_count]
+
+            # Sample history part (Aggregation)
+            sampled_history = []
+            for i in range(0, len(history_part), step):
+                chunk = history_part[i:i+step]
+                if not chunk:
+                    continue
+
+                # Aggregate
+                agg_open = get_price_value(chunk[0].get("openPrice", 0))
+                agg_close = get_price_value(chunk[-1].get("closePrice", 0))
+                agg_high = max(get_price_value(c.get("highPrice", 0)) for c in chunk)
+                agg_low = min(get_price_value(c.get("lowPrice", 0)) for c in chunk)
+                agg_vol = sum(float(c.get("volume", 0)) for c in chunk)
+
+                sampled_history.append({
+                    "snapshotTimeUTC": chunk[0].get("snapshotTimeUTC"),
+                    "openPrice": agg_open,
+                    "highPrice": agg_high,
+                    "lowPrice": agg_low,
+                    "closePrice": agg_close,
+                    "volume": agg_vol
+                })
+
+            # Combine: Oldest -> Newest
+            final_prices = sampled_history + recent_part
+        else:
+            final_prices = full_context_prices
+    else:
+        final_prices = prices[-context_limit:]
+
+    for p in final_prices:
         ts = p.get("snapshotTimeUTC", "").replace("T", " ")
         o = get_price_value(p.get("openPrice", 0))
         h = get_price_value(p.get("highPrice", 0))
@@ -316,7 +357,7 @@ def analyze_symbol(symbol, position=None):
     ### ТЕКУЩАЯ ПОЗИЦИЯ:
     {position_text}
 
-    ### ИСТОРИЧЕСКИЕ ДАННЫЕ (CANDLES - Last {len(recent_prices)}):
+    ### ИСТОРИЧЕСКИЕ ДАННЫЕ (CANDLES - Last {len(final_prices)} sampled from {context_limit}):
     {price_history_text}
 
     ### РЫНОЧНЫЕ ДАННЫЕ ({current_interval} таймфрейм):
