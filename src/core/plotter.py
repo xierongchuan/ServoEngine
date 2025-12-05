@@ -229,26 +229,11 @@ def plot_symbol(symbol, time_range=None):
         info(f"⚠️ Нет данных для {symbol} за период {time_range}")
         return
 
-    # Determine chart width based on duration
-    # > 12h: 48 (Original)
-    # > 4h and <= 12h: 36
-    # <= 4h: 24
-
-    chart_width = 48 # Default for > 12h
-
-    # Calculate total minutes for comparison
-    total_minutes = 0
-    if "days" in range_config:
-        total_minutes = range_config["days"] * 24 * 60
-    elif "hours" in range_config:
-        total_minutes = range_config["hours"] * 60
-    elif "minutes" in range_config:
-        total_minutes = range_config["minutes"]
-
-    if total_minutes <= 4 * 60: # <= 4h
-        chart_width = 24
-    elif total_minutes <= 12 * 60: # <= 12h (and > 4h)
-        chart_width = 36
+    # Determine chart width based on number of candles
+    # We want roughly 0.15 inches per candle, but within reasonable bounds
+    # This prevents "fat" candles on short ranges and "squashed" candles on long ranges
+    num_candles = len(dates)
+    chart_width = max(10, min(30, num_candles * 0.15))
 
 
 
@@ -288,29 +273,29 @@ def plot_symbol(symbol, time_range=None):
     # Цвета свечей
     col_up = '#26a69a'   # Green
     col_down = '#ef5350' # Red
-    # Determine width based on interval
-    interval = range_config.get("interval", "1m")
-
-    # Width mapping (approximate days per candle)
-    # 1m = 1/(24*60) = 0.00069
-    # 5m = 0.0035
-    # 15m = 0.01
-    # 1h = 0.04
-    # 4h = 0.16
-    # 1d = 0.8
-
-    width_map = {
-        "1m": 0.0006,
-        "5m": 0.0025,
-        "15m": 0.007,
-        "30m": 0.015,
-        "1h": 0.03,
-        "4h": 0.12,
-        "1d": 0.7,
-        "1w": 5.0
-    }
-
-    width = width_map.get(interval, 0.0025)
+    # Determine width dynamically based on minimum time difference
+    # This ensures candles never overlap and always have appropriate spacing
+    if len(dates) > 1:
+        # Calculate differences between consecutive dates in days (matplotlib format)
+        # dates contains datetime objects, so diff is timedelta
+        diffs = [(dates[i+1] - dates[i]).total_seconds() / (24*3600) for i in range(len(dates)-1)]
+        min_diff = min(diffs)
+        # Use 80% of the minimum gap
+        width = min_diff * 0.8
+    else:
+        # Fallback if only 1 candle
+        interval = range_config.get("interval", "1m")
+        width_map = {
+            "1m": 0.0006,
+            "5m": 0.0025,
+            "15m": 0.007,
+            "30m": 0.015,
+            "1h": 0.03,
+            "4h": 0.12,
+            "1d": 0.7,
+            "1w": 5.0
+        }
+        width = width_map.get(interval, 0.0025)
 
     # Рисуем растущие свечи
     if up_dates:

@@ -36,6 +36,18 @@
     "RSI_NEUTRAL_MAX": 55
   },
   "CHART_RANGES": {
+    "6h": {
+      "hours": 6,
+      "candles": 360,
+      "interval": "1m",
+      "ai_context_candles": 360
+    },
+    "12h": {
+      "hours": 12,
+      "candles": 720,
+      "interval": "1m",
+      "ai_context_candles": 500
+    },
     "1D": {
       "days": 1,
       "candles": 1440,
@@ -101,7 +113,7 @@
       "interval": "1h"
     }
   },
-  "DEFAULT_CHART_RANGE": "1D",
+  "DEFAULT_CHART_RANGE": "12h",
   "DEFAULT_PLOTTER_RANGE": "2h",
   "CLEANUP_SETTINGS": {
     "cleanup_old_charts": true,
