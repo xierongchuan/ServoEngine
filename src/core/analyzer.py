@@ -277,6 +277,38 @@ def analyze_symbol(symbol, position=None):
     4. Соблюдай Risk/Reward Ratio минимум 1:1.5. Тейк-профит должен быть БОЛЬШЕ, чем Стоп-лосс (в % от цены входа). Не ставь огромные стопы ради безопасности.
         """
 
+    # Формируем историю свечей для контекста ИИ
+    def get_price_value(price_item):
+        if isinstance(price_item, dict):
+            return float(price_item["bid"])
+        return float(price_item)
+
+    history_lines = ["Timestamp | Open | High | Low | Close | Volume"]
+
+    # Get context limit from config
+    from src.config import CHART_RANGES, DEFAULT_CHART_RANGE
+    context_limit = 500 # Default fallback
+    if DEFAULT_CHART_RANGE in CHART_RANGES:
+        context_limit = CHART_RANGES[DEFAULT_CHART_RANGE].get("ai_context_candles", 500)
+
+    recent_prices = prices[-context_limit:]
+
+    for p in recent_prices:
+        ts = p.get("snapshotTimeUTC", "").replace("T", " ")
+        o = get_price_value(p.get("openPrice", 0))
+        h = get_price_value(p.get("highPrice", 0))
+        l = get_price_value(p.get("lowPrice", 0))
+        c = get_price_value(p.get("closePrice", 0))
+        v = p.get("volume", 0)
+        history_lines.append(f"{ts} | {o:.5f} | {h:.5f} | {l:.5f} | {c:.5f} | {v:.2f}")
+
+    price_history_text = "\n".join(history_lines)
+
+    # Get current interval
+    current_interval = "5m" # Default
+    if DEFAULT_CHART_RANGE in CHART_RANGES:
+        current_interval = CHART_RANGES[DEFAULT_CHART_RANGE].get("interval", "5m")
+
     # Формируем промпт
     prompt = f"""
     Ты — профессиональный алгоритмический трейдер. Твоя задача — принять торговое решение для {symbol} на основе предоставленных данных.
@@ -284,7 +316,10 @@ def analyze_symbol(symbol, position=None):
     ### ТЕКУЩАЯ ПОЗИЦИЯ:
     {position_text}
 
-    ### РЫНОЧНЫЕ ДАННЫЕ (5m таймфрейм):
+    ### ИСТОРИЧЕСКИЕ ДАННЫЕ (CANDLES - Last {len(recent_prices)}):
+    {price_history_text}
+
+    ### РЫНОЧНЫЕ ДАННЫЕ ({current_interval} таймфрейм):
     - Цена: {current_price:.5f}
     - SMA({AI_THRESHOLDS['SMA_PERIOD']}): {sma:.5f}
     - RSI({AI_THRESHOLDS['RSI_PERIOD']}): {rsi:.2f}

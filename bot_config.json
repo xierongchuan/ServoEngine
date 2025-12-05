@@ -38,17 +38,20 @@
     "1D": {
       "days": 1,
       "candles": 1440,
-      "interval": "1m"
+      "interval": "1m",
+      "ai_context_candles": 500
     },
     "3D": {
       "days": 3,
       "candles": 864,
-      "interval": "5m"
+      "interval": "5m",
+      "ai_context_candles": 500
     },
     "1W": {
       "days": 7,
       "candles": 672,
-      "interval": "15h"
+      "interval": "15h",
+      "ai_context_candles": 500
     }
   },
   "PLOTTER_RANGES": {
