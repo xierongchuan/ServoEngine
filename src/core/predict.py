@@ -250,12 +250,10 @@ def process_analysis(analysis):
                 break
 
         # 2. Check Logic/Strategy Validation (e.g. Risk/Reward)
-        validated_prediction = validate_prediction(prediction, analysis["current_price"])
+        validated_prediction = validate_prediction(prediction, analysis["current_price"], analysis.get("has_position", False))
 
-        # If Logic Rejected (Action changed to HOLD from BUY/SELL by validator)
-        if prediction["action"] in ["buy", "sell"] and validated_prediction["action"] == "hold":
-            # Check if it was an auto-fix rejection
-            if "[AUTO-FIX" in validated_prediction["reason"]:
+        # Check if it was an auto-fix rejection (detected by reason tag)
+        if "[AUTO-FIX" in validated_prediction["reason"]:
                 reject_reason = validated_prediction["reason"].split("[AUTO-FIX:")[1].strip("]")
                 warning(f"⚠️ {analysis['symbol']}: Сигнал отклонен валидатором: {reject_reason}")
 
@@ -291,7 +289,7 @@ def process_analysis(analysis):
         "reason": final_prediction["reason"]
     }
 
-def validate_prediction(prediction, current_price):
+def validate_prediction(prediction, current_price, has_position=False):
     """
     Валидирует прогноз ИИ, проверяя Risk/Reward Ratio.
     Если R/R слишком низкий, меняет действие на HOLD или понижает уверенность.
@@ -307,9 +305,16 @@ def validate_prediction(prediction, current_price):
     stop_loss = prediction.get("stop_loss")
     take_profit = prediction.get("take_profit")
 
-    # Проверяем только для сигналов на вход (BUY/SELL)
+    # Проверяем также для HOLD, если есть SL/TP (обновление позиций)
+    # НО ТОЛЬКО если есть открытая позиция!
     if action not in ["buy", "sell"]:
-        return prediction
+        # Если это HOLD
+        if action == "hold" and has_position and (stop_loss or take_profit):
+             # Разрешаем валидацию для HOLD+Update
+             pass
+        else:
+             # Не валидируем обычный HOLD или HOLD без позиции
+             return prediction
 
     if not stop_loss or not take_profit:
         # Если нет SL/TP для входа - это ошибка, меняем на HOLD
@@ -335,6 +340,9 @@ def validate_prediction(prediction, current_price):
         prediction["action"] = "hold"
         prediction["reason"] += f" [AUTO-FIX: Low R/R ({rr_ratio:.2f})]"
         prediction["confidence"] = 0.0
+        # Rejected SL/TP -> Clear them to prevent execution of bad updates
+        prediction["stop_loss"] = None
+        prediction["take_profit"] = None
 
     return prediction
 
