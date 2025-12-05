@@ -147,8 +147,12 @@ def should_call_ai(analysis):
         info(f"⚠️ {symbol}: Есть открытая позиция -> Вызываем ИИ")
         return True
 
-    # 2. Фильтр по RSI (Нейтральная зона 40-60)
-    if 40 <= rsi <= 60:
+    # 2. Фильтр по RSI (Нейтральная зона)
+    from src.config import AI_THRESHOLDS
+    rsi_min = AI_THRESHOLDS.get("RSI_NEUTRAL_MIN", 45)
+    rsi_max = AI_THRESHOLDS.get("RSI_NEUTRAL_MAX", 55)
+
+    if rsi_min <= rsi <= rsi_max:
         from src.config import AGGRESSIVE_MODE
 
         # В Агрессивном режиме проверяем тренд
