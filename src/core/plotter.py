@@ -348,11 +348,14 @@ def plot_symbol(symbol, time_range=None):
     ax2.grid(alpha=0.2)
 
     # --- 3. График RSI ---
+    rsi_overbought = AI_THRESHOLDS.get("RSI_OVERBOUGHT", 70)
+    rsi_oversold = AI_THRESHOLDS.get("RSI_OVERSOLD", 30)
+
     ax3.plot(dates, rsi, label=f"RSI({rsi_period})", color="#2ca02c", linewidth=2)
-    ax3.axhline(y=70, color='r', linestyle=':', alpha=0.7, label="Перекупленность (70)")
-    ax3.axhline(y=30, color='g', linestyle=':', alpha=0.7, label="Перепроданность (30)")
-    ax3.fill_between(dates, 70, 100, alpha=0.1, color='red')
-    ax3.fill_between(dates, 0, 30, alpha=0.1, color='green')
+    ax3.axhline(y=rsi_overbought, color='r', linestyle=':', alpha=0.7, label=f"Перекупленность ({rsi_overbought})")
+    ax3.axhline(y=rsi_oversold, color='g', linestyle=':', alpha=0.7, label=f"Перепроданность ({rsi_oversold})")
+    ax3.fill_between(dates, rsi_overbought, 100, alpha=0.1, color='red')
+    ax3.fill_between(dates, 0, rsi_oversold, alpha=0.1, color='green')
 
     # Оформление RSI
     ax3.set_ylabel("RSI", fontsize=12, labelpad=10)

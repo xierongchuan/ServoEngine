@@ -205,12 +205,12 @@ def analyze_symbol(symbol, position=None):
         entry_desc = "Ищи возможности для входа по тренду. Допускаются входы при более высоком RSI, если тренд сильный."
     else:
         # В обычном режиме берем значения из конфигурации
-        rsi_buy_cond = AI_THRESHOLDS['RSI_NEUTRAL_MAX']
+        rsi_buy_cond = AI_THRESHOLDS.get('RSI_BUY_ENTRY_MAX', 65)
         rsi_buy_forbidden = AI_THRESHOLDS['RSI_OVERBOUGHT']
-        rsi_sell_cond = AI_THRESHOLDS['RSI_NEUTRAL_MIN']
+        rsi_sell_cond = AI_THRESHOLDS.get('RSI_SELL_ENTRY_MIN', 35)
         rsi_sell_forbidden = AI_THRESHOLDS['RSI_OVERSOLD']
-        strategy_title = "КОНСЕРВАТИВНАЯ СТРАТЕГИЯ (STRICT TREND FOLLOWING)"
-        entry_desc = "Входим ТОЛЬКО по тренду на глубоких откатах. Контртренд ЗАПРЕЩЕН."
+        strategy_title = "СБАЛАНСИРОВАННАЯ СТРАТЕГИЯ (TREND FOLLOWING)"
+        entry_desc = f"Ищем вход по тренду. Допускается вход при RSI до {rsi_buy_cond} (для BUY) и от {rsi_sell_cond} (для SELL), если есть импульс."
 
     if ENABLE_NEWS:
         strategy_text = f"""

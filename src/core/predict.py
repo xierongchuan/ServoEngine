@@ -180,12 +180,24 @@ def should_call_ai(analysis):
                 return True
 
         # Стандартная логика (или если тренд не подтвержден в агрессивном режиме)
-        # Дополнительная проверка: Цена прилипла к SMA? (в пределах 0.5%)
+        # Стандартная логика:
+        # Если RSI в нейтральной зоне (48-52), но есть четкий тренд -> Вызываем ИИ
+        # Тренд UP (Цена > SMA) -> Ищем вход BUY (RSI ~50 это ОК для продолжения)
+        if current_price > sma:
+             info(f"⚡ {symbol}: Нейтральный RSI({rsi}), но Тренд UP -> Вызываем ИИ (Поиск входа)")
+             return True
+
+        # Тренд DOWN (Цена < SMA) -> Ищем вход SELL
+        if current_price < sma:
+             info(f"⚡ {symbol}: Нейтральный RSI({rsi}), но Тренд DOWN -> Вызываем ИИ (Поиск входа)")
+             return True
+
+        # Если цена прямо на SMA (флэт) -> HOLD
         if abs(current_price - sma) / sma < 0.005:
             info(f"💤 {symbol}: Нейтральный рынок (RSI={rsi}, Цена~SMA) -> Пропуск ИИ (Auto-HOLD)")
             return False
 
-        info(f"💤 {symbol}: RSI в нейтральной зоне ({rsi}) -> Пропуск ИИ (Auto-HOLD)")
+        info(f"💤 {symbol}: RSI в нейтральной зоне ({rsi}) и нет тренда -> Пропуск ИИ (Auto-HOLD)")
         return False
 
     # Если условия выше не сработали (RSI < 40 или RSI > 60) -> Вызываем ИИ

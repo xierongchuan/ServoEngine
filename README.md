@@ -38,9 +38,10 @@
 
 ## 🚀 Ключевые возможности
 
-### � Интеллектуальный анализ
-*   **DeepSeek Integration**: Использует мощную языковую модель для анализа рыночного контекста, а не просто индикаторов.
+### 🧠 Интеллектуальный анализ
+*   **Dual AI Core**: Поддержка **DeepSeek Official API** и **SiliconFlow API** для максимальной надежности и гибкости.
 *   **Психология рынка**: Оценивает, кто контролирует рынок (быки/медведи), ищет признаки "ловушек" и панических продаж.
+*   **Smart Sampling**: Умное сжатие исторических данных (до 1000+ свечей) в компактный контекст для ИИ, сохраняя важные экстремумы и объемы.
 *   **Smart Skip**: Пропускает очевидно нейтральные рынки (флэт), экономя API токены и снижая шум.
 
 ### ⚡ Высокая производительность
@@ -58,8 +59,9 @@
 *   **Auto-Close**: Принудительное закрытие позиций по таймеру (по умолчанию 60 мин) для предотвращения "зависания" в сделках.
 
 ### 📈 Гибкие режимы торговли
-*   **Conservative Mode**: Вход только при сильных сигналах перекупленности/перепроданности (RSI < 30 / > 70).
-*   **Aggressive Mode**: Умный вход на откатах по тренду (Trend Pullbacks), даже если индикаторы в нейтральной зоне.
+*   **Balanced Strategy**: (По умолчанию) Вход по тренду с умеренными рисками. Допускает вход при RSI < 65 (Buy) и > 35 (Sell).
+*   **Aggressive Mode**: Агрессивный поиск разворотов и глубоких коррекций. Настраиваемые пороги RSI для входа.
+*   **News Filter**: (Опционально) Учитывает новостной фон при принятии решений (требует NewsAPI).
 
 ---
 
@@ -72,8 +74,10 @@
 
 ### 2. Технический пре-фильтр
 Перед вызовом дорогостоящего ИИ, бот проверяет базовые условия:
-*   **RSI Filter**: Если RSI между 40 и 60 (нейтральная зона) И нет явного тренда -> **SKIP** (Auto-HOLD).
-*   **Trend Filter**: Если включен `AGGRESSIVE_MODE`, бот проверяет положение цены относительно SMA.
+*   **Smart RSI Filter**:
+    *   Если RSI в нейтральной зоне (48-52) **И** нет явного тренда -> **SKIP** (Auto-HOLD).
+    *   Если есть четкий тренд (Цена > SMA), бот **ВЫЗЫВАЕТ ИИ** даже при нейтральном RSI, чтобы найти точку входа на продолжение движения.
+*   **Trend Confirmation**: Бот анализирует положение цены относительно SMA (20) для определения глобального направления.
 
 ### 3. AI Анализ (DeepSeek)
 Если пре-фильтр пройден, формируется сложный промпт для ИИ, включающий:
@@ -169,25 +173,42 @@
 ```json
 {
   "EXCHANGE_SYMBOLS": {
-    "bingx": ["BTC-USDT", "ETH-USDT", "SOL-USDT", "BNB-USDT", "XRP-USDT"]
+    "bingx": ["BTC-USDT", "ETH-USDT", "XRP-USDT"]
+  },
+  "AI_SETTINGS": {
+    "provider": "siliconflow",
+    "model": "deepseek-ai/DeepSeek-V3.2",
+    "base_url": "https://api.siliconflow.com/v1/chat/completions"
   },
   "ENABLE_PARALLEL_PROCESSING": true,
   "AGGRESSIVE_MODE": false,
-  "ENABLE_ADVANCED_ANALYSIS": true,
+  "AGGRESSIVE_SETTINGS": {
+    "RSI_BUY_COND": 60,
+    "RSI_SELL_COND": 40
+  },
+  "ENABLE_NEWS": false,
+  "SMART_SAMPLING": {
+    "enabled": true,
+    "recent_candles": 30,
+    "history_step": 10
+  },
   "MIN_RISK_REWARD_RATIO": 1.5,
   "POSITION_SIZE_PERCENT": 5.0,
   "LEVERAGE": 5,
-  "DEFAULT_HOLD_TIME_MINUTES": 60,
   "AI_THRESHOLDS": {
     "RSI_OVERSOLD": 30,
     "RSI_OVERBOUGHT": 70,
     "SMA_PERIOD": 20,
-    "RSI_PERIOD": 14
+    "RSI_PERIOD": 14,
+    "RSI_NEUTRAL_MIN": 48,
+    "RSI_NEUTRAL_MAX": 52,
+    "RSI_BUY_ENTRY_MAX": 65,
+    "RSI_SELL_ENTRY_MIN": 35
   },
-  "DEFAULT_PLOTTER_RANGE": "2H",
-  "PLOTTER_RANGES": {
-    "2H": { "hours": 2, "interval": "1m" },
-    "1D": { "days": 1, "interval": "5m" }
+  "DEFAULT_PLOTTER_RANGE": "2h",
+  "CLEANUP_SETTINGS": {
+    "cleanup_old_charts": true,
+    "charts_retention_days": 7
   }
 }
 ```
@@ -198,12 +219,14 @@
 | :--- | :--- | :--- | :--- |
 | `EXCHANGE_SYMBOLS` | Dict | Список пар для торговли. Должны соответствовать тикерам BingX Standard Futures. | Топ-10 ликвидных монет |
 | `ENABLE_PARALLEL_PROCESSING` | Bool | **True**: Анализирует все пары одновременно (быстро). **False**: По очереди (медленно, для отладки). | `true` |
-| `AGGRESSIVE_MODE` | Bool | **True**: Разрешает вход на откатах (RSI 40-60). **False**: Только RSI <30/>70. | `false` для начала |
-| `ENABLE_ADVANCED_ANALYSIS` | Bool | Включает анализ уровней и психологии в промпте ИИ. | `true` |
+| `AGGRESSIVE_MODE` | Bool | **True**: Включает агрессивную стратегию с более широкими допусками RSI. | `false` (Balanced) |
+| `ENABLE_NEWS` | Bool | Включает анализ новостного фона (требует NewsAPI). | `false` (если нет ключа) |
+| `SMART_SAMPLING` | Dict | Настройки сжатия исторических данных для ИИ. | `enabled: true` |
+| `AI_SETTINGS` | Dict | Выбор провайдера (DeepSeek/SiliconFlow) и модели. | См. раздел AI Провайдер |
+| `AI_THRESHOLDS` | Dict | Пороги для индикаторов (RSI, SMA) и условия входа. | Настраивайте `RSI_BUY_ENTRY_MAX` |
 | `MIN_RISK_REWARD_RATIO` | Float | Минимальное соотношение Прибыль/Риск. Сделки ниже этого значения игнорируются. | `1.5` - `2.0` |
 | `POSITION_SIZE_PERCENT` | Float | Какой % от баланса использовать в одной сделке (с учетом плеча). | `1.0` - `5.0` |
 | `LEVERAGE` | Int | Кредитное плечо. | `2` - `5` (Не ставьте выше 10!) |
-| `DEFAULT_HOLD_TIME_MINUTES` | Int | Через сколько минут бот принудительно закроет позицию, если не сработал SL/TP. | `60` - `120` |
 | `DEFAULT_PLOTTER_RANGE` | String | Таймфрейм для генерации графиков по умолчанию (например, "2H", "1D"). | `2H` или `4H` |
 
 ### 🤖 Настройка AI Провайдера
