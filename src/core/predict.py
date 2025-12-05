@@ -266,7 +266,12 @@ def validate_prediction(prediction, current_price):
     Валидирует прогноз ИИ, проверяя Risk/Reward Ratio.
     Если R/R слишком низкий, меняет действие на HOLD или понижает уверенность.
     """
-    from src.config import MIN_RISK_REWARD_RATIO
+    from src.config import MIN_RISK_REWARD_RATIO, AGGRESSIVE_MODE, AGGRESSIVE_SETTINGS
+
+    # Determine which R/R ratio to use
+    target_rr = MIN_RISK_REWARD_RATIO
+    if AGGRESSIVE_MODE:
+        target_rr = AGGRESSIVE_SETTINGS.get("MIN_RISK_REWARD_RATIO", 1.0)
 
     action = prediction.get("action")
     stop_loss = prediction.get("stop_loss")
@@ -295,8 +300,8 @@ def validate_prediction(prediction, current_price):
 
     rr_ratio = reward / risk
 
-    if rr_ratio < MIN_RISK_REWARD_RATIO:
-        warning(f"⚠️ Низкий Risk/Reward ({rr_ratio:.2f} < {MIN_RISK_REWARD_RATIO}). Сигнал {action} отклонен.")
+    if rr_ratio < target_rr:
+        warning(f"⚠️ Низкий Risk/Reward ({rr_ratio:.2f} < {target_rr}). Сигнал {action} отклонен.")
         prediction["action"] = "hold"
         prediction["reason"] += f" [AUTO-FIX: Low R/R ({rr_ratio:.2f})]"
         prediction["confidence"] = 0.0

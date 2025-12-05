@@ -68,25 +68,15 @@ def fetch_news(symbol):
 
     return news
 
-def main():
-    """Основная функция сбора данных"""
-    ensure_dirs()
-
-    client = get_exchange_client()
-    if not client.check_prerequisites():
-        return
-
-    for symbol in SYMBOLS:
-        # Сбор цен (может бросить исключение)
-        try:
-            prices = fetch_prices(symbol)
-            symbol_file = get_filename(symbol)
-            prices_file = f"{DATA_DIR}/prices/{symbol_file}.json"
-            with open(prices_file, "w") as f:
-                json.dump(prices, f)
-        except Exception as e:
-            error(f"❌ Ошибка получения цен для {symbol}: {str(e)}")
-            continue
+def process_symbol(symbol):
+    """Обрабатывает один символ: собирает цены и новости"""
+    try:
+        # Сбор цен
+        prices = fetch_prices(symbol)
+        symbol_file = get_filename(symbol)
+        prices_file = f"{DATA_DIR}/prices/{symbol_file}.json"
+        with open(prices_file, "w") as f:
+            json.dump(prices, f)
 
         # Сбор новостей
         if ENABLE_NEWS:
@@ -99,6 +89,44 @@ def main():
             json.dump(news, f)
 
         info(f"📊 Данные для {symbol} успешно собраны")
+        return True
+    except Exception as e:
+        error(f"❌ Ошибка обработки {symbol}: {str(e)}")
+        return False
+
+def main():
+    """Основная функция сбора данных"""
+    ensure_dirs()
+
+    client = get_exchange_client()
+    if not client.check_prerequisites():
+        return
+
+    # Check config for parallel collection
+    try:
+        from src.config import ENABLE_PARALLEL_COLLECTION
+    except ImportError:
+        ENABLE_PARALLEL_COLLECTION = True
+
+    if ENABLE_PARALLEL_COLLECTION:
+        import concurrent.futures
+        max_workers = min(len(SYMBOLS), 10) # Limit concurrency
+        info(f"🚀 Запуск параллельного сбора данных для {len(SYMBOLS)} символов (потоков: {max_workers})...")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_symbol = {executor.submit(process_symbol, symbol): symbol for symbol in SYMBOLS}
+
+            for future in concurrent.futures.as_completed(future_to_symbol):
+                symbol = future_to_symbol[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    error(f"❌ Необработанная ошибка при сборе {symbol}: {exc}")
+    else:
+        info(f"🐌 Запуск последовательного сбора данных для {len(SYMBOLS)} символов...")
+        for symbol in SYMBOLS:
+            process_symbol(symbol)
 
 if __name__ == "__main__":
     main()

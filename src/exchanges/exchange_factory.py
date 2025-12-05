@@ -8,12 +8,12 @@ def get_exchange_client():
     Factory function to get the appropriate exchange client instance.
     """
     exchange = EXCHANGE.lower()
-    
+
     if exchange == "bingx":
-        info("🏭 Using BingX Exchange Client")
+        # info("🏭 Using BingX Exchange Client")
         return BingXClient()
     elif exchange == "capital":
-        info("🏭 Using Capital.com Exchange Client")
+        # info("🏭 Using Capital.com Exchange Client")
         return CapitalClient()
     else:
         raise ValueError(f"Unknown exchange: {EXCHANGE}")
