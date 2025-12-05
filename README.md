@@ -219,7 +219,7 @@
 ```
 
 *   **provider**: `"deepseek_official"` (по умолчанию) или `"siliconflow"`.
-*   **model**: Имя модели (например, `"deepseek-chat"` или `"deepseek-ai/DeepSeek-V3"`).
+*   **model**: Имя модели (например, `"deepseek-chat"` или `"deepseek-ai/DeepSeek-V3.2"`).
 *   **base_url**: Опционально. URL для API запросов (если `null`, используется стандартный URL провайдера).
 
 > [!TIP]

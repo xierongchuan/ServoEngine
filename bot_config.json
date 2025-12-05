@@ -126,8 +126,8 @@
     "history_step": 10
   },
   "AI_SETTINGS": {
-    "provider": "deepseek_official",
-    "model": "deepseek-chat",
+    "provider": "siliconflow",
+    "model": "deepseek-ai/DeepSeek-V3.2",
     "base_url": null
   }
 }
