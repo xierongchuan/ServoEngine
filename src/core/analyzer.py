@@ -263,7 +263,7 @@ def analyze_symbol(symbol, position=None):
     **СТРАТЕГИЯ УПРАВЛЕНИЯ ПОЗИЦИЕЙ (ПРИОРИТЕТ №1):**
     {pnl_note}
     1.  **SECURE PROFIT**: Если PnL > {min_profit_breakeven:.2f}% (комиссия {TRADING_FEE}% покрыта), РАССМОТРИ перенос Stop Loss в БЕЗУБЫТОК.
-    2.  **CLOSE_PARTIAL**: Используй ТОЛЬКО для фиксации **существенной** прибыли. Не фиксируй "копейки" (Net PnL < {MIN_PARTIAL_CLOSE_PNL}%).
+    2.  **CLOSE_PARTIAL**: Используй ТОЛЬКО для фиксации **существенной** прибыли. Не фиксируй "копейки" (Net PnL < {min_profit_partial:.2f}%, т.е. меньше 4x комиссии).
     3.  **CLOSE**: Если тренд развернулся против позиции ИЛИ достигнут Take Profit.
     4.  **HOLD**: Если тренд сильный и PnL растет.
 
@@ -282,7 +282,7 @@ def analyze_symbol(symbol, position=None):
     **СТРАТЕГИЯ УПРАВЛЕНИЯ ПОЗИЦИЕЙ (ПРИОРИТЕТ №1):**
     {pnl_note}
     1.  **SECURE PROFIT**: Если PnL > {min_profit_breakeven:.2f}% (комиссия {TRADING_FEE}% покрыта), РАССМОТРИ перенос Stop Loss в БЕЗУБЫТОК.
-    2.  **CLOSE_PARTIAL**: Используй ТОЛЬКО для фиксации **существенной** прибыли. Не фиксируй "копейки" (Net PnL < {MIN_PARTIAL_CLOSE_PNL}%).
+    2.  **CLOSE_PARTIAL**: Используй ТОЛЬКО для фиксации **существенной** прибыли. Не фиксируй "копейки" (Net PnL < {min_profit_partial:.2f}%, т.е. меньше 4x комиссии).
     3.  **CLOSE**: Если тренд сломан ИЛИ достигнут Take Profit.
     4.  **HOLD**: Если тренд сохраняется.
 
