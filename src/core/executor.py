@@ -171,6 +171,12 @@ def main(predictions):
     MAX_POSITIONS = 5
     total_positions = sum(len(p) for p in positions.values())
 
+    # Determine confidence threshold
+    confidence_threshold = MIN_CONFIDENCE_THRESHOLD
+    if AGGRESSIVE_MODE:
+        confidence_threshold = AGGRESSIVE_SETTINGS.get("MIN_CONFIDENCE", MIN_CONFIDENCE_THRESHOLD)
+        info(f"🔥 Aggressive Mode Active: Using Confidence Threshold {confidence_threshold}")
+
     if total_positions >= MAX_POSITIONS:
         warning(f"⚠️ Достигнут лимит открытых позиций ({MAX_POSITIONS}). Новые позиции не открываем.")
         return
@@ -189,7 +195,7 @@ def main(predictions):
 
         if has_position:
             # Если позиция есть, проверяем сигналы на выход
-            if pred["action"] in ["close", "close_partial"] and pred["confidence"] >= MIN_CONFIDENCE_THRESHOLD:
+            if pred["action"] in ["close", "close_partial"] and pred["confidence"] >= confidence_threshold:
                 current_pos = positions[symbol][0] # Берем первую (обычно единственную)
                 deal_id = current_pos["dealId"]
                 percentage = pred.get("percentage", 1.0)
@@ -240,7 +246,7 @@ def main(predictions):
             continue
 
         # Открываем новые позиции
-        if pred["confidence"] >= MIN_CONFIDENCE_THRESHOLD:
+        if pred["confidence"] >= confidence_threshold:
 
 
             if pred["action"] == "buy":
