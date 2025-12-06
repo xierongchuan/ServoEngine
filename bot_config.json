@@ -17,7 +17,7 @@
     "capital": 0.0,
     "bingx": 0.05
   },
-  "POSITION_SIZE_PERCENT": 5.0,
+  "POSITION_SIZE_PERCENT": 1.0,
   "MIN_TRADE_AMOUNT_USDT": 10.0,
   "LEVERAGE": 50,
   "TAKE_PROFIT_PERCENT": 1.5,
