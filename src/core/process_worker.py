@@ -57,9 +57,8 @@ def run_symbol_pipeline(symbol: str):
                 info(f"👀 [{symbol}] Мониторинг позиции...")
                 monitor.monitor_symbol(symbol)
 
-                # 7. Графики
-                info(f"📈 [{symbol}] Генерация графиков...")
-                plotter.plot_symbol(symbol, current_position=active_trade)
+                # 7. Графики (moved to separate process)
+                # plotter.plot_symbol(symbol, current_position=active_trade)
 
                 elapsed = time.time() - start_time
                 info(f"✅ [{symbol}] Цикл завершён за {elapsed:.2f} сек. Ожидание 2 сек...")

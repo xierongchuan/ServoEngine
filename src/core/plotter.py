@@ -1,5 +1,7 @@
 import json
 import os
+import matplotlib
+matplotlib.use('Agg') # Force headless backend
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from datetime import datetime, timedelta, timezone
@@ -351,7 +353,7 @@ def plot_symbol(symbol, time_range=None, current_position=None):
             info(f"⚠️ Ошибка отображения позиции на графике: {e}")
 
     # Оформление графика цены
-    ax1.set_title(f"{symbol} - {datetime.now().strftime('%Y-%m-%d %H:%M')} ({time_range})", fontsize=20, pad=20)
+    ax1.set_title(f"{symbol} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ({time_range})", fontsize=20, pad=20)
     ax1.set_ylabel("Цена", fontsize=14, labelpad=10)
     ax1.legend(fontsize=12, loc='upper left')
     ax1.grid(alpha=0.2)

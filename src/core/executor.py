@@ -127,10 +127,29 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
                 except Exception as e:
                     error(f"❌ Failed to set SL/TP for new order {order_id}: {e}")
 
-            # Save to cache (optional, if we need to track other things)
-            # cache = load_position_cache()
-            # cache[str(order_id)] = ...
-            # save_position_cache(cache)
+            # NEW: Immediate Sync for Chart Worker
+            # Force update of active_trades.json so charts show the line instantly
+            try:
+                info(f"🔄 Performing immediate position sync for {symbol}...")
+                time.sleep(1.0) # Short wait for API propagation
+
+                # Fetch fresh positions
+                fresh_positions = client.get_positions()
+                if fresh_positions and symbol in fresh_positions:
+                    target_positions = fresh_positions[symbol]
+                    # Should be a list, iterate and sync
+                    from src.core.trade_tracker import TradeTracker
+                    tracker = TradeTracker()
+
+                    for pos in target_positions:
+                        # Sync it
+                        tracker.sync_position(symbol, pos)
+
+                    info(f"✅ Immediate trade sync completed for {symbol}")
+                else:
+                    warning(f"⚠️ Immediate sync: Position not found for {symbol} after order.")
+            except Exception as e:
+                warning(f"⚠️ Immediate sync failed: {e}")
 
             log_trade(f"📌 {symbol}: открыт ордер {direction} по {price:.5f} "
                       f"(Qty={quantity}, TP={tp_price}, SL={sl_price}, ID={order_id}) "

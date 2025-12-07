@@ -118,24 +118,37 @@ def run_multiprocess_pipeline():
     import multiprocessing
     from src.config import SYMBOLS
     from src.core.process_worker import run_symbol_pipeline
+    from src.core.chart_worker import run_chart_worker
 
     print("\n🚀 Запуск мультипроцессного пайплайна...")
     info("🚀 Запуск мультипроцессного пайплайна...")
 
     processes = []
 
+    # 1. Запускаем торговые процессы (по одному на символ)
     for symbol in SYMBOLS:
         p = multiprocessing.Process(
             target=run_symbol_pipeline,
             args=(symbol,),
             name=f"Worker-{symbol}"
         )
-        # ВАЖНО: Делаем процесс демоном, чтобы он умирал вместе с главным процессом
         p.daemon = True
         processes.append(p)
         p.start()
-        print(f"   🔄 Запущен бесконечный процесс для {symbol} (PID: {p.pid})")
-        info(f"🔄 Запущен бесконечный процесс для {symbol} (PID: {p.pid})")
+        print(f"   🔄 Запущен торговый процесс для {symbol} (PID: {p.pid})")
+        info(f"🔄 Запущен торговый процесс для {symbol} (PID: {p.pid})")
+
+    # 2. Запускаем отдельный процесс для графиков
+    chart_p = multiprocessing.Process(
+        target=run_chart_worker,
+        name="Worker-Charts"
+    )
+    # ВАЖНО: chart_p НЕ может быть демоном, так как он сам порождает процессы (ProcessPoolExecutor)
+    chart_p.daemon = False
+    processes.append(chart_p)
+    chart_p.start()
+    print(f"   🎨 Запущен процесс генерации графиков (PID: {chart_p.pid})")
+    info(f"🎨 Запущен процесс генерации графиков (PID: {chart_p.pid})")
 
     print("✅ Все процессы запущены. Нажмите Ctrl+C для остановки.")
     info("✅ Все процессы запущены")
@@ -147,7 +160,14 @@ def run_multiprocess_pipeline():
     except KeyboardInterrupt:
         print("\n🛑 Остановка главного процесса...")
         info("🛑 Остановка главного процесса...")
-        # Демоны будут убиты автоматически при выходе из main
+    finally:
+        # Явное завершение chart_worker, так как он не демон
+        if chart_p.is_alive():
+            print(f"   🛑 Завершение Worker-Charts ({chart_p.pid})...")
+            chart_p.terminate()
+            chart_p.join(timeout=2)
+            if chart_p.is_alive():
+                chart_p.kill()
 
 def main():
     """Главная функция"""
