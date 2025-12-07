@@ -10,7 +10,8 @@
     "bingx": [
       "BTCUSDT",
       "ETHUSDT",
-      "XRPUSDT"
+      "XRPUSD",
+      "PIPPINUSDT"
     ]
   },
   "EXCHANGE_FEES": {
@@ -19,7 +20,7 @@
   },
   "POSITION_SIZE_PERCENT": 1.0,
   "MIN_TRADE_AMOUNT_USDT": 10.0,
-  "LEVERAGE": 50,
+  "LEVERAGE": 18,
   "TAKE_PROFIT_PERCENT": 1.5,
   "STOP_LOSS_PERCENT": 1.5,
   "MIN_CONFIDENCE_THRESHOLD": 0.7,
