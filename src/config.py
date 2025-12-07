@@ -158,6 +158,18 @@ AGGRESSIVE_SETTINGS = BOT_CONFIG.get("AGGRESSIVE_SETTINGS", {})
 NEWS_SETTINGS = BOT_CONFIG.get("NEWS_SETTINGS", {})
 SMART_SAMPLING = BOT_CONFIG.get("SMART_SAMPLING", {"enabled": True, "recent_candles": 30, "history_step": 10})
 ENABLE_AI_SKIP_ON_RSI = BOT_CONFIG.get("ENABLE_AI_SKIP_ON_RSI", True)
+MOMENTUM_STRATEGY = BOT_CONFIG.get("MOMENTUM_STRATEGY", {
+    "enabled": True,
+    "min_hold_minutes": 3,
+    "max_hold_minutes": 480,
+    "atr_sl_multiplier": 1.5,
+    "atr_tp_multiplier": 2.5,
+    "min_volume_ratio": 0.7,
+    "max_candles_in_prompt": 50,
+    "trend_consensus_required": False,
+    "momentum_entry_enabled": True,
+    "momentum_consecutive_candles": 3
+})
 
 # DeepSeek / AI API Settings
 AI_SETTINGS = BOT_CONFIG.get("AI_SETTINGS", {})

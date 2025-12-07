@@ -24,12 +24,33 @@ formatter = logging.Formatter(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# Хэндлер для файла steps.log
-code_file_handler = logging.FileHandler(
-    os.path.join(LOG_DIR, 'steps.log'),
-    mode='a',
-    encoding='utf-8'
-)
+# Хэндлер для файла steps.log (по умолчанию)
+# В multiprocessing режиме этот хэндлер будет заменен на специфичный для символа
+default_log_file = os.path.join(LOG_DIR, 'steps.log')
+
+# Функция для настройки логгера под конкретный символ
+def setup_symbol_logger(symbol):
+    """Перенастраивает логгер для записи в отдельный файл символа"""
+    global code_logger
+
+    # Создаем папку для логов если нет
+    logs_dir = os.path.join(LOG_DIR, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+
+    # Очищаем старые хэндлеры
+    code_logger.handlers.clear()
+
+    # Путь к логу символа: data/logs/BTCUSDT.log
+    # Очищаем символ от слешей для имени файла (BTC/USD -> BTCUSD)
+    safe_symbol = symbol.replace("/", "").replace("-", "")
+    log_file = os.path.join(logs_dir, f"{safe_symbol}.log")
+
+    new_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+    new_handler.setFormatter(formatter)
+    code_logger.addHandler(new_handler)
+
+# Инициализация дефолтного хэндлера
+code_file_handler = logging.FileHandler(default_log_file, mode='a', encoding='utf-8')
 code_file_handler.setFormatter(formatter)
 code_logger.addHandler(code_file_handler)
 

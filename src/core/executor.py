@@ -145,6 +145,112 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         log_trade(f"❌ Ошибка создания ордера {symbol}: {str(e)}", level='ERROR')
         return None
 
+def execute_prediction(prediction):
+    """
+    Исполняет одно предсказание для одного символа.
+    Используется в режиме multiprocessing.
+    """
+    symbol = prediction["symbol"]
+    # action = prediction["action"] # Unused variable
+
+    client = get_exchange_client()
+    if not client.check_prerequisites():
+         error(f"❌ {symbol}: Ошибка подключения к бирже")
+         return
+
+    # Получаем все текущие позиции для проверки лимитов и состояния
+    try:
+        positions = get_open_positions()
+    except Exception as e:
+        error(f"❌ {symbol}: Ошибка получения позиций: {e}")
+        return
+
+    # Проверяем лимит позиций (максимум 5)
+    MAX_POSITIONS = 5
+    total_positions = sum(len(p) for p in positions.values())
+
+    # Флаг, есть ли у нас позиция по этому символу
+    symbol_positions = positions.get(symbol, [])
+    has_position = len(symbol_positions) > 0
+    current_pos = symbol_positions[0] if has_position else None
+
+    # Determine confidence threshold
+    confidence_threshold = MIN_CONFIDENCE_THRESHOLD
+    if AGGRESSIVE_MODE:
+        confidence_threshold = AGGRESSIVE_SETTINGS.get("MIN_CONFIDENCE", MIN_CONFIDENCE_THRESHOLD)
+
+    # 1. OPEN NEW POSITION
+    if not has_position:
+        if prediction["action"] in ["buy", "sell"]:
+            # Check limits
+            if total_positions >= MAX_POSITIONS:
+                warning(f"⚠️ {symbol}: Лимит позиций ({MAX_POSITIONS}) достигнут. Пропуск сигнала.")
+                return
+
+            if prediction["confidence"] >= confidence_threshold:
+                direction = prediction["action"].upper()
+                info(f"🚀 {symbol}: Исполнение сигнала {direction} (confidence={prediction['confidence']})")
+
+                create_order(
+                    symbol,
+                    direction,
+                    prediction["current_price"],
+                    ai_sl=prediction.get("stop_loss"),
+                    ai_tp=prediction.get("take_profit"),
+                    reason=prediction["reason"],
+                    confidence=prediction["confidence"]
+                )
+            else:
+                info(f"📉 {symbol}: Пропуск сигнала {prediction['action']} (confidence {prediction['confidence']} < {confidence_threshold})")
+        else:
+            # HOLD or unknown
+            info(f"⏸️ {symbol}: {prediction['action'].upper()} ({prediction['reason']})")
+
+    # 2. MANAGE EXISTING POSITION
+    else:
+        deal_id = current_pos["dealId"]
+
+        # CLOSE / PARTIAL CLOSE
+        if prediction["action"] in ["close", "close_partial"] and prediction["confidence"] >= confidence_threshold:
+            percentage = prediction.get("percentage", 1.0)
+            if prediction["action"] == "close":
+                percentage = 1.0
+
+            info(f"📉 {symbol}: Сигнал на закрытие {prediction['action']} ({percentage*100}%)")
+
+            if client.close_position(symbol, deal_id, percentage):
+                info(f"✅ {symbol}: Позиция {deal_id} закрыта (частично: {percentage})")
+                log_trade(f"✅ {symbol}: Позиция {deal_id} закрыта (частично: {percentage*100}%) | Причина: {prediction['reason']}")
+            else:
+                error(f"❌ {symbol}: Не удалось закрыть позицию {deal_id}")
+
+        # UPDATE SL/TP (HOLD)
+        elif prediction["action"] == "hold":
+            ai_sl = prediction.get("stop_loss")
+            ai_tp = prediction.get("take_profit")
+
+            if ai_sl or ai_tp:
+                # BingXClient needs positionSide (LONG/SHORT)
+                pos_type = current_pos["type"].upper() # BUY/SELL
+                pos_side = "LONG" if pos_type == "BUY" else "SHORT"
+
+                # Check if SL/TP actually changed significantly to avoid spam
+                # (Simple check, can be improved)
+
+                info(f"🔄 {symbol}: Проверка обновления SL/TP (SL: {ai_sl}, TP: {ai_tp})")
+                try:
+                    if hasattr(client, "set_sl_tp"):
+                        client.set_sl_tp(symbol, pos_side, tp=ai_tp, sl=ai_sl)
+                    else:
+                        warning(f"⚠️ Client does not support set_sl_tp")
+                except Exception as e:
+                    error(f"❌ {symbol}: Ошибка обновления SL/TP: {e}")
+            else:
+                 info(f"⏸️ {symbol}: HOLD (Wait for signal)")
+        else:
+             info(f"⏸️ {symbol}: Игнорируем сигнал {prediction['action']} при открытой позиции")
+
+
 def main(predictions):
     """Основная функция исполнения ордеров"""
     info("🚀 Начинаем исполнение ордеров...")

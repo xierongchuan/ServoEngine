@@ -45,8 +45,9 @@
 *   **Smart Skip**: Пропускает очевидно нейтральные рынки (флэт), экономя API токены и снижая шум.
 
 ### ⚡ Высокая производительность
-*   **Multi-threading**: Параллельный анализ десятков пар одновременно.
-*   **Multi-processing**: Генерация графиков в отдельных процессах, не блокируя торговое ядро.
+*   **True Multiprocessing**: Каждый торговый актив (BTC, ETH и др.) работает в **отдельном изолированном процессе** ОС.
+*   **Non-Blocking**: Задержка на одной паре (например, долгий ответ API) **не влияет** на торговлю другими парами.
+*   **Continuous Loop**: Каждый воркер работает в собственном бесконечном цикле независимо от остальных.
 
 ### 📊 Продвинутая Визуализация
 *   **Custom Time Ranges**: Генерация графиков за любой период (1h, 4h, 1D, 1W) с автоматической адаптацией ширины и оси времени.
@@ -59,45 +60,47 @@
 *   **Auto-Close**: Принудительное закрытие позиций по таймеру (по умолчанию 60 мин) для предотвращения "зависания" в сделках.
 
 ### 📈 Гибкие режимы торговли
-*   **Balanced Strategy**: (По умолчанию) Вход по тренду с умеренными рисками. Допускает вход при RSI < 65 (Buy) и > 35 (Sell).
-*   **Aggressive Mode**: Агрессивный поиск разворотов и глубоких коррекций. Настраиваемые пороги RSI для входа.
+*   **Balanced Strategy**: (По умолчанию) Вход по тренду с умеренными рисками. Требуется консенсус трендов (Price vs SMA + EMA crossover).
+*   **Aggressive Mode**: Агрессивный режим с расширенными диапазонами RSI (35-70) и опциональным консенсусом трендов. Включает **Momentum Entry** — альтернативный вход по 3+ однонаправленным свечам.
 *   **News Filter**: (Опционально) Учитывает новостной фон при принятии решений (требует NewsAPI).
 
 ---
 
-## <a id="strategy"></a>🧠 Торговая стратегия и AI
+## <a id="strategy"></a>🧠 Торговая стратегия: Momentum Breakout
 
-Бот работает по следующему алгоритму принятия решений:
+Бот использует стратегию **Momentum Breakout** с трендовым фильтром, оптимизированную для таймфреймов от 3 минут до нескольких часов.
 
 ### 1. Сбор данных
-Система загружает последние 50 свечей (5m таймфрейм) для каждого актива из списка.
+Система загружает до 720 свечей (1m таймфрейм) и применяет **Smart Sampling** для сжатия истории.
 
 ### 2. Технический пре-фильтр
-Перед вызовом дорогостоящего ИИ, бот проверяет базовые условия:
-*   **Smart RSI Filter**:
-    *   Если RSI в нейтральной зоне (48-52) **И** нет явного тренда -> **SKIP** (Auto-HOLD).
-    *   Если есть четкий тренд (Цена > SMA), бот **ВЫЗЫВАЕТ ИИ** даже при нейтральном RSI, чтобы найти точку входа на продолжение движения.
-*   **Trend Confirmation**: Бот анализирует положение цены относительно SMA (20) для определения глобального направления.
+Перед вызовом ИИ, бот проверяет базовые условия:
+*   **RSI Filter**: Пропускает экстремальные зоны (RSI > 85 или < 15).
+*   **Volume Filter**: Пропускает "мёртвый" рынок (Volume < 0.3x от среднего).
+*   **Aggressive Mode**: Ищет точки входа на откатах в тренде.
 
 ### 3. AI Анализ (DeepSeek)
-Если пре-фильтр пройден, формируется сложный промпт для ИИ, включающий:
-*   Цену, SMA, RSI.
-*   Уровни поддержки и сопротивления (вычисляются алгоритмически).
-*   Анализ объемов (Volume Profile).
-*   Текущую позицию (если есть).
+Если пре-фильтр пройден, формируется структурированный промпт с:
+*   Таблицами индикаторов (SMA, RSI, EMA9, EMA21, ATR).
+*   Трендовым контекстом (глобальный, локальный, консенсус).
+*   Уровнями поддержки/сопротивления.
+*   Историей свечей (до 77 после smart sampling).
 
-**Задача ИИ**:
-1.  Определить структуру рынка.
-2.  Найти точку входа.
-3.  Рассчитать SL и TP.
-4.  Вернуть JSON с решением (`buy`, `sell`, `hold`, `close`).
+**Условия входа (AGGRESSIVE MODE):**
+
+| LONG (BUY) | SHORT (SELL) |
+|:-----------|:-------------|
+| Цена > SMA **ИЛИ** EMA9 > EMA21 | Цена < SMA **ИЛИ** EMA9 < EMA21 |
+| RSI 35-70 | RSI 30-65 |
+| Volume >= 0.7x | Volume >= 0.7x |
+
+**🚀 Momentum Entry**: 3+ однонаправленных свечей + RSI в сторону тренда = валидный вход.
 
 ### 4. Валидация сигнала
-Полученный от ИИ сигнал проходит жесткую проверку:
+Полученный от ИИ сигнал проходит проверку:
 *   Есть ли SL и TP?
-*   `Reward = |Price - TP|`
-*   `Risk = |Price - SL|`
-*   Если `Reward / Risk < 1.5` -> **СИГНАЛ ОТКЛОНЯЕТСЯ**.
+*   Risk/Reward >= 1.3 (Aggressive) или 1.5 (Balanced).
+*   SL в правильном направлении относительно сделки.
 
 ---
 
@@ -151,7 +154,7 @@
 
 5.  **Запустите бота:**
     ```bash
-    python3 run.py
+    ./scripts/run_trading_bot.sh
     ```
 
 6.  **Генерация графиков вручную (опционально):**
@@ -173,7 +176,7 @@
 ```json
 {
   "EXCHANGE_SYMBOLS": {
-    "bingx": ["BTC-USDT", "ETH-USDT", "XRP-USDT"]
+    "bingx": ["ETHUSDT", "LTCUSDT", "XRPUSDT"]
   },
   "AI_SETTINGS": {
     "provider": "siliconflow",
@@ -182,13 +185,25 @@
   },
   "ENABLE_ADVANCED_ANALYSIS": true,
   "ENABLE_PARALLEL_MODE": true,
-  "AGGRESSIVE_MODE": false,
+  "AGGRESSIVE_MODE": true,
   "AGGRESSIVE_SETTINGS": {
-    "RSI_BUY_COND": 60,
-    "RSI_BUY_FORBIDDEN": 80,
-    "RSI_SELL_COND": 40,
-    "RSI_SELL_FORBIDDEN": 20,
-    "MIN_RISK_REWARD_RATIO": 1.0
+    "RSI_BUY_COND": 70,
+    "RSI_BUY_FORBIDDEN": 85,
+    "RSI_SELL_COND": 30,
+    "RSI_SELL_FORBIDDEN": 15,
+    "MIN_RISK_REWARD_RATIO": 1.3,
+    "MIN_CONFIDENCE": 0.55
+  },
+  "MOMENTUM_STRATEGY": {
+    "enabled": true,
+    "min_hold_minutes": 3,
+    "max_hold_minutes": 480,
+    "atr_sl_multiplier": 1.5,
+    "atr_tp_multiplier": 2.5,
+    "min_volume_ratio": 0.7,
+    "trend_consensus_required": false,
+    "momentum_entry_enabled": true,
+    "momentum_consecutive_candles": 3
   },
   "ENABLE_NEWS": false,
   "SMART_SAMPLING": {
@@ -196,24 +211,10 @@
     "recent_candles": 30,
     "history_step": 10
   },
-  "MIN_RISK_REWARD_RATIO": 1.5,
-  "POSITION_SIZE_PERCENT": 5.0,
-  "LEVERAGE": 5,
-  "AI_THRESHOLDS": {
-    "RSI_OVERSOLD": 30,
-    "RSI_OVERBOUGHT": 70,
-    "SMA_PERIOD": 20,
-    "RSI_PERIOD": 14,
-    "RSI_NEUTRAL_MIN": 48,
-    "RSI_NEUTRAL_MAX": 52,
-    "RSI_BUY_ENTRY_MAX": 65,
-    "RSI_SELL_ENTRY_MIN": 35
-  },
-  "DEFAULT_PLOTTER_RANGE": "2h",
-  "CLEANUP_SETTINGS": {
-    "cleanup_old_charts": true,
-    "charts_retention_days": 7
-  }
+  "MIN_RISK_REWARD_RATIO": 1.3,
+  "POSITION_SIZE_PERCENT": 1.0,
+  "LEVERAGE": 20,
+  "DEFAULT_PLOTTER_RANGE": "2h"
 }
 ```
 
@@ -221,17 +222,16 @@
 
 | Параметр | Тип | Описание | Рекомендация |
 | :--- | :--- | :--- | :--- |
-| `EXCHANGE_SYMBOLS` | Dict | Список пар для торговли. Должны соответствовать тикерам BingX Standard Futures. | Топ-10 ликвидных монет |
-| `ENABLE_PARALLEL_MODE` | Bool | **True**: Включает параллельный анализ ИИ и генерацию графиков. | `true` |
-| `AGGRESSIVE_MODE` | Bool | **True**: Включает агрессивную стратегию с более широкими допусками RSI. | `false` (Balanced) |
-| `ENABLE_NEWS` | Bool | Включает анализ новостного фона (требует NewsAPI). | `false` (если нет ключа) |
-| `SMART_SAMPLING` | Dict | Настройки сжатия исторических данных для ИИ. | `enabled: true` |
-| `AI_SETTINGS` | Dict | Выбор провайдера (DeepSeek/SiliconFlow) и модели. | См. раздел AI Провайдер |
-| `AI_THRESHOLDS` | Dict | Пороги для индикаторов (RSI, SMA) и условия входа. | Настраивайте `RSI_BUY_ENTRY_MAX` |
-| `MIN_RISK_REWARD_RATIO` | Float | Минимальное соотношение Прибыль/Риск. Сделки ниже этого значения игнорируются. | `1.5` - `2.0` |
-| `POSITION_SIZE_PERCENT` | Float | Какой % от баланса использовать в одной сделке (с учетом плеча). | `1.0` - `5.0` |
-| `LEVERAGE` | Int | Кредитное плечо. | `2` - `5` (Не ставьте выше 10!) |
-| `DEFAULT_PLOTTER_RANGE` | String | Таймфрейм для генерации графиков по умолчанию (например, "2H", "1D"). | `2H` или `4H` |
+| `EXCHANGE_SYMBOLS` | Dict | Список пар для торговли. Должны соответствовать тикерам BingX. | Топ-10 ликвидных |
+| `AGGRESSIVE_MODE` | Bool | Включает агрессивную стратегию с Momentum Entry. | `true` |
+| `AGGRESSIVE_SETTINGS` | Dict | RSI пороги и MIN_CONFIDENCE для агрессивного режима. | См. пример |
+| `MOMENTUM_STRATEGY` | Dict | **NEW**: Настройки Momentum Breakout стратегии. | `enabled: true` |
+| `trend_consensus_required` | Bool | Требовать ли совпадение обоих трендов для входа. | `false` (Aggressive) |
+| `momentum_entry_enabled` | Bool | Разрешить вход по 3+ однонаправленным свечам. | `true` |
+| `min_volume_ratio` | Float | Минимальный объём относительно среднего (0.7 = 70%). | `0.7` |
+| `MIN_RISK_REWARD_RATIO` | Float | Минимальное соотношение Прибыль/Риск. | `1.3` (Aggressive) |
+| `POSITION_SIZE_PERCENT` | Float | Какой % от баланса использовать в одной сделке. | `1.0` - `5.0` |
+| `LEVERAGE` | Int | Кредитное плечо. | `5` - `20` |
 
 ### 🤖 Настройка AI Провайдера
 
@@ -256,64 +256,56 @@
 
 ## <a id="architecture"></a>🏗️ Архитектура системы
 
-Проект построен по модульной архитектуре для легкости поддержки и расширения.
+Проект перешел на полноценную **мультипроцессную архитектуру**.
 
 ```mermaid
 graph TD
-    Main[run.py] --> Collector
-    Main --> Analyzer
-    Main --> Predictor
-    Main --> Executor
-    Main --> Plotter
+    Launcher[run.py / main.py] -->|Spawns| Worker1[Worker-BTCUSDT]
+    Launcher -->|Spawns| Worker2[Worker-ETHUSDT]
+    Launcher -->|Spawns| Worker3[Worker-...]
 
-    subgraph Core Logic
-        Collector[src/core/collector.py] -- Данные --> Analyzer[src/core/analyzer.py]
-        Analyzer -- Промпт --> Predictor[src/core/predict.py]
-        Predictor -- Сигнал --> Executor[src/core/executor.py]
+    subgraph "Main Process (Daemon Supervisor)"
+        Launcher
     end
 
-    subgraph External APIs
-        Collector <--> BingX_API
-        Predictor <--> DeepSeek_API
-        Executor <--> BingX_API
-    end
-
-    subgraph Parallel Processing
-        Predictor -- ThreadPool --> AI_Workers
-        Plotter[src/core/plotter.py] -- ProcessPool --> Chart_Workers
+    subgraph "Worker Process for BTC (Isolated Loop)"
+        Worker1 --> Collector1[Collector]
+        Collector1 --> Analyzer1[Analyzer]
+        Analyzer1 --> Predictor1[DeepSeek AI]
+        Predictor1 --> Executor1[Executor]
+        Executor1 --> Monitor1[Monitor]
+        Monitor1 -.->|Loop| Worker1
     end
 ```
 
-*   **src/core/predict.py**: Мозг системы. Содержит логику общения с ИИ, ретраи (повторные попытки) и валидацию сигналов.
-*   **src/exchanges/bingx_client.py**: Обертка над API BingX. Реализует подпись запросов (HMAC SHA256) и унифицированный интерфейс.
-*   **src/utils/logger.py**: Централизованная система логирования.
+*   **Изоляция**: Каждый символ работает в своем процессе.
+*   **Независимость**: Падение или задержка на одном символе не влияет на другие.
 
 ---
 
 ## <a id="monitoring"></a>📊 Мониторинг и Логи
 
-Бот пишет подробные логи в папку `data/`.
+Логи теперь разделены для удобства отладки.
 
-### 1. Технический лог (`data/steps.log`)
-Здесь видно всё, что делает бот: запросы к API, ответы ИИ, ошибки.
-```
-2025-12-04 22:00:01 | INFO | 🚀 Запуск параллельного анализа...
-2025-12-04 22:00:02 | INFO | 📨 Ответ DeepSeek (BTC-USDT): {"action": "buy", ...}
-```
+### 1. Логи по символам (`data/logs/*.log`)
+Каждая пара пишет свой лог в отдельный файл. Это позволяет легко следить за конкретным активом.
 
-### 2. Торговый лог (`data/trades.log`)
-Здесь только важная информация о сделках.
-```
-2025-12-04 22:00:05 | 🟢 OPEN LONG BTC-USDT | Price: 95000 | SL: 94000 | TP: 97000
-2025-12-04 23:00:00 | 🔴 CLOSE BTC-USDT | PnL: +50 USDT (+2.5%)
-```
-
-### Как следить в реальном времени (Linux/Mac):
 ```bash
-# В одном окне терминала (технический лог)
-tail -f data/steps.log
+# Следить только за ETH
+tail -f data/logs/ETHUSDT.log
+```
 
-# В другом окне (торговый лог)
+### 2. Главный лог (`data/steps.log`)
+Общий лог запуска и остановки процессов.
+
+### 3. Торговый лог (`data/trades.log`)
+Здесь по-прежнему собирается сводная информация о совершенных сделках для всех пар.
+
+```bash
+# В одном окне терминала (лог ETH)
+tail -f data/logs/ETHUSDT.log
+
+# В другом окне (лог сделок)
 tail -f data/trades.log
 ```
 

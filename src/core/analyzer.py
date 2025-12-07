@@ -4,6 +4,63 @@ from src.config import DATA_DIR, AI_THRESHOLDS, SYMBOLS, ENABLE_NEWS
 from src.utils.logger import info, error
 from src.utils.helpers import get_filename
 
+
+def get_price_value(price_item):
+    """Извлекает числовое значение цены из разных форматов"""
+    if isinstance(price_item, dict):
+        return float(price_item.get("bid", price_item.get("ask", 0)))
+    return float(price_item)
+
+
+def calculate_ema(prices, period):
+    """Рассчитывает Exponential Moving Average"""
+    if len(prices) < period:
+        return sum(prices) / len(prices) if prices else 0
+
+    multiplier = 2 / (period + 1)
+    ema = sum(prices[:period]) / period  # Start with SMA
+
+    for price in prices[period:]:
+        ema = (price - ema) * multiplier + ema
+
+    return round(ema, 5)
+
+
+def calculate_atr(prices_data, period=14):
+    """
+    Рассчитывает Average True Range
+    :param prices_data: Список свечей с high, low, close
+    :param period: Период для расчета ATR
+    :return: ATR значение
+    """
+    if len(prices_data) < 2:
+        return 0.0
+
+    true_ranges = []
+    for i in range(1, len(prices_data)):
+        high = get_price_value(prices_data[i].get("highPrice", 0))
+        low = get_price_value(prices_data[i].get("lowPrice", 0))
+        prev_close = get_price_value(prices_data[i-1].get("closePrice", 0))
+
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
+        true_ranges.append(tr)
+
+    if not true_ranges:
+        return 0.0
+
+    # ATR = SMA of True Range
+    if len(true_ranges) >= period:
+        atr = sum(true_ranges[-period:]) / period
+    else:
+        atr = sum(true_ranges) / len(true_ranges)
+
+    return round(atr, 5)
+
+
 def calculate_indicators(prices):
     """Рассчитывает ключевые индикаторы"""
     # Валидация структуры данных
@@ -147,8 +204,31 @@ def analyze_volume_profile(volumes, prices):
 
 from src.exchanges.exchange_factory import get_exchange_client
 
+def analyze_symbol_with_position(symbol):
+    """
+    Анализирует один символ, самостоятельно получая информацию о текущей позиции.
+    Используется в режиме multiprocessing.
+    """
+    try:
+        client = get_exchange_client()
+        # Получаем все позиции (к сожалению, API часто не имеет метода get_position(symbol))
+        # Но мы можем отфильтровать
+        positions = client.get_positions()
+        symbol_positions = positions.get(symbol, [])
+        current_position = symbol_positions[0] if symbol_positions else None
+
+        return analyze_symbol(symbol, position=current_position)
+    except Exception as e:
+        error(f"❌ Ошибка получения позиции для {symbol}: {e}")
+        # Пробуем анализировать без позиции
+        return analyze_symbol(symbol, position=None)
+
 def analyze_symbol(symbol, position=None):
-    """Анализирует один символ и готовит промпт для DeepSeek"""
+    """
+    Анализирует один символ и готовит оптимизированный промпт для AI.
+    Стратегия: Momentum Breakout с трендовым фильтром
+    Таймфрейм: 3 минуты - несколько часов
+    """
     # Загружаем данные
     with open(f"{DATA_DIR}/prices/{get_filename(symbol)}.json") as f:
         prices = json.load(f)
@@ -156,210 +236,244 @@ def analyze_symbol(symbol, position=None):
     with open(f"{DATA_DIR}/news/{get_filename(symbol)}.json") as f:
         news = json.load(f)
 
-    # Рассчитываем индикаторы
+    # === РАСЧЁТ ИНДИКАТОРОВ ===
     sma, rsi = calculate_indicators(prices)
+
+    # Извлекаем числовые цены для расчётов
+    close_prices = [get_price_value(p.get("closePrice", 0)) for p in prices]
+
+    # EMA расчёты
+    ema9 = calculate_ema(close_prices, 9)
+    ema21 = calculate_ema(close_prices, 21)
+
+    # ATR расчёт
+    atr = calculate_atr(prices, 14)
 
     # Текущая цена
     last_close = prices[-1]["closePrice"]
-    if isinstance(last_close, dict):
-        current_price = float(last_close["bid"])
-    else:
-        current_price = float(last_close)
+    current_price = get_price_value(last_close)
 
-    # Определяем тренд
-    trend = "UP" if current_price > sma else "DOWN"
+    # Определяем тренды
+    global_trend = "UP" if current_price > sma else "DOWN"
+    local_trend = "BULLISH" if ema9 > ema21 else "BEARISH"
+    trends_aligned = (global_trend == "UP" and local_trend == "BULLISH") or \
+                     (global_trend == "DOWN" and local_trend == "BEARISH")
 
-    # Формируем сырые новостные данные для анализа ИИ
-    news_text = ""
-    if ENABLE_NEWS:
-        if news:
-            for item in news:
-                news_text += f"\n- [{item['timestamp']}] {item['title']}\n  {item['description']}\n"
+    # Анализ последних 5 свечей
+    last_5_closes = close_prices[-5:] if len(close_prices) >= 5 else close_prices
+    if len(last_5_closes) >= 2:
+        up_candles = sum(1 for i in range(1, len(last_5_closes)) if last_5_closes[i] > last_5_closes[i-1])
+        down_candles = len(last_5_closes) - 1 - up_candles
+        if up_candles >= 4:
+            last_5_direction = "STRONG UP"
+            direction_desc = "4+ зелёных свечей"
+        elif up_candles >= 3:
+            last_5_direction = "UP"
+            direction_desc = "Преимущественно рост"
+        elif down_candles >= 4:
+            last_5_direction = "STRONG DOWN"
+            direction_desc = "4+ красных свечей"
+        elif down_candles >= 3:
+            last_5_direction = "DOWN"
+            direction_desc = "Преимущественно падение"
         else:
-            news_text = "НОВОСТИ НЕДОСТУПНЫ, НО ФУНКЦИЯ ВКЛЮЧЕНА."
+            last_5_direction = "MIXED"
+            direction_desc = "Боковик/неопределённость"
+    else:
+        last_5_direction = "N/A"
+        direction_desc = "Недостаточно данных"
 
-    # Информация о текущей позиции
-    position_text = "НЕТ ОТКРЫТОЙ ПОЗИЦИИ"
+    # === УРОВНИ ПОДДЕРЖКИ/СОПРОТИВЛЕНИЯ ===
+    sr_levels = calculate_support_resistance(close_prices)
+    support = sr_levels['supports'][-1] if sr_levels['supports'] else current_price * 0.99
+    resistance = sr_levels['resistances'][0] if sr_levels['resistances'] else current_price * 1.01
+
+    # Pivot Point (классический)
+    if len(prices) >= 2:
+        prev_high = get_price_value(prices[-2].get("highPrice", current_price))
+        prev_low = get_price_value(prices[-2].get("lowPrice", current_price))
+        prev_close = get_price_value(prices[-2].get("closePrice", current_price))
+        pivot = (prev_high + prev_low + prev_close) / 3
+    else:
+        pivot = current_price
+
+    # Расстояния до уровней
+    resistance_dist_pct = ((resistance - current_price) / current_price * 100) if current_price > 0 else 0
+    support_dist_pct = ((current_price - support) / current_price * 100) if current_price > 0 else 0
+    pivot_dist_pct = ((current_price - pivot) / current_price * 100) if current_price > 0 else 0
+
+    # === ОБЪЁМ И ВОЛАТИЛЬНОСТЬ ===
+    volumes = [float(p.get('volume', 0)) for p in prices]
+    if len(volumes) >= 20:
+        avg_volume = sum(volumes[-20:]) / 20
+        current_volume = volumes[-1] if volumes else 0
+        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+    else:
+        volume_ratio = 1.0
+
+    if volume_ratio > 2.0:
+        volume_status = "🔥 АНОМАЛЬНО ВЫСОКИЙ"
+    elif volume_ratio > 1.2:
+        volume_status = "📈 Повышенный"
+    elif volume_ratio < 0.5:
+        volume_status = "💤 Низкий"
+    else:
+        volume_status = "✅ Норма"
+
+    # Волатильность относительно ATR
+    if len(close_prices) >= 2:
+        current_move = abs(close_prices[-1] - close_prices[-2])
+        volatility_ratio = current_move / atr if atr > 0 else 1.0
+    else:
+        volatility_ratio = 1.0
+
+    if volatility_ratio > 2.0:
+        volatility_status = "⚡ ВЫСОКАЯ"
+    elif volatility_ratio < 0.5:
+        volatility_status = "🐌 Низкая (сжатие)"
+    else:
+        volatility_status = "✅ Норма"
+
+    # === RSI ИНТЕРПРЕТАЦИЯ ===
+    if rsi >= 80:
+        rsi_interpretation = "🔴 КРИТИЧЕСКИ ПЕРЕКУПЛЕН"
+    elif rsi >= 70:
+        rsi_interpretation = "🟠 Перекуплен"
+    elif rsi >= 60:
+        rsi_interpretation = "🟡 Умеренно высокий"
+    elif rsi >= 40:
+        rsi_interpretation = "🟢 Нейтральная зона"
+    elif rsi >= 30:
+        rsi_interpretation = "🟡 Умеренно низкий"
+    elif rsi >= 20:
+        rsi_interpretation = "🟠 Перепродан"
+    else:
+        rsi_interpretation = "🔴 КРИТИЧЕСКИ ПЕРЕПРОДАН"
+
+    # === ПОЗИЦИЯ ===
+    from src.config import TRADING_FEE, MIN_PARTIAL_CLOSE_PNL, LEVERAGE, EXCHANGE
+
+    position_block = "**Статус:** НЕТ ОТКРЫТОЙ ПОЗИЦИИ"
+    pnl_context = ""
+
     if position:
-        pnl_emoji = "🟢" if position['pnl'] >= 0 else "🔴"
-        position_text = f"""
-        ЕСТЬ ОТКРЫТАЯ ПОЗИЦИЯ:
-        - Тип: {position['type'].upper()}
-        - Вход: {position['entry']}
-        - PnL: {position['pnl']} {pnl_emoji}
-        - Размер: {position['size']}
-        """
-
-    # --- PnL Analysis & Fees Context ---
-    from src.config import TRADING_FEE, MIN_PARTIAL_CLOSE_PNL, LEVERAGE
-
-    # Calculate Net PnL (Approximate)
-    net_pnl_est = 0.0
-    pnl_note = ""
-
-    if position:
-        # 1. Unpack Position Data
-        pnl_usdt = float(position['pnl']) # Unrealized PnL in USDT
-        size_coin = float(position['size']) # Size in COIN (e.g. BTC)
+        pnl_usdt = float(position['pnl'])
+        size_coin = float(position['size'])
         entry_price = float(position['entry'])
+        pos_type = position['type'].upper()
 
-        # 2. Calculate Value & Margin
-        # Value = Size * Entry (approximation for initial value)
-        position_value_usdt = size_coin * entry_price
-        margin_usdt = position_value_usdt / LEVERAGE if LEVERAGE > 0 else position_value_usdt
-
-        # 3. Calculate Fees (USDT)
-        # Fee = Value * FeeRate * 2 (Entry + Exit)
-        # Note: TRADING_FEE in config is usually percent (e.g. 0.05).
-        # If it's 0.05, we need to divide by 100 to get rate.
+        # Расчёт PnL метрик
+        position_value = size_coin * entry_price
+        margin = position_value / LEVERAGE if LEVERAGE > 0 else position_value
         fee_rate = TRADING_FEE / 100.0
-        total_fee_usdt = position_value_usdt * fee_rate * 2.0
+        total_fee = position_value * fee_rate * 2.0
+        net_pnl = pnl_usdt - total_fee
+        roe_percent = (pnl_usdt / margin * 100) if margin > 0 else 0
 
-        # 4. Calculate Net PnL (USDT)
-        net_pnl_usdt = pnl_usdt - total_fee_usdt
+        pnl_emoji = "🟢" if pnl_usdt >= 0 else "🔴"
 
-        # 5. Calculate Percentages (ROE & Fee Impact) relative to Margin
-        roe_percent = (pnl_usdt / margin_usdt * 100) if margin_usdt > 0 else 0.0
-        fee_impact_percent = (total_fee_usdt / margin_usdt * 100) if margin_usdt > 0 else 0.0
-        net_roe_percent = roe_percent - fee_impact_percent
+        position_block = f"""**Статус:** ЕСТЬ ОТКРЫТАЯ ПОЗИЦИЯ
+| Параметр | Значение |
+|----------|----------|
+| Тип | {pos_type} |
+| Цена входа | {entry_price:.2f} |
+| Размер | {size_coin} |
+| PnL (USDT) | {pnl_usdt:.2f} {pnl_emoji} |
+| ROE | {roe_percent:.2f}% |
+| Комиссия (est) | ~{total_fee:.2f} USDT |
+| Чистый PnL | ~{net_pnl:.2f} USDT |"""
 
-        # Soft Warning / Context Note
-        # Trigger if Net ROE is low or slightly negative but PnL is positive
-        if pnl_usdt > 0 and net_roe_percent < MIN_PARTIAL_CLOSE_PNL:
-             pnl_note = f"""
-    > [!NOTE]
-    > **LOW PROFIT WARNING**:
-    > - Текущий PnL: {pnl_usdt:.2f}USDT ({roe_percent:.2f}% ROE)
-    > - Комиссия (Est): ~{total_fee_usdt:.2f}USDT (-{fee_impact_percent:.2f}% ROE Impact)
-    > - Чистая прибыль: ~{net_pnl_usdt:.2f}USDT ({net_roe_percent:.2f}%)
-    > **СОВЕТ**: Избегай частичного закрытия (close_partial), так как прибыль ничтожна.
-    > Лучше держи (HOLD) для роста, либо закрывай полностью (CLOSE), если тренд развернулся и нужно бежать.
-    """
+        if pnl_usdt > 0 and roe_percent < MIN_PARTIAL_CLOSE_PNL * 2:
+            pnl_context = f"""
+> ⚠️ **LOW PROFIT WARNING**: Чистый PnL слишком мал для partial close.
+> Рекомендация: HOLD для роста или CLOSE если тренд сломан."""
 
-    # Определяем стратегию в зависимости от настроек новостей и агрессивности
-    from src.config import TRADING_FEE, AGGRESSIVE_MODE, AGGRESSIVE_SETTINGS
+    # === КОНФИГУРАЦИЯ СТРАТЕГИИ ===
+    from src.config import AGGRESSIVE_MODE, AGGRESSIVE_SETTINGS
+
+    if AGGRESSIVE_MODE:
+        rsi_long_max = AGGRESSIVE_SETTINGS.get("RSI_BUY_COND", 65)
+        rsi_long_forbidden = AGGRESSIVE_SETTINGS.get("RSI_BUY_FORBIDDEN", 80)
+        rsi_short_min = AGGRESSIVE_SETTINGS.get("RSI_SELL_COND", 35)
+        rsi_short_forbidden = AGGRESSIVE_SETTINGS.get("RSI_SELL_FORBIDDEN", 20)
+        min_confidence = AGGRESSIVE_SETTINGS.get("MIN_CONFIDENCE", 0.6)
+        min_rr = AGGRESSIVE_SETTINGS.get("MIN_RISK_REWARD_RATIO", 1.3)
+        strategy_mode = "AGGRESSIVE"
+    else:
+        rsi_long_max = AI_THRESHOLDS.get('RSI_BUY_ENTRY_MAX', 65)
+        rsi_long_forbidden = AI_THRESHOLDS.get('RSI_OVERBOUGHT', 70)
+        rsi_short_min = AI_THRESHOLDS.get('RSI_SELL_ENTRY_MIN', 35)
+        rsi_short_forbidden = AI_THRESHOLDS.get('RSI_OVERSOLD', 30)
+        min_confidence = 0.7
+        min_rr = 1.5
+        strategy_mode = "BALANCED"
+
     min_profit_breakeven = max(0.2, TRADING_FEE * 2.5)
     min_profit_partial = max(0.5, TRADING_FEE * 4.0)
 
-    # Настройки порогов RSI в зависимости от режима
-    if AGGRESSIVE_MODE:
-        rsi_buy_cond = AGGRESSIVE_SETTINGS.get("RSI_BUY_COND", 60)
-        rsi_buy_forbidden = AGGRESSIVE_SETTINGS.get("RSI_BUY_FORBIDDEN", 80)
-        rsi_sell_cond = AGGRESSIVE_SETTINGS.get("RSI_SELL_COND", 40)
-        rsi_sell_forbidden = AGGRESSIVE_SETTINGS.get("RSI_SELL_FORBIDDEN", 20)
-        strategy_title = "АГРЕССИВНАЯ СТРАТЕГИЯ (AGGRESSIVE TREND FOLLOWING)"
-        entry_desc = "Ищи возможности для входа по тренду. Допускаются входы при более высоком RSI, если тренд сильный."
+    # === HOLD MINUTES ESTIMATION ===
+    from src.config import CHART_RANGES, DEFAULT_CHART_RANGE, SMART_SAMPLING, MOMENTUM_STRATEGY
+
+    current_interval = "1m"
+    if DEFAULT_CHART_RANGE in CHART_RANGES:
+        current_interval = CHART_RANGES[DEFAULT_CHART_RANGE].get("interval", "1m")
+
+    # Парсинг интервала в минуты
+    interval_minutes = 1
+    if current_interval.endswith("m"):
+        interval_minutes = int(current_interval[:-1])
+    elif current_interval.endswith("h"):
+        interval_minutes = int(current_interval[:-1]) * 60
+
+    # Средний ход за свечу
+    if len(close_prices) >= 10:
+        moves = [abs(close_prices[i] - close_prices[i-1]) for i in range(-9, 0)]
+        avg_move_per_candle = sum(moves) / len(moves) if moves else atr
     else:
-        # В обычном режиме берем значения из конфигурации
-        rsi_buy_cond = AI_THRESHOLDS.get('RSI_BUY_ENTRY_MAX', 65)
-        rsi_buy_forbidden = AI_THRESHOLDS['RSI_OVERBOUGHT']
-        rsi_sell_cond = AI_THRESHOLDS.get('RSI_SELL_ENTRY_MIN', 35)
-        rsi_sell_forbidden = AI_THRESHOLDS['RSI_OVERSOLD']
-        strategy_title = "СБАЛАНСИРОВАННАЯ СТРАТЕГИЯ (TREND FOLLOWING)"
-        entry_desc = f"Ищем вход по тренду. Допускается вход при RSI до {rsi_buy_cond} (для BUY) и от {rsi_sell_cond} (для SELL), если есть импульс."
+        avg_move_per_candle = atr
 
-    if ENABLE_NEWS:
-        strategy_text = f"""
-    **СТРАТЕГИЯ УПРАВЛЕНИЯ ПОЗИЦИЕЙ (ПРИОРИТЕТ №1):**
-    {pnl_note}
-    1.  **SECURE PROFIT**: Если PnL > {min_profit_breakeven:.2f}% (комиссия {TRADING_FEE}% покрыта), РАССМОТРИ перенос Stop Loss в БЕЗУБЫТОК.
-    2.  **CLOSE_PARTIAL**: Используй ТОЛЬКО для фиксации **существенной** прибыли. Не фиксируй "копейки" (Net PnL < {min_profit_partial:.2f}%, т.е. меньше 4x комиссии).
-    3.  **CLOSE**: Если тренд развернулся против позиции ИЛИ достигнут Take Profit.
-    4.  **HOLD**: Если тренд сильный и PnL растет.
-
-    **СТРАТЕГИЯ ВХОДА ({strategy_title}):**
-    *{entry_desc}*
-    1.  **BUY**: (Позитивные новости + RSI < {rsi_buy_cond}) **И** (Тренд UP + Откат). НЕ ПОКУПАЙ НА ХАЯХ (RSI > {rsi_buy_forbidden})!
-    2.  **SELL**: (Негативные новости + RSI > {rsi_sell_cond}) **И** (Тренд DOWN + Отскок). НЕ ПРОДАВАЙ НА ДНЕ (RSI < {rsi_sell_forbidden})!
-    3.  **HOLD**: Если нет четкого сигнала.
-        """
-        news_section = f"""
-    ### НОВОСТНОЙ ФОН:
-    {news_text.strip()}
-        """
+    # Расчёт hold_minutes
+    distance_to_tp_pct = max(resistance_dist_pct, support_dist_pct)
+    if avg_move_per_candle > 0 and current_price > 0:
+        distance_to_tp_abs = (distance_to_tp_pct / 100) * current_price
+        est_candles = distance_to_tp_abs / avg_move_per_candle if avg_move_per_candle > 0 else 30
+        hold_minutes_est = int(est_candles * interval_minutes * 1.2)
     else:
-        strategy_text = f"""
-    **СТРАТЕГИЯ УПРАВЛЕНИЯ ПОЗИЦИЕЙ (ПРИОРИТЕТ №1):**
-    {pnl_note}
-    1.  **SECURE PROFIT**: Если PnL > {min_profit_breakeven:.2f}% (комиссия {TRADING_FEE}% покрыта), РАССМОТРИ перенос Stop Loss в БЕЗУБЫТОК.
-    2.  **CLOSE_PARTIAL**: Используй ТОЛЬКО для фиксации **существенной** прибыли. Не фиксируй "копейки" (Net PnL < {min_profit_partial:.2f}%, т.е. меньше 4x комиссии).
-    3.  **CLOSE**: Если тренд сломан ИЛИ достигнут Take Profit.
-    4.  **HOLD**: Если тренд сохраняется.
+        hold_minutes_est = 30
 
-    **СТРАТЕГИЯ ВХОДА ({strategy_title}):**
-    *{entry_desc}*
-    1.  **BUY**:
-        - Тренд: UP (Цена > SMA)
-        - Условие: RSI < {rsi_buy_cond} (Откат или не перекуплен)
-        - ЗАПРЕТ: Не покупай, если RSI > {rsi_buy_forbidden} (Перекупленность).
-    2.  **SELL**:
-        - Тренд: DOWN (Цена < SMA)
-        - Условие: RSI > {rsi_sell_cond} (Коррекция или не перепродан)
-        - ЗАПРЕТ: Не продавай, если RSI < {rsi_sell_forbidden} (Перепроданность).
-    3.  **HOLD**: Если условия входа не идеальны.
-        """
-        news_section = ""
+    # Используем настройки из конфига
+    min_hold = MOMENTUM_STRATEGY.get("min_hold_minutes", 3)
+    max_hold = MOMENTUM_STRATEGY.get("max_hold_minutes", 480)
+    atr_sl_mult = MOMENTUM_STRATEGY.get("atr_sl_multiplier", 1.5)
+    atr_tp_mult = MOMENTUM_STRATEGY.get("atr_tp_multiplier", 2.5)
+    max_candles = MOMENTUM_STRATEGY.get("max_candles_in_prompt", 50)
+    min_vol_ratio = MOMENTUM_STRATEGY.get("min_volume_ratio", 0.7)
+    trend_consensus_req = MOMENTUM_STRATEGY.get("trend_consensus_required", False)
+    momentum_entry = MOMENTUM_STRATEGY.get("momentum_entry_enabled", True)
+    momentum_candles = MOMENTUM_STRATEGY.get("momentum_consecutive_candles", 3)
+    hold_minutes_est = max(min_hold, min(max_hold, hold_minutes_est))
 
-    from src.config import ENABLE_ADVANCED_ANALYSIS
-
-    # Calculate advanced metrics if enabled
-    advanced_analysis_text = ""
-    if ENABLE_ADVANCED_ANALYSIS:
-        # Extract numerical data from price dicts
-        close_prices = [float(p['closePrice']) for p in prices]
-        volumes = [float(p['volume']) for p in prices]
-
-        sr_levels = calculate_support_resistance(close_prices)
-        volume_context = analyze_volume_profile(volumes, close_prices)
-
-        advanced_analysis_text = f"""
-    ### РЫНОЧНАЯ СТРУКТУРА И ПСИХОЛОГИЯ:
-    - Ближайшие Поддержки: {sr_levels['supports']}
-    - Ближайшие Сопротивления: {sr_levels['resistances']}
-    - Контекст Объема/Волатильности: {volume_context}
-
-    ### ПСИХОЛОГИЧЕСКИЙ АНАЛИЗ:
-    1. Оцени, кто контролирует рынок (Быки или Медведи)?
-    2. Есть ли признаки "ловушки" для трейдеров или панических продаж?
-    3. Учти уровни поддержки/сопротивления при расчете SL/TP.
-    4. Соблюдай адекватный Risk Management. Тейк-профит должен быть разумным относительно риска. Не ставь огромные стопы ради безопасности, если это не оправдано волатильностью.
-        """
-
-    # Формируем историю свечей для контекста ИИ
-    def get_price_value(price_item):
-        if isinstance(price_item, dict):
-            return float(price_item["bid"])
-        return float(price_item)
-
-    history_lines = ["Timestamp | Open | High | Low | Close | Volume"]
-
-    # Get context limit from config
-    from src.config import CHART_RANGES, DEFAULT_CHART_RANGE, SMART_SAMPLING
-    context_limit = 500 # Default fallback
+    # === ИСТОРИЯ СВЕЧЕЙ (Smart Sampling) ===
+    context_limit = 500
     if DEFAULT_CHART_RANGE in CHART_RANGES:
         context_limit = CHART_RANGES[DEFAULT_CHART_RANGE].get("ai_context_candles", 500)
 
-    # Smart Sampling Logic
     if SMART_SAMPLING.get("enabled", True):
         recent_count = SMART_SAMPLING.get("recent_candles", 30)
         step = SMART_SAMPLING.get("history_step", 10)
 
-        # 1. Get the full context range first
         full_context_prices = prices[-context_limit:]
 
-        # 2. Split into recent (high res) and historical (low res)
         if len(full_context_prices) > recent_count:
             recent_part = full_context_prices[-recent_count:]
             history_part = full_context_prices[:-recent_count]
 
-            # Sample history part (Aggregation)
             sampled_history = []
             for i in range(0, len(history_part), step):
                 chunk = history_part[i:i+step]
                 if not chunk:
                     continue
 
-                # Aggregate
                 agg_open = get_price_value(chunk[0].get("openPrice", 0))
                 agg_close = get_price_value(chunk[-1].get("closePrice", 0))
                 agg_high = max(get_price_value(c.get("highPrice", 0)) for c in chunk)
@@ -375,77 +489,231 @@ def analyze_symbol(symbol, position=None):
                     "volume": agg_vol
                 })
 
-            # Combine: Oldest -> Newest
             final_prices = sampled_history + recent_part
         else:
             final_prices = full_context_prices
     else:
         final_prices = prices[-context_limit:]
 
-    for p in final_prices:
-        ts = p.get("snapshotTimeUTC", "").replace("T", " ")
+    # Формируем таблицу свечей
+    candle_lines = []
+    for p in final_prices:  # Все свечи после smart sampling
+        ts = p.get("snapshotTimeUTC", "")[-8:] if p.get("snapshotTimeUTC") else ""
         o = get_price_value(p.get("openPrice", 0))
         h = get_price_value(p.get("highPrice", 0))
         l = get_price_value(p.get("lowPrice", 0))
         c = get_price_value(p.get("closePrice", 0))
-        v = p.get("volume", 0)
-        history_lines.append(f"{ts} | {o:.5f} | {h:.5f} | {l:.5f} | {c:.5f} | {v:.2f}")
+        v = float(p.get("volume", 0))
+        body = "🟢" if c > o else "🔴" if c < o else "⚪"
+        candle_lines.append(f"{ts} | {o:.2f} | {h:.2f} | {l:.2f} | {c:.2f} | {v:.1f} | {body}")
 
-    price_history_text = "\n".join(history_lines)
+    candle_history = "\n".join(candle_lines)
 
-    # Get current interval
-    current_interval = "5m" # Default
-    if DEFAULT_CHART_RANGE in CHART_RANGES:
-        current_interval = CHART_RANGES[DEFAULT_CHART_RANGE].get("interval", "5m")
+    # === НОВОСТИ (если включены) ===
+    news_section = ""
+    if ENABLE_NEWS and news:
+        news_items = []
+        for item in news[:5]:  # Максимум 5 новостей
+            news_items.append(f"- [{item.get('timestamp', 'N/A')}] {item.get('title', 'N/A')}")
+        news_section = f"""
+---
 
-    # Формируем промпт
-    prompt = f"""
-    Ты — профессиональный алгоритмический трейдер. Твоя задача — принять торговое решение для {symbol} на основе предоставленных данных.
+## НОВОСТНОЙ ФОН (для контекста)
+{chr(10).join(news_items)}
 
-    ### ТЕКУЩАЯ ПОЗИЦИЯ:
-    {position_text}
+**ВАЖНО**: Новости — вторичный фактор. Технический анализ имеет приоритет.
+"""
 
-    ### ИСТОРИЧЕСКИЕ ДАННЫЕ (CANDLES - Last {len(final_prices)} sampled from {context_limit}):
-    {price_history_text}
+    # === ФОРМИРУЕМ ОПТИМИЗИРОВАННЫЙ ПРОМПТ ===
+    prompt = f"""## РОЛЬ И ОГРАНИЧЕНИЯ
+Ты — алгоритмический торговый агент. Ты НЕ человек. Ты НЕ даёшь советы.
+Ты ПРИНИМАЕШЬ РЕШЕНИЕ и возвращаешь его в строгом JSON-формате.
 
-    ### РЫНОЧНЫЕ ДАННЫЕ ({current_interval} таймфрейм):
-    - Цена: {current_price:.5f}
-    - SMA({AI_THRESHOLDS['SMA_PERIOD']}): {sma:.5f}
-    - RSI({AI_THRESHOLDS['RSI_PERIOD']}): {rsi:.2f}
-    - ТЕКУЩИЙ ТРЕНД: {trend} (Цена {'выше' if trend == 'UP' else 'ниже'} SMA)
-    {advanced_analysis_text}
-    {news_section}
-    ### ТОРГОВАЯ СТРАТЕГИЯ:
-    {strategy_text}
+**КРИТИЧЕСКИЕ ОГРАНИЧЕНИЯ:**
+- Ты можешь анализировать ТОЛЬКО предоставленные данные
+- Ты НЕ имеешь доступа к внешним источникам
+- Ты НЕ можешь "думать" о том, что могло бы быть — только о том, что ЕСТЬ в данных
+- Если данных недостаточно для уверенного решения — action = "hold"
 
-    ### ТВОЯ ЗАДАЧА:
-    1. Учти наличие открытой позиции.
-    2. Проверь условия входа согласно стратегии.
-    3. Рассчитай технические уровни (поддержка/сопротивление, SMA)
-    4. Рассчитай уровни Stop Loss и Take Profit.
-    5. Risk Management:
-       - Оцени риск сделки.
-       - Убедись, что потенциальная прибыль оправдывает риск.
-    6. Прими решение: buy, sell, close, close_partial, или hold.
+---
 
-    ### ФОРМАТ ОТВЕТА (JSON ONLY):
-    {{
-        "action": "buy" | "sell" | "close" | "close_partial" | "hold",
-        "confidence": 0.0-1.0 (0.8+ для сильных сигналов),
-        "percentage": 0.1-1.0 (Только для close_partial, например 0.5 для 50%),
-        "stop_loss": float (Цена стоп-лосса, ОБЯЗАТЕЛЬНО для buy/sell/hold),
-        "take_profit": float (Цена тейк-профита, ОБЯЗАТЕЛЬНО для buy/sell/hold),
+## ТОРГОВЫЙ ИНСТРУМЕНТ
+| Параметр | Значение |
+|----------|----------|
+| Символ | {symbol} |
+| Биржа | {EXCHANGE.upper()} |
+| Таймфрейм | {current_interval} |
+| Леверидж | {LEVERAGE}x |
 
-        "reason": "Краткое объяснение: Позиция, Тренд, RSI, Новости (если есть)."
-    }}
-    """
+---
+
+## ТЕКУЩЕЕ СОСТОЯНИЕ ПОЗИЦИИ
+{position_block}
+{pnl_context}
+
+---
+
+## РЫНОЧНЫЕ ДАННЫЕ
+
+### Цена и базовые индикаторы
+| Параметр | Значение | Интерпретация |
+|----------|----------|---------------|
+| Текущая цена | {current_price:.2f} | — |
+| SMA({AI_THRESHOLDS.get('SMA_PERIOD', 20)}) | {sma:.2f} | {"Цена ВЫШЕ SMA → БЫЧИЙ контекст" if current_price > sma else "Цена НИЖЕ SMA → МЕДВЕЖИЙ контекст"} |
+| RSI({AI_THRESHOLDS.get('RSI_PERIOD', 14)}) | {rsi:.1f} | {rsi_interpretation} |
+| ATR(14) | {atr:.2f} | Средняя волатильность за период |
+
+### Трендовый контекст
+| Индикатор | Значение | Сигнал |
+|-----------|----------|--------|
+| EMA(9) | {ema9:.2f} | {"🟢 Быстрая выше медленной" if ema9 > ema21 else "🔴 Быстрая ниже медленной"} |
+| EMA(21) | {ema21:.2f} | — |
+| Глобальный тренд | {global_trend} | Цена {"выше" if global_trend == "UP" else "ниже"} SMA |
+| Локальный момент | {local_trend} | EMA crossover |
+| Консенсус трендов | {"✅ ДА" if trends_aligned else "⚠️ НЕТ"} | {"Оба тренда совпадают" if trends_aligned else "Тренды расходятся — высокий риск"} |
+| Последние 5 свечей | {last_5_direction} | {direction_desc} |
+
+### Ключевые уровни
+| Тип | Уровень | Расстояние от цены |
+|-----|---------|-------------------|
+| Сопротивление | {resistance:.2f} | {resistance_dist_pct:.2f}% ⬆️ |
+| Поддержка | {support:.2f} | {support_dist_pct:.2f}% ⬇️ |
+| Pivot Point | {pivot:.2f} | {pivot_dist_pct:+.2f}% |
+
+### Объём и волатильность
+| Метрика | Значение | Статус |
+|---------|----------|--------|
+| Объём vs Avg(20) | {volume_ratio:.2f}x | {volume_status} |
+| Волатильность vs ATR | {volatility_ratio:.2f}x | {volatility_status} |
+
+---
+
+## ИСТОРИЯ СВЕЧЕЙ (последние {len(candle_lines)})
+```
+Time | Open | High | Low | Close | Vol | Body
+{candle_history}
+```
+
+---
+
+## СТРАТЕГИЯ: MOMENTUM BREAKOUT ({strategy_mode} MODE)
+
+### Фаза 1: ОПРЕДЕЛЕНИЕ КОНТЕКСТА
+| Сигнал | Статус | Интерпретация |
+|--------|--------|---------------|
+| Глобальный тренд | **{global_trend}** | Цена {">" if global_trend == "UP" else "<"} SMA |
+| Локальный момент | **{local_trend}** | EMA9 {">" if local_trend == "BULLISH" else "<"} EMA21 |
+| Тренды совпадают | **{"✅ ДА" if trends_aligned else "⚠️ НЕТ"}** | {"Высокая уверенность" if trends_aligned else "Торговать можно, но с осторожностью"} |
+| Последние {momentum_candles} свечи | **{last_5_direction}** | {direction_desc} |
+
+### Фаза 2: УСЛОВИЯ ВХОДА (AGGRESSIVE MODE)
+
+> **ВАЖНО**: В AGGRESSIVE режиме консенсус трендов {"ОБЯЗАТЕЛЕН" if trend_consensus_req else "НЕ обязателен"}.
+> {"Достаточно ОДНОГО трендового сигнала для входа (с пониженной confidence)." if not trend_consensus_req else ""}
+
+#### 🟢 LONG (BUY) — нужно 2/3 условий:
+1. **Тренд**: Цена > SMA **ИЛИ** EMA9 > EMA21 (любое одно)
+2. **RSI**: в диапазоне 35-{rsi_long_max} (широкий коридор)
+3. **Volume**: >= {min_vol_ratio}x от среднего
+
+**🚀 MOMENTUM ENTRY (альтернатива):**
+{"✅ ВКЛЮЧЕН" if momentum_entry else "❌ ВЫКЛЮЧЕН"} — Если последние {momentum_candles}+ свечей однонаправленные (бычьи) И RSI > 50 и растёт → валидный LONG даже без полного чек-листа.
+
+**🚫 HARD STOP LONG:**
+- RSI > {rsi_long_forbidden} — КРИТИЧЕСКАЯ перекупленность
+- Volume < 0.3x — МЁРТВЫЙ рынок
+
+#### 🔴 SHORT (SELL) — нужно 2/3 условий:
+1. **Тренд**: Цена < SMA **ИЛИ** EMA9 < EMA21 (любое одно)
+2. **RSI**: в диапазоне {rsi_short_min}-65 (широкий коридор)
+3. **Volume**: >= {min_vol_ratio}x от среднего
+
+**🚀 MOMENTUM ENTRY (альтернатива):**
+{"✅ ВКЛЮЧЕН" if momentum_entry else "❌ ВЫКЛЮЧЕН"} — Если последние {momentum_candles}+ свечей однонаправленные (медвежьи) И RSI < 50 и падает → валидный SHORT.
+
+**🚫 HARD STOP SHORT:**
+- RSI < {rsi_short_forbidden} — КРИТИЧЕСКАЯ перепроданность
+- Volume < 0.3x — МЁРТВЫЙ рынок
+
+### Фаза 3: УПРАВЛЕНИЕ ПОЗИЦИЕЙ (если ЕСТЬ открытая позиция)
+
+**Приоритет решений:**
+1. **CLOSE** — полное закрытие, если:
+   - Тренд развернулся (EMA crossover против позиции)
+   - RSI в экстремальной зоне против позиции
+   - PnL отрицательный И тренд против нас
+
+2. **CLOSE_PARTIAL (30-50%)** — частичная фиксация, если:
+   - PnL > {min_profit_partial:.1f}% (покрывает 3x комиссии)
+   - Цена приближается к сильному уровню
+
+3. **HOLD** — удерживать, если:
+   - Тренд сохраняется в нашу сторону
+   - PnL растёт или стабилен
+   - Нет признаков разворота
+
+### Фаза 4: РАСЧЁТ SL/TP
+
+**Для LONG:**
+- Stop Loss = max(Поддержка - ATR*0.5, Entry - ATR*{atr_sl_mult}) = ~{max(support - atr*0.5, current_price - atr*atr_sl_mult):.2f}
+- Take Profit = min(Сопротивление, Entry + ATR*{atr_tp_mult}) = ~{min(resistance, current_price + atr*atr_tp_mult):.2f}
+
+**Для SHORT:**
+- Stop Loss = min(Сопротивление + ATR*0.5, Entry + ATR*{atr_sl_mult}) = ~{min(resistance + atr*0.5, current_price + atr*atr_sl_mult):.2f}
+- Take Profit = max(Поддержка, Entry - ATR*{atr_tp_mult}) = ~{max(support, current_price - atr*atr_tp_mult):.2f}
+
+**Валидация SL/TP:**
+- Risk:Reward минимум 1:{min_rr}
+- StopLoss ПРОТИВ направления сделки
+- TakeProfit ПО направлению сделки
+{news_section}
+---
+
+## HOLD_MINUTES (Рекомендуемое время удержания)
+| Параметр | Значение |
+|----------|----------|
+| ATR | {atr:.2f} |
+| Avg Move/Candle | {avg_move_per_candle:.4f} |
+| Interval | {interval_minutes} мин |
+| Расчётное время | ~{hold_minutes_est} мин |
+| Диапазон | {min_hold}-{max_hold} мин |
+
+---
+
+## ФОРМАТ ОТВЕТА
+
+Верни ТОЛЬКО валидный JSON без markdown-блоков, без комментариев:
+
+{{
+    "action": "buy" | "sell" | "close" | "close_partial" | "hold",
+    "confidence": <float 0.0-1.0, для buy/sell требуется >= {min_confidence}>,
+    "percentage": <float 0.1-1.0, ТОЛЬКО для close_partial>,
+    "stop_loss": <float, ОБЯЗАТЕЛЬНО для buy/sell>,
+    "take_profit": <float, ОБЯЗАТЕЛЬНО для buy/sell>,
+    "hold_minutes": <int {min_hold}-{max_hold}>,
+    "reason": "<макс 100 символов: [ACTION] потому что [КЛЮЧЕВОЙ ФАКТОР]>"
+}}
+
+**Валидация перед ответом:**
+1. action из списка: buy, sell, close, close_partial, hold
+2. confidence: 0.0-1.0 (buy/sell требуют >= {min_confidence})
+3. stop_loss < current_price для BUY, > current_price для SELL
+4. take_profit > current_price для BUY, < current_price для SELL
+5. hold_minutes: {min_hold}-{max_hold}
+"""
 
     return {
         "symbol": symbol,
         "current_price": current_price,
         "sma": sma,
         "rsi": rsi,
+        "ema9": ema9,
+        "ema21": ema21,
+        "atr": atr,
+        "global_trend": global_trend,
+        "local_trend": local_trend,
         "has_position": bool(position),
+        "position": position,  # <-- Added full position object
         "prompt": prompt.strip()
     }
 

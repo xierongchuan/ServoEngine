@@ -8,19 +8,18 @@
       "SOLUSD"
     ],
     "bingx": [
-      "BTCUSDT",
       "ETHUSDT",
-      "XRPUSD",
-      "PIPPINUSDT"
+      "LTCUSDT",
+      "XRPUSDT"
     ]
   },
   "EXCHANGE_FEES": {
     "capital": 0.0,
-    "bingx": 0.05
+    "bingx": 0.07
   },
   "POSITION_SIZE_PERCENT": 1.0,
   "MIN_TRADE_AMOUNT_USDT": 10.0,
-  "LEVERAGE": 18,
+  "LEVERAGE": 20,
   "TAKE_PROFIT_PERCENT": 1.5,
   "STOP_LOSS_PERCENT": 1.5,
   "MIN_CONFIDENCE_THRESHOLD": 0.7,
@@ -148,11 +147,23 @@
   },
   "AGGRESSIVE_MODE": true,
   "AGGRESSIVE_SETTINGS": {
-    "RSI_BUY_COND": 60,
-    "RSI_BUY_FORBIDDEN": 80,
-    "RSI_SELL_COND": 40,
-    "RSI_SELL_FORBIDDEN": 20,
+    "RSI_BUY_COND": 70,
+    "RSI_BUY_FORBIDDEN": 85,
+    "RSI_SELL_COND": 30,
+    "RSI_SELL_FORBIDDEN": 15,
     "MIN_RISK_REWARD_RATIO": 1.3,
-    "MIN_CONFIDENCE": 0.6
+    "MIN_CONFIDENCE": 0.55
+  },
+  "MOMENTUM_STRATEGY": {
+    "enabled": true,
+    "min_hold_minutes": 3,
+    "max_hold_minutes": 480,
+    "atr_sl_multiplier": 1.5,
+    "atr_tp_multiplier": 2.5,
+    "min_volume_ratio": 0.7,
+    "max_candles_in_prompt": 50,
+    "trend_consensus_required": false,
+    "momentum_entry_enabled": true,
+    "momentum_consecutive_candles": 3
   }
 }

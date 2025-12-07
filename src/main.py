@@ -113,6 +113,42 @@ def run_pipeline():
     print("=" * 80)
     info("✅ ТОРГОВЫЙ ЦИКЛ ЗАВЕРШЕН")
 
+def run_multiprocess_pipeline():
+    """Запускает отдельный процесс для каждого символа (Multiprocessing)"""
+    import multiprocessing
+    from src.config import SYMBOLS
+    from src.core.process_worker import run_symbol_pipeline
+
+    print("\n🚀 Запуск мультипроцессного пайплайна...")
+    info("🚀 Запуск мультипроцессного пайплайна...")
+
+    processes = []
+
+    for symbol in SYMBOLS:
+        p = multiprocessing.Process(
+            target=run_symbol_pipeline,
+            args=(symbol,),
+            name=f"Worker-{symbol}"
+        )
+        # ВАЖНО: Делаем процесс демоном, чтобы он умирал вместе с главным процессом
+        p.daemon = True
+        processes.append(p)
+        p.start()
+        print(f"   🔄 Запущен бесконечный процесс для {symbol} (PID: {p.pid})")
+        info(f"🔄 Запущен бесконечный процесс для {symbol} (PID: {p.pid})")
+
+    print("✅ Все процессы запущены. Нажмите Ctrl+C для остановки.")
+    info("✅ Все процессы запущены")
+
+    # Держим главный процесс живым, пока не нажмут Ctrl+C
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n🛑 Остановка главного процесса...")
+        info("🛑 Остановка главного процесса...")
+        # Демоны будут убиты автоматически при выходе из main
+
 def main():
     """Главная функция"""
     print_banner()
@@ -122,8 +158,8 @@ def main():
         sys.exit(1)
 
     try:
-        # Запускаем торговый пайплайн
-        run_pipeline()
+        # Запускаем торговый пайплайн в режиме мультипроцессинга
+        run_multiprocess_pipeline()
 
         completion_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print(f"\n✨ Система успешно завершила работу в {completion_time}")

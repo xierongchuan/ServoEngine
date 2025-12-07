@@ -100,11 +100,22 @@ def cleanup_old_files():
     except Exception as e:
         error(f"❌ Ошибка при очистке старых файлов: {str(e)}")
 
-def plot_symbol(symbol, time_range=None):
+def plot_symbol(symbol, time_range=None, current_position=None):
     """Строит график для символа и сохраняет как PNG"""
     # Загружаем данные
     with open(f"{DATA_DIR}/prices/{get_filename(symbol)}.json") as f:
         prices = json.load(f)
+
+    # ... (rest of data loading logic remains, just signature changed above) ...
+
+    # [SKIP UNCHANGED LINES TO RETAIN CONTEXT IF NEEDED, BUT HERE I PASTE FULL START TO BE SAFE OR USE CHUNK]
+    # actually I can't skip too much without breaking tool usage rules about context match.
+    # The tool requires exact match.
+
+    # I will split this into two edits for safety.
+    # Edit 1: Signature change.
+    # Edit 2: Plotting logic.
+
 
     # Determine time range settings
     if time_range is None:
@@ -324,6 +335,20 @@ def plot_symbol(symbol, time_range=None):
 
     for period in sma_periods:
         ax1.plot(dates, smas[period], label=f"SMA({period})", color=sma_colors[period], linewidth=1.5, alpha=0.9)
+
+    # Отображение текущей позиции
+    if current_position and current_position.get("status") == "OPEN":
+        try:
+            entry_price = float(current_position.get("entry_price", 0))
+            side = current_position.get("side", "UNKNOWN")
+            pnl = float(current_position.get("last_pnl", 0))
+
+            if entry_price > 0:
+                pos_color = '#00e676' if side.upper() == 'LONG' else '#ff1744'
+                label = f"{side} @ {entry_price} (PnL: {pnl})"
+                ax1.axhline(y=entry_price, color=pos_color, linestyle='--', linewidth=2, label=label)
+        except Exception as e:
+            info(f"⚠️ Ошибка отображения позиции на графике: {e}")
 
     # Оформление графика цены
     ax1.set_title(f"{symbol} - {datetime.now().strftime('%Y-%m-%d %H:%M')} ({time_range})", fontsize=20, pad=20)
