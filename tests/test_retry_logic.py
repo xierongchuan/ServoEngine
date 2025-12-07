@@ -21,7 +21,6 @@ def test_retry_logic():
         json.dumps({    # Attempt 2 (Success)
             "action": "hold",
             "confidence": 0.5,
-            "hold_minutes": 60,
             "reason": "Test Success"
         })
     ]

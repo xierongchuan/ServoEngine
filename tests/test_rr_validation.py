@@ -9,7 +9,6 @@ class TestRRValidation(unittest.TestCase):
             "confidence": 0.9,
             "stop_loss": 99.0,
             "take_profit": 102.0,
-            "hold_minutes": 60,
             "reason": "Test"
         }
         current_price = 100.0
@@ -26,7 +25,6 @@ class TestRRValidation(unittest.TestCase):
             "confidence": 0.9,
             "stop_loss": 90.0,
             "take_profit": 105.0,
-            "hold_minutes": 60,
             "reason": "Test"
         }
         current_price = 100.0
@@ -44,7 +42,6 @@ class TestRRValidation(unittest.TestCase):
             "confidence": 0.9,
             "stop_loss": 110.0,
             "take_profit": 95.0,
-            "hold_minutes": 60,
             "reason": "Test"
         }
         current_price = 100.0
@@ -60,7 +57,6 @@ class TestRRValidation(unittest.TestCase):
         prediction = {
             "action": "buy",
             "confidence": 0.9,
-            "hold_minutes": 60,
             "reason": "Test"
         }
         current_price = 100.0
@@ -76,7 +72,6 @@ class TestRRValidation(unittest.TestCase):
             "confidence": 0.5,
             "stop_loss": 90.0, # Bad R/R but shouldn't matter
             "take_profit": 105.0,
-            "hold_minutes": 60,
             "reason": "Test"
         }
         current_price = 100.0

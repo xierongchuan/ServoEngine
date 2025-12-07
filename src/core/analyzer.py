@@ -411,39 +411,14 @@ def analyze_symbol(symbol, position=None):
     min_profit_breakeven = max(0.2, TRADING_FEE * 2.5)
     min_profit_partial = max(0.5, TRADING_FEE * 4.0)
 
-    # === HOLD MINUTES ESTIMATION ===
+    # === MOMENTUM STRATEGY SETTINGS ===
     from src.config import CHART_RANGES, DEFAULT_CHART_RANGE, SMART_SAMPLING, MOMENTUM_STRATEGY
 
     current_interval = "1m"
     if DEFAULT_CHART_RANGE in CHART_RANGES:
         current_interval = CHART_RANGES[DEFAULT_CHART_RANGE].get("interval", "1m")
 
-    # Парсинг интервала в минуты
-    interval_minutes = 1
-    if current_interval.endswith("m"):
-        interval_minutes = int(current_interval[:-1])
-    elif current_interval.endswith("h"):
-        interval_minutes = int(current_interval[:-1]) * 60
-
-    # Средний ход за свечу
-    if len(close_prices) >= 10:
-        moves = [abs(close_prices[i] - close_prices[i-1]) for i in range(-9, 0)]
-        avg_move_per_candle = sum(moves) / len(moves) if moves else atr
-    else:
-        avg_move_per_candle = atr
-
-    # Расчёт hold_minutes
-    distance_to_tp_pct = max(resistance_dist_pct, support_dist_pct)
-    if avg_move_per_candle > 0 and current_price > 0:
-        distance_to_tp_abs = (distance_to_tp_pct / 100) * current_price
-        est_candles = distance_to_tp_abs / avg_move_per_candle if avg_move_per_candle > 0 else 30
-        hold_minutes_est = int(est_candles * interval_minutes * 1.2)
-    else:
-        hold_minutes_est = 30
-
     # Используем настройки из конфига
-    min_hold = MOMENTUM_STRATEGY.get("min_hold_minutes", 3)
-    max_hold = MOMENTUM_STRATEGY.get("max_hold_minutes", 480)
     atr_sl_mult = MOMENTUM_STRATEGY.get("atr_sl_multiplier", 1.5)
     atr_tp_mult = MOMENTUM_STRATEGY.get("atr_tp_multiplier", 2.5)
     max_candles = MOMENTUM_STRATEGY.get("max_candles_in_prompt", 50)
@@ -451,7 +426,6 @@ def analyze_symbol(symbol, position=None):
     trend_consensus_req = MOMENTUM_STRATEGY.get("trend_consensus_required", False)
     momentum_entry = MOMENTUM_STRATEGY.get("momentum_entry_enabled", True)
     momentum_candles = MOMENTUM_STRATEGY.get("momentum_consecutive_candles", 3)
-    hold_minutes_est = max(min_hold, min(max_hold, hold_minutes_est))
 
     # === ИСТОРИЯ СВЕЧЕЙ (Smart Sampling) ===
     context_limit = 500
@@ -688,7 +662,7 @@ JUST THE RAW JSON OBJECT.
     "percentage": float (0.3-1.0 for close_partial),
     "stop_loss": float (Price),
     "take_profit": float (Price),
-    "hold_minutes": int ({min_hold}-{max_hold}), // Recommended: ~{hold_minutes_est} min
+
     "reason": "СТРОГО: [SETUP_TYPE] | [KEY_REASON] | [RISK_LEVEL]"
 }}
 

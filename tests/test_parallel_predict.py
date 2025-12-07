@@ -25,7 +25,6 @@ def test_parallel_execution():
         return json.dumps({
             "action": "hold",
             "confidence": 0.5,
-            "hold_minutes": 60,
             "reason": "Test"
         })
 

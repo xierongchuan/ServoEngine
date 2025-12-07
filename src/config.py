@@ -160,8 +160,6 @@ SMART_SAMPLING = BOT_CONFIG.get("SMART_SAMPLING", {"enabled": True, "recent_cand
 ENABLE_AI_SKIP_ON_RSI = BOT_CONFIG.get("ENABLE_AI_SKIP_ON_RSI", True)
 MOMENTUM_STRATEGY = BOT_CONFIG.get("MOMENTUM_STRATEGY", {
     "enabled": True,
-    "min_hold_minutes": 3,
-    "max_hold_minutes": 480,
     "atr_sl_multiplier": 1.5,
     "atr_tp_multiplier": 2.5,
     "min_volume_ratio": 0.7,

@@ -35,7 +35,7 @@ class ExchangeClient(ABC):
         """
         Retrieves current open positions.
         Returns a dictionary where keys are symbols and values are lists of position dictionaries.
-        Position dict format: {type, entry, dealId, workingOrderId, created, hold_minutes, size, pnl}
+        Position dict format: {type, entry, dealId, workingOrderId, created, size, pnl}
         """
         pass
 

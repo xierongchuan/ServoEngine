@@ -21,7 +21,6 @@ def test_dynamic_sltp():
         "confidence": 0.9,
         "stop_loss": 90000.5,
         "take_profit": 95000.0,
-        "hold_minutes": 60,
         "reason": "Test reason"
     }
     ```
@@ -52,7 +51,6 @@ def test_dynamic_sltp():
             "confidence": 0.9,
             "stop_loss": 90000,
             "take_profit": 95000,
-            "hold_minutes": 60,
             "reason": "Test"
         }]
 
@@ -97,7 +95,6 @@ def test_dynamic_sltp():
             "confidence": 0.5,
             "stop_loss": 91500, # Move SL to profit
             "take_profit": 96000,
-            "hold_minutes": 60,
             "reason": "Update SL"
         }]
 
