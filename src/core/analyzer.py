@@ -156,9 +156,45 @@ def calculate_support_resistance(prices, window=20):
     nearest_resistances = [r for r in resistances if r > current_price][:2]
 
     return {
-        "supports": nearest_supports,
-        "resistances": nearest_resistances
+        "supports": sorted(list(set(supports))),
+        "resistances": sorted(list(set(resistances)))
     }
+
+def calculate_seb(prices, length=20, mult=2.0):
+    """
+    Calculates Standard Error Bands (Linear Regression + StdErr).
+    :return: (linreg_value, upper_seb, lower_seb, r_squared)
+    """
+    import numpy as np
+
+    if len(prices) < length:
+        return 0, 0, 0, 0
+
+    y = np.array(prices[-length:])
+    x = np.arange(length)
+
+    # Linear Regression (Least Squares)
+    A = np.vstack([x, np.ones(len(x))]).T
+    m, c = np.linalg.lstsq(A, y, rcond=None)[0]
+
+    # Regression Line
+    linreg = m * x + c
+
+    # Standard Error
+    residuals = y - linreg
+    std_err = np.sqrt(np.sum(residuals**2) / (length - 2))
+
+    # Bands
+    linreg_current = linreg[-1]
+    upper_seb = linreg_current + (mult * std_err)
+    lower_seb = linreg_current - (mult * std_err)
+
+    # R-Squared (Trend Quality)
+    ss_res = np.sum(residuals**2)
+    ss_tot = np.sum((y - np.mean(y))**2)
+    r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+
+    return linreg_current, upper_seb, lower_seb, r_squared
 
 def analyze_volume_profile(volumes, prices):
     """
@@ -302,6 +338,20 @@ def analyze_symbol(symbol, position=None):
     support_dist_pct = ((current_price - support) / current_price * 100) if current_price > 0 else 0
     pivot_dist_pct = ((current_price - pivot) / current_price * 100) if current_price > 0 else 0
 
+    # === STANDARD ERROR BANDS (SEB) ===
+    seb_linreg, seb_upper, seb_lower, seb_r_sq = calculate_seb(close_prices)
+    seb_width_pct = ((seb_upper - seb_lower) / seb_linreg * 100) if seb_linreg > 0 else 0
+
+    seb_status = "INSIDE"
+    if current_price > seb_upper:
+        seb_status = "ABOVE_UPPER (Strong Impulse)"
+    elif current_price < seb_lower:
+        seb_status = "BELOW_LOWER (Strong Drop)"
+
+    trend_quality_desc = "Low"
+    if seb_r_sq > 0.8: trend_quality_desc = "High (Stable)"
+    elif seb_r_sq > 0.5: trend_quality_desc = "Medium"
+
     # === ОБЪЁМ И ВОЛАТИЛЬНОСТЬ ===
     volumes = [float(p.get('volume', 0)) for p in prices]
     if len(volumes) >= 20:
@@ -372,16 +422,27 @@ def analyze_symbol(symbol, position=None):
 
         pnl_emoji = "🟢" if pnl_usdt >= 0 else "🔴"
 
+        # SL/TP Info
+        sl_price = float(position.get('sl', 0))
+        tp_price = float(position.get('tp', 0))
+
+        sl_info = f"{sl_price:.2f}" if sl_price > 0 else "N/A"
+        tp_info = f"{tp_price:.2f}" if tp_price > 0 else "N/A"
+
         position_block = f"""**Статус:** ЕСТЬ ОТКРЫТАЯ ПОЗИЦИЯ
 | Параметр | Значение |
 |----------|----------|
 | Тип | {pos_type} |
 | Цена входа | {entry_price:.2f} |
-| Размер | {size_coin} |
-| PnL (USDT) | {pnl_usdt:.2f} {pnl_emoji} |
+| Маржа | {margin:.2f} USDT |
+| Размер | {size_coin} ({position_value:.2f} USDT) |
+| PnL (Gross)| {pnl_usdt:.2f} {pnl_emoji} |
 | ROE | {roe_percent:.2f}% |
-| Комиссия (est) | ~{total_fee:.2f} USDT |
-| Чистый PnL | ~{net_pnl:.2f} USDT |"""
+| Комиссии | ~{total_fee:.2f} USDT (Est. Round-Trip) |
+| PnL (Net) | ~{net_pnl:.2f} USDT (После комиссий) |
+| Stop Loss | {sl_info} |
+| Take Profit | {tp_info} |"""
+
 
         if pnl_usdt > 0 and roe_percent < MIN_PARTIAL_CLOSE_PNL * 2:
             pnl_context = f"""
@@ -609,10 +670,12 @@ def analyze_symbol(symbol, position=None):
 |-----------|--------|----------|
 | Volume | {volume_status} | {volume_ratio:.2f}x |
 | Pattern | {last_5_direction} | {direction_desc} |
+| SEB (Trend) | {seb_status} | Quality: {trend_quality_desc} (R²={seb_r_sq:.2f}) |
 
 ### C. Уровни
 - **Resistance:** {resistance:.2f} (+{resistance_dist_pct:.2f}%)
 - **Support:** {support:.2f} (-{support_dist_pct:.2f}%)
+- **SE Bands:** Upper={seb_upper:.2f}, Lower={seb_lower:.2f}
 
 ---
 

@@ -179,7 +179,8 @@ DEFAULT_STYLE_PRESETS = {
     "SCALP": {
         "timeframe": "1m",
         "chart_period": "6h",
-        "loop_interval": 3, # Fast reaction
+        "loop_interval": 3, # Fast reaction search
+        "position_check_interval": 2, # Active monitoring
         "atr_sl_mult": 1.5,
         "atr_tp_mult": 2.0,
         "description": "High frequency, small moves, strict exits."
@@ -187,7 +188,8 @@ DEFAULT_STYLE_PRESETS = {
     "INTRADAY": {
         "timeframe": "5m",
         "chart_period": "1D",
-        "loop_interval": 60, # Standard: Check every new candle (5m) or faster for entry. 60s is good balance.
+        "loop_interval": 60, # Standard search
+        "position_check_interval": 10, # Active monitoring (Relaxed slightly)
         "atr_sl_mult": 2.0,
         "atr_tp_mult": 3.0,
         "description": "Day trading, capturing daily trends."
@@ -195,7 +197,8 @@ DEFAULT_STYLE_PRESETS = {
     "SWING": {
         "timeframe": "15m", # or 1h
         "chart_period": "3D",
-        "loop_interval": 900, # Recommended: 15 mins (check on candle close). No need for 5m.
+        "loop_interval": 900, # Relaxed search (15m)
+        "position_check_interval": 30, # Relaxed monitoring (30s)
         "atr_sl_mult": 3.0,
         "atr_tp_mult": 5.0,
         "description": "Multi-day holding, wider stops for volatility."

@@ -245,15 +245,71 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     # Determine chart width based on number of candles
     # We want roughly 0.15 inches per candle, but within reasonable bounds
     # This prevents "fat" candles on short ranges and "squashed" candles on long ranges
+    # Calculate Standard Error Bands for Plotting (using same logic as analyzer)
+    import numpy as np
+
+    # Needs to align with chart dates, so we calculate over the whole dataset first
+    seb_linreg = []
+    seb_upper = []
+    seb_lower = []
+
+    # SEB Parameters
+    seb_length = 20
+    seb_mult = 2.0
+
+    for i in range(len(all_closes)):
+        if i < seb_length:
+            seb_linreg.append(np.nan)
+            seb_upper.append(np.nan)
+            seb_lower.append(np.nan)
+        else:
+            y = np.array(all_closes[i-seb_length:i])
+            x = np.arange(seb_length)
+            A = np.vstack([x, np.ones(len(x))]).T
+            m, c = np.linalg.lstsq(A, y, rcond=None)[0]
+
+            # Predict next point (which corresponds to 'i')
+            # Actually, standard is to fit on previous points.
+            # Analyzer fits on LAST 20 points ending at current.
+            # So LinReg value at 'current' index is m * (length-1) + c
+
+            reg_val = m * (seb_length - 1) + c
+
+            # StdErr
+            residuals = y - (m * x + c)
+            std_err = np.sqrt(np.sum(residuals**2) / (seb_length - 2))
+
+            seb_linreg.append(reg_val)
+            seb_upper.append(reg_val + (seb_mult * std_err))
+            seb_lower.append(reg_val - (seb_mult * std_err))
+
+
     num_candles = len(dates)
     chart_width = max(10, min(30, num_candles * 0.15))
 
-
-
-    # Создаем фигуру с тремя subplot'ами (Цена, Объем, RSI)
-    # Увеличиваем размер фигуры для высокого разрешения
+    # Creates subplot figure (PRICE, VOLUME, RSI)
     # Reduced height by 25% (18 -> 13.5)
+    plt.close('all') # Fix for RuntimeWarning: More than 20 figures have been opened
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(chart_width, 13.5), gridspec_kw={'height_ratios': [3, 1, 1]}, sharex=True)
+
+    # ... (Prepare plotting data arrays for filtered range) ...
+    plot_seb_upper = []
+    plot_seb_lower = []
+    plot_seb_mid = []
+
+    # Loop over all_dates to extract the relevant slice for plotting (filtering by cutoff_time)
+    # Note: 'dates' list is already filtered above, but we need to filter SEB arrays index-wise
+
+    current_plot_index = 0
+    for i, ts_dt in enumerate(all_dates):
+        if ts_dt < cutoff_time:
+            continue
+
+        # Sync with the 'dates' loop above
+        plot_seb_upper.append(seb_upper[i])
+        plot_seb_lower.append(seb_lower[i])
+        plot_seb_mid.append(seb_linreg[i])
+
 
     # --- 1. График Цены (Candlesticks + SMAs) ---
 
@@ -338,6 +394,12 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     for period in sma_periods:
         ax1.plot(dates, smas[period], label=f"SMA({period})", color=sma_colors[period], linewidth=1.5, alpha=0.9)
 
+    # Рисуем Standard Error Bands (SEB)
+    ax1.plot(dates, plot_seb_mid, label="LinReg (SEB)", color="purple", linestyle="-.", linewidth=1.5, alpha=0.8)
+    ax1.plot(dates, plot_seb_upper, color="purple", linestyle=":", linewidth=1, alpha=0.5)
+    ax1.plot(dates, plot_seb_lower, color="purple", linestyle=":", linewidth=1, alpha=0.5)
+    ax1.fill_between(dates, plot_seb_upper, plot_seb_lower, color="purple", alpha=0.05, label="SEB (2.0)")
+
     # Отображение текущей позиции
     if current_position and current_position.get("status") == "OPEN":
         try:
@@ -349,6 +411,15 @@ def plot_symbol(symbol, time_range=None, current_position=None):
                 pos_color = '#00e676' if side.upper() == 'LONG' else '#ff1744'
                 label = f"{side} @ {entry_price} (PnL: {pnl})"
                 ax1.axhline(y=entry_price, color=pos_color, linestyle='--', linewidth=2, label=label)
+
+                # Visualizing SL/TP
+                sl_price = float(current_position.get('sl', 0) or 0)
+                tp_price = float(current_position.get('tp', 0) or 0)
+
+                if sl_price > 0:
+                    ax1.axhline(y=sl_price, color='red', linestyle=':', linewidth=1.5, label=f"SL: {sl_price}")
+                if tp_price > 0:
+                    ax1.axhline(y=tp_price, color='green', linestyle=':', linewidth=1.5, label=f"TP: {tp_price}")
         except Exception as e:
             info(f"⚠️ Ошибка отображения позиции на графике: {e}")
 
@@ -444,7 +515,7 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     # Сохраняем с высоким разрешением (перезаписываем файл)
     filename = f"{CHARTS_DIR}/{get_filename(symbol)}.png"
     plt.savefig(filename, dpi=200, bbox_inches='tight')
-    plt.close()
+    plt.close(fig) # Explicitly close the specific figure object
 
     info(f"🖼️ График для {symbol} сохранен как {filename} (Range: {time_range})")
 

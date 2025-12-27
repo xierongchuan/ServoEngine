@@ -68,8 +68,9 @@ def run_symbol_pipeline(symbol: str):
                 base_interval = preset.get("loop_interval", 60)
 
                 if real_position:
-                    # If in position: Maintain readiness (Fast loop for management)
-                    sleep_time = 2 if STRATEGY_STYLE == "SCALP" else 5
+                    # If in position: Use configured active interval
+                    pos_interval = preset.get("position_check_interval", 5)
+                    sleep_time = pos_interval
                     info(f"✅ [{symbol}] Цикл завершён ({elapsed:.2f}s). 👀 Позиция активна -> Sleep {sleep_time}s")
                 else:
                     # If searching: Relax based on strategy

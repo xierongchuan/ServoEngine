@@ -84,13 +84,19 @@ def run_chart_worker():
                 error(traceback.format_exc())
 
             # 4. Sleep ensuring accurate interval
+            # 4. Sleep ensuring accurate interval
             execution_time = time.time() - start_time
             sleep_time = max(0.5, UPDATE_INTERVAL - execution_time)
             time.sleep(sleep_time)
 
+    except KeyboardInterrupt:
+        info("🛑 [ChartWorker] Shutdown requested (KeyboardInterrupt)")
     finally:
         if ENABLE_PARALLEL_PROCESSING:
             executor.shutdown()
 
 if __name__ == "__main__":
-    run_chart_worker()
+    try:
+        run_chart_worker()
+    except KeyboardInterrupt:
+        pass

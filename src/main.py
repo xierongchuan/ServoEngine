@@ -165,13 +165,20 @@ def run_multiprocess_pipeline():
         print("\n🛑 Остановка главного процесса...")
         info("🛑 Остановка главного процесса...")
     finally:
-        # Явное завершение chart_worker, так как он не демон
-        if chart_p.is_alive():
-            print(f"   🛑 Завершение Worker-Charts ({chart_p.pid})...")
-            chart_p.terminate()
-            chart_p.join(timeout=2)
-            if chart_p.is_alive():
-                chart_p.kill()
+        # Graceful shutdown of ALL processes
+        for p in processes:
+            if p.is_alive():
+                 # Send SIGTERM
+                p.terminate()
+
+        # Wait a bit
+        time.sleep(0.5)
+
+        # Force kill if still alive
+        for p in processes:
+            if p.is_alive():
+                print(f"   💀 Force killing PID: {p.pid}")
+                p.kill()
 
 def main():
     """Главная функция"""
