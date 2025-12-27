@@ -127,93 +127,97 @@ def parse_response(response):
             "reason": "Ошибка парсинга ответа DeepSeek"
         }
 
-def should_call_ai(analysis):
+def smart_filter(analysis):
     """
-    Определяет, нужно ли вызывать ИИ на основе технических индикаторов.
-    Возвращает True, если нужен анализ ИИ.
-    Возвращает False, если ситуация нейтральная (можно просто HOLD).
+    Интеллектуальный фильтр для экономии токенов.
+    Возвращает (bool, str):
+    - True, "Reason": если нужно вызвать ИИ.
+    - False, "Reason": если можно пропустить (Auto-HOLD).
     """
     symbol = analysis["symbol"]
     has_position = analysis.get("has_position", False)
     rsi = analysis["rsi"]
     current_price = analysis["current_price"]
     sma = analysis["sma"]
+    volume_ratio = analysis.get("volume_ratio", 1.0)
 
-    # 1. Если есть открытая позиция - ВСЕГДА вызываем ИИ (нужен менеджмент позиции)
+    # 1. Если есть открытая позиция - ВСЕГДА вызываем ИИ (нужен менеджмент)
     if has_position:
-        info(f"⚠️ {symbol}: Есть открытая позиция -> Вызываем ИИ")
-        return True
+        return True, "Открытая позиция (Management)"
 
-    # 2. Фильтр по RSI (Нейтральная зона)
-    from src.config import AI_THRESHOLDS
+    # 2. Low Volume Filter (Low Cost: < 0.4x)
+    if volume_ratio < 0.4:
+        # Ignore filter if RSI is extreme (possible reversal)
+        if 25 < rsi < 75:
+            return False, f"Low Volume ({volume_ratio:.2f}x) -> Auto-HOLD (Save Cost)"
+
+    # 2. Базовые пороги
+    from src.config import AI_THRESHOLDS, ENABLE_AI_SKIP_ON_RSI, MOMENTUM_STRATEGY
     rsi_min = AI_THRESHOLDS.get("RSI_NEUTRAL_MIN", 45)
     rsi_max = AI_THRESHOLDS.get("RSI_NEUTRAL_MAX", 55)
     rsi_overbought = AI_THRESHOLDS.get("RSI_OVERBOUGHT", 70)
     rsi_oversold = AI_THRESHOLDS.get("RSI_OVERSOLD", 30)
 
-    # --- НОВЫЕ ПРОВЕРКИ ДЛЯ ЭКОНОМИИ ТОКЕНОВ ---
-    from src.config import ENABLE_AI_SKIP_ON_RSI, MOMENTUM_STRATEGY
-
-    # Пропускаем вызов ИИ для экономии, НО только если не активна Momentum-стратегия
-    # Momentum-стратегия ищет пробои именно на высоком RSI, поэтому скипать нельзя.
+    # 3. Momentum Strategy Check (Особые условия)
     momentum_enabled = MOMENTUM_STRATEGY.get("enabled", False)
 
-    if ENABLE_AI_SKIP_ON_RSI and not momentum_enabled:
-        # Если Тренд UP, но RSI уже перекуплен -> Мы не будем покупать (поздно), а продавать против тренда нельзя.
-        # Значит, AI скажет HOLD. Экономим запрос.
-        if current_price > sma and rsi > rsi_overbought:
-            info(f"💤 {symbol}: Тренд UP, но RSI({rsi}) > {rsi_overbought} (Перекуплен) -> Пропуск ИИ (Auto-HOLD)")
-            return False
+    # Пытаемся извлечь данные о Volume и Candles из prompt (так как они не передаются напрямую в analysis dict)
+    # Это "хак", но он эффективен, чтобы не переписывать весь analyzer.py
+    prompt_text = analysis.get("prompt", "")
 
-        # Если Тренд DOWN, но RSI уже перепродан -> Мы не будем продавать (поздно), а покупать против тренда нельзя.
-        # Значит, AI скажет HOLD. Экономим запрос.
-        if current_price < sma and rsi < rsi_oversold:
-            info(f"💤 {symbol}: Тренд DOWN, но RSI({rsi}) < {rsi_oversold} (Перепродан) -> Пропуск ИИ (Auto-HOLD)")
-            return False
-    # -------------------------------------------
+    # Clean Volume Check
+    high_volume = volume_ratio > 1.2
 
+    # Проверка на тренд (Global=UP, Local=BULLISH)
+    strong_uptrend = "Global) | UP" in prompt_text and "Local) | BULLISH" in prompt_text
+    strong_downtrend = "Global) | DOWN" in prompt_text and "Local) | BEARISH" in prompt_text
+
+    # --- ЛОГИКА SKIP / CALL ---
+
+    # A. RSI HIGH (> 70)
+    if rsi > rsi_overbought:
+        if momentum_enabled and strong_uptrend and high_volume:
+            return True, f"Momentum Breakout Potential (RSI={rsi}, Vol=High)"
+        if ENABLE_AI_SKIP_ON_RSI:
+            return False, f"RSI Overbought ({rsi}) & No Momentum -> Auto-HOLD"
+
+    # B. RSI LOW (< 30)
+    if rsi < rsi_oversold:
+        if momentum_enabled and strong_downtrend and high_volume:
+            return True, f"Momentum Breakdown Potential (RSI={rsi}, Vol=High)"
+        if ENABLE_AI_SKIP_ON_RSI:
+            return False, f"RSI Oversold ({rsi}) & No Momentum -> Auto-HOLD"
+
+    # C. NEUTRAL ZONE (45-55)
     if rsi_min <= rsi <= rsi_max:
-        from src.config import AGGRESSIVE_MODE, AGGRESSIVE_SETTINGS
+        # Если есть тренд (UP/DOWN) -> Call AI (Pullback search)
+        if strong_uptrend:
+            return True, "Neutral RSI + Uptrend (Possible Pullback)"
+        if strong_downtrend:
+            return True, "Neutral RSI + Downtrend (Possible Pullback)"
 
-        # В Агрессивном режиме проверяем тренд
-        if AGGRESSIVE_MODE:
-            rsi_buy_cond = AGGRESSIVE_SETTINGS.get("RSI_BUY_COND", 60)
-            rsi_sell_cond = AGGRESSIVE_SETTINGS.get("RSI_SELL_COND", 40)
+        # Если флэт -> Skip
+        return False, f"Neutral RSI ({rsi}) & Choppy/Flat -> Auto-HOLD"
 
-            # Тренд ВВЕРХ (Цена > SMA) и RSI < 60 -> Возможен откат для покупки
-            if current_price > sma and rsi < rsi_buy_cond:
-                info(f"🔥 {symbol}: Агрессивный режим. Тренд UP + RSI={rsi} -> Вызываем ИИ (Поиск отката)")
-                return True
+    # D. DEFAULT (Active Market)
+    return True, f"Active Market (RSI={rsi})"
 
-            # Тренд ВНИЗ (Цена < SMA) и RSI > 40 -> Возможен откат для продажи
-            if current_price < sma and rsi > rsi_sell_cond:
-                info(f"🔥 {symbol}: Агрессивный режим. Тренд DOWN + RSI={rsi} -> Вызываем ИИ (Поиск отката)")
-                return True
+def should_call_ai(analysis):
+    """Wrapper для совместимости, вызывает smart_filter и логирует результат."""
+    should_call, reason = smart_filter(analysis)
 
-        # Стандартная логика (или если тренд не подтвержден в агрессивном режиме)
-        # Стандартная логика:
-        # Если RSI в нейтральной зоне (48-52), но есть четкий тренд -> Вызываем ИИ
-        # Тренд UP (Цена > SMA) -> Ищем вход BUY (RSI ~50 это ОК для продолжения)
-        if current_price > sma:
-             info(f"⚡ {symbol}: Нейтральный RSI({rsi}), но Тренд UP -> Вызываем ИИ (Поиск входа)")
-             return True
+    symbol = analysis["symbol"]
+    if should_call:
+        if "Management" in reason:
+            info(f"⚠️ {symbol}: {reason} -> Вызываем ИИ")
+        elif "Momentum" in reason:
+            info(f"🔥 {symbol}: {reason} -> Вызываем ИИ")
+        else:
+            info(f"⚡ {symbol}: {reason} -> Вызываем ИИ")
+    else:
+        info(f"💤 {symbol}: {reason} -> Пропуск ИИ")
 
-        # Тренд DOWN (Цена < SMA) -> Ищем вход SELL
-        if current_price < sma:
-             info(f"⚡ {symbol}: Нейтральный RSI({rsi}), но Тренд DOWN -> Вызываем ИИ (Поиск входа)")
-             return True
-
-        # Если цена прямо на SMA (флэт) -> HOLD
-        if abs(current_price - sma) / sma < 0.005:
-            info(f"💤 {symbol}: Нейтральный рынок (RSI={rsi}, Цена~SMA) -> Пропуск ИИ (Auto-HOLD)")
-            return False
-
-        info(f"💤 {symbol}: RSI в нейтральной зоне ({rsi}) и нет тренда -> Пропуск ИИ (Auto-HOLD)")
-        return False
-
-    # Если условия выше не сработали (RSI < 40 или RSI > 60) -> Вызываем ИИ
-    info(f"⚡ {symbol}: Активный рынок (RSI={rsi}) -> Вызываем ИИ")
-    return True
+    return should_call
 
 def process_analysis(analysis):
     """Обрабатывает один анализ: проверяет условия, делает запрос к ИИ (с ретраями) и возвращает прогноз"""

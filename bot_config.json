@@ -162,5 +162,6 @@
     "trend_consensus_required": false,
     "momentum_entry_enabled": true,
     "momentum_consecutive_candles": 3
-  }
+  },
+  "STRATEGY_STYLE": "SWING"
 }

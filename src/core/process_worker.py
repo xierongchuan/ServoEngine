@@ -61,14 +61,28 @@ def run_symbol_pipeline(symbol: str):
                 # plotter.plot_symbol(symbol, current_position=active_trade)
 
                 elapsed = time.time() - start_time
-                info(f"✅ [{symbol}] Цикл завершён за {elapsed:.2f} сек. Ожидание 2 сек...")
+
+                # Dynamic Sleep based on Strategy & Position Status
+                from src.config import STRATEGY_STYLE, STYLE_PRESETS
+                preset = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS["INTRADAY"])
+                base_interval = preset.get("loop_interval", 60)
+
+                if real_position:
+                    # If in position: Maintain readiness (Fast loop for management)
+                    sleep_time = 2 if STRATEGY_STYLE == "SCALP" else 5
+                    info(f"✅ [{symbol}] Цикл завершён ({elapsed:.2f}s). 👀 Позиция активна -> Sleep {sleep_time}s")
+                else:
+                    # If searching: Relax based on strategy
+                    sleep_time = base_interval
+                    info(f"✅ [{symbol}] Цикл завершён ({elapsed:.2f}s). 💤 Поиск ({STRATEGY_STYLE}) -> Sleep {sleep_time}s")
 
             except Exception as e:
                 error(f"❌ [{symbol}] Ошибка внутри торгового цикла: {str(e)}")
                 error(traceback.format_exc())
+                sleep_time = 5 # Error fallback
 
             # Пауза между циклами
-            time.sleep(2)
+            time.sleep(sleep_time)
 
     except Exception as e:
         # In case import fails or other init error

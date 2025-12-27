@@ -412,15 +412,20 @@ def analyze_symbol(symbol, position=None):
     min_profit_partial = max(0.5, TRADING_FEE * 4.0)
 
     # === MOMENTUM STRATEGY SETTINGS ===
-    from src.config import CHART_RANGES, DEFAULT_CHART_RANGE, SMART_SAMPLING, MOMENTUM_STRATEGY
+    from src.config import CHART_RANGES, DEFAULT_CHART_RANGE, SMART_SAMPLING, MOMENTUM_STRATEGY, STRATEGY_STYLE, STYLE_PRESETS
 
     current_interval = "1m"
     if DEFAULT_CHART_RANGE in CHART_RANGES:
         current_interval = CHART_RANGES[DEFAULT_CHART_RANGE].get("interval", "1m")
 
-    # Используем настройки из конфига
-    atr_sl_mult = MOMENTUM_STRATEGY.get("atr_sl_multiplier", 1.5)
-    atr_tp_mult = MOMENTUM_STRATEGY.get("atr_tp_multiplier", 2.5)
+    # Get current style settings
+    current_style = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS["INTRADAY"])
+    style_desc = current_style.get("description", "")
+
+    # Используем настройки из конфига (с приоритетом MOMENTUM_STRATEGY если задано вручную)
+    atr_sl_mult = MOMENTUM_STRATEGY.get("atr_sl_multiplier", current_style.get("atr_sl_mult", 2.0))
+    atr_tp_mult = MOMENTUM_STRATEGY.get("atr_tp_multiplier", current_style.get("atr_tp_mult", 3.0))
+
     max_candles = MOMENTUM_STRATEGY.get("max_candles_in_prompt", 50)
     min_vol_ratio = MOMENTUM_STRATEGY.get("min_volume_ratio", 0.7)
     trend_consensus_req = MOMENTUM_STRATEGY.get("trend_consensus_required", False)
@@ -519,6 +524,7 @@ def analyze_symbol(symbol, position=None):
 |----------|----------|--------|
 | Пары | {symbol} | Биржа: {EXCHANGE.upper()} |
 | Таймфрейм | {current_interval} | Леверидж: {LEVERAGE}x |
+| Стиль | **{STRATEGY_STYLE}** | {style_desc} |
 | Режим | **{strategy_mode}** | {"🔥 АГРЕССИВНЫЙ" if strategy_mode == "AGGRESSIVE" else "🛡️ СБАЛАНСИРОВАННЫЙ"} |
 
 {position_block}
@@ -681,6 +687,7 @@ JUST THE RAW JSON OBJECT.
         "ema9": ema9,
         "ema21": ema21,
         "atr": atr,
+        "volume_ratio": volume_ratio,
         "global_trend": global_trend,
         "local_trend": local_trend,
         "has_position": bool(position),

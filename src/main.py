@@ -42,15 +42,9 @@ def check_prerequisites():
     if not AI_API_KEY or AI_API_KEY == "":
         errors.append(f"❌ API Key для провайдера {AI_PROVIDER} не настроен. Установите соответствующую переменную окружения.")
 
-    # Validation: Check for conflicting strategies
-    from src.config import ENABLE_AI_SKIP_ON_RSI, MOMENTUM_STRATEGY
-    momentum_enabled = MOMENTUM_STRATEGY.get("enabled", False)
-
-    if ENABLE_AI_SKIP_ON_RSI and momentum_enabled:
-        errors.append("❌ КОНФЛИКТ КОНФИГУРАЦИИ: Включены оба режима 'ENABLE_AI_SKIP_ON_RSI' и 'MOMENTUM_STRATEGY'.\n"
-                      "   - ENABLE_AI_SKIP_ON_RSI: Пропускает анализ при высоком RSI (Mean Reversion).\n"
-                      "   - MOMENTUM_STRATEGY: Ищет вход именно на высоком RSI (Breakout).\n"
-                      "   Пожалуйста, отключите одну из опций в bot_config.json.")
+    # Validation: Check for conflicting strategies (REMOVED: Smart Filter handles this now)
+    # Conflict check removed to allow Smart Filter logic
+    pass
 
     # Check exchange prerequisites
     client = get_exchange_client()

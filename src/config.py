@@ -169,6 +169,44 @@ MOMENTUM_STRATEGY = BOT_CONFIG.get("MOMENTUM_STRATEGY", {
     "momentum_consecutive_candles": 3
 })
 
+# Trading Style Settings (Scalp / Intraday / Swing)
+STRATEGY_STYLE = BOT_CONFIG.get("STRATEGY_STYLE", "INTRADAY")  # Default to INTRADAY
+
+# Presets for different styles (Can be overridden by bot_config.json if keys exist there)
+STYLE_PRESETS = {
+    "SCALP": {
+        "timeframe": "1m",
+        "chart_period": "6h",
+        "loop_interval": 3, # Fast reaction
+        "atr_sl_mult": 1.5,
+        "atr_tp_mult": 2.0,
+        "description": "High frequency, small moves, strict exits."
+    },
+    "INTRADAY": {
+        "timeframe": "5m",
+        "chart_period": "1D",
+        "loop_interval": 60, # Standard: Check every new candle (5m) or faster for entry. 60s is good balance.
+        "atr_sl_mult": 2.0,
+        "atr_tp_mult": 3.0,
+        "description": "Day trading, capturing daily trends."
+    },
+    "SWING": {
+        "timeframe": "15m", # or 1h
+        "chart_period": "3D",
+        "loop_interval": 900, # Recommended: 15 mins (check on candle close). No need for 5m.
+        "atr_sl_mult": 3.0,
+        "atr_tp_mult": 5.0,
+        "description": "Multi-day holding, wider stops for volatility."
+    }
+}
+
+# Apply style preset if values are missing in specific configs
+current_preset = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS["INTRADAY"])
+if "atr_sl_multiplier" not in MOMENTUM_STRATEGY:
+    MOMENTUM_STRATEGY["atr_sl_multiplier"] = current_preset["atr_sl_mult"]
+if "atr_tp_multiplier" not in MOMENTUM_STRATEGY:
+    MOMENTUM_STRATEGY["atr_tp_multiplier"] = current_preset["atr_tp_mult"]
+
 # DeepSeek / AI API Settings
 # DeepSeek / AI API Settings
 AI_SETTINGS = BOT_CONFIG.get("AI_SETTINGS", {})
