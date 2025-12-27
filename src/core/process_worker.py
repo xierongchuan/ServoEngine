@@ -76,6 +76,9 @@ def run_symbol_pipeline(symbol: str):
                     sleep_time = base_interval
                     info(f"✅ [{symbol}] Цикл завершён ({elapsed:.2f}s). 💤 Поиск ({STRATEGY_STYLE}) -> Sleep {sleep_time}s")
 
+            except KeyboardInterrupt:
+                info(f"🛑 [{symbol}] Остановка по запросу (KeyboardInterrupt)")
+                return
             except Exception as e:
                 error(f"❌ [{symbol}] Ошибка внутри торгового цикла: {str(e)}")
                 error(traceback.format_exc())
@@ -84,6 +87,8 @@ def run_symbol_pipeline(symbol: str):
             # Пауза между циклами
             time.sleep(sleep_time)
 
+    except KeyboardInterrupt:
+        print(f"🛑 [{symbol}] Process terminated.")
     except Exception as e:
         # In case import fails or other init error
         print(f"CRITICAL WORKER INIT ERROR {symbol}: {e}")

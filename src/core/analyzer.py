@@ -397,7 +397,7 @@ def analyze_symbol(symbol, position=None):
         rsi_short_min = AGGRESSIVE_SETTINGS.get("RSI_SELL_COND", 35)
         rsi_short_forbidden = AGGRESSIVE_SETTINGS.get("RSI_SELL_FORBIDDEN", 20)
         min_confidence = AGGRESSIVE_SETTINGS.get("MIN_CONFIDENCE", 0.6)
-        min_rr = AGGRESSIVE_SETTINGS.get("MIN_RISK_REWARD_RATIO", 1.3)
+        MIN_RISK_REWARD_RATIO = AGGRESSIVE_SETTINGS.get("MIN_RISK_REWARD_RATIO", 1.3)
         strategy_mode = "AGGRESSIVE"
     else:
         rsi_long_max = AI_THRESHOLDS.get('RSI_BUY_ENTRY_MAX', 65)
@@ -405,7 +405,7 @@ def analyze_symbol(symbol, position=None):
         rsi_short_min = AI_THRESHOLDS.get('RSI_SELL_ENTRY_MIN', 35)
         rsi_short_forbidden = AI_THRESHOLDS.get('RSI_OVERSOLD', 30)
         min_confidence = 0.7
-        min_rr = 1.5
+        MIN_RISK_REWARD_RATIO = 1.5
         strategy_mode = "BALANCED"
 
     min_profit_breakeven = max(0.2, TRADING_FEE * 2.5)
@@ -509,6 +509,18 @@ def analyze_symbol(symbol, position=None):
     # Don't send "Momentum" instructions if the market is sleeping (Pullback).
 
     # 1. Determine Primary Context
+    # Calculate momentum detection locally
+    momentum_candles_detected = False
+    if len(final_prices) >= momentum_candles:
+        recent_chunk = final_prices[-momentum_candles:]
+        # Check for consecutive GREEN
+        all_green = all(get_price_value(c.get("closePrice", 0)) > get_price_value(c.get("openPrice", 0)) for c in recent_chunk)
+        # Check for consecutive RED
+        all_red = all(get_price_value(c.get("closePrice", 0)) < get_price_value(c.get("openPrice", 0)) for c in recent_chunk)
+
+        if all_green or all_red:
+            momentum_candles_detected = True
+
     is_high_volume = volume_ratio > 1.2
     is_momentum_market = is_high_volume or momentum_candles_detected
 

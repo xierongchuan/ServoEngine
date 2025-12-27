@@ -2,14 +2,10 @@
   "EXCHANGE_SYMBOLS": {
     "capital": [
       "BTCUSD",
-      "EURUSD",
-      "ETHUSD",
-      "XRPUSD",
-      "SOLUSD"
+      "EURUSD"
     ],
     "bingx": [
-      "ETHUSDT",
-      "LTCUSDT"
+      "ZECUSDT"
     ]
   },
   "EXCHANGE_FEES": {
