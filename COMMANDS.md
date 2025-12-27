@@ -51,20 +51,15 @@ wc -l data/trades.log                    # Количество сделок
 
 ```bash
 # Переменные окружения
-export CAP_API_USERNAME="email"             # Настроить username
-export CAP_API_PASSWORD="pass"              # Настроить password
-export CAP_API_KEY="key"                 # API ключ Capital.com (ОБЯЗАТЕЛЬНО!)
 export BINGX_API_KEY="key"               # API ключ BingX
 export BINGX_SECRET_KEY="secret"         # API секрет BingX
 export ENABLE_NEWS="true"                # Включить/выключить новости
 
 # Запуск с выбором биржи
 export EXCHANGE=bingx && python3 run.py
-export EXCHANGE=capital && python3 run.py
 
 # Тестирование интеграции
 export EXCHANGE=bingx && python3 tests/test_integration.py
-export EXCHANGE=capital && python3 tests/test_integration.py
                 # Выбор биржи (capital/bingx)
 export DEEPSEEK_API_KEY="key"            # Настроить API ключ
 echo $CAP_API_USERNAME                      # Проверить переменную
@@ -107,8 +102,6 @@ python3 tests/test_bingx.py              # Тест BingX
 pip install pandas matplotlib requests   # Установить зависимости
 
 # Проверка API
-curl -I https://demo-api-capital.backend-capital.com/api/v1/  # Статус Capital.com API (Demo)
-curl -I https://api-capital.backend-capital.com/api/v1/        # Статус Capital.com API (Real)
 curl -I https://open-api-vst.bingx.com/openApi/swap/v2/server/time # Статус BingX API (Demo)
 curl -I https://api.deepseek.com                                # Статус DeepSeek API
 
