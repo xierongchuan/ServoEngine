@@ -138,7 +138,7 @@
     "recent_candles": 30,
     "history_step": 10
   },
-  "ENABLE_AI_SKIP_ON_RSI": true,
+  "ENABLE_AI_SKIP_ON_RSI": false,
   "AI_SETTINGS": {
     "provider": "openrouter",
     "model": "deepseek/deepseek-chat",
@@ -163,5 +163,5 @@
     "momentum_entry_enabled": true,
     "momentum_consecutive_candles": 3
   },
-  "STRATEGY_STYLE": "SWING"
+  "STRATEGY_STYLE": "INTRADAY"
 }

@@ -46,7 +46,8 @@
 
 ### ⚡ Высокая производительность
 *   **True Multiprocessing**: Каждый торговый актив (BTC, ETH и др.) работает в **отдельном изолированном процессе** ОС.
-*   **Non-Blocking**: Задержка на одной паре (например, долгий ответ API) **не влияет** на торговлю другими парами.
+*   **Smart Economy Filter**: Интеллектуальная система экономии токенов. Бот анализирует рынок локально и **пропускает** вызовы ИИ на "спящем" рынке (низкий объем) или при очевидном флэте, экономя до 30-50% бюджета API.
+*   **Dynamic Loop**: Частота анализа адаптируется под выбранный стиль торговли (от 3 секунд для Scalp до 15 минут для Swing).
 *   **Continuous Loop**: Каждый воркер работает в собственном бесконечном цикле независимо от остальных.
 
 ### 📊 Продвинутая Визуализация
@@ -58,10 +59,11 @@
 *   **Dynamic SL/TP**: ИИ автоматически рассчитывает уровни Stop Loss и Take Profit на основе локальных уровней поддержки/сопротивления.
 *   **Risk/Reward Protection**: Бот **автоматически отклоняет** любые сделки, где потенциальная прибыль меньше риска (R/R < 1.5).
 
-### 📈 Гибкие режимы торговли
-*   **Balanced Strategy**: (По умолчанию) Вход по тренду с умеренными рисками. Требуется консенсус трендов (Price vs SMA + EMA crossover).
-*   **Aggressive Mode**: Агрессивный режим с расширенными диапазонами RSI (35-70) и опциональным консенсусом трендов. Включает **Momentum Entry** — альтернативный вход по 3+ однонаправленным свечам.
-*   **News Filter**: (Опционально) Учитывает новостной фон при принятии решений (требует NewsAPI).
+### 📈 Гибкие Стили Торговли (Trading Styles)
+Теперь вы можете переключать режим работы одной строкой конфигурации:
+1.  **SCALP**: Таймфрейм 1m, тесные стопы, максимальная частота (цикл 3 сек).
+2.  **INTRADAY** (По умолчанию): Таймфрейм 5m, баланс скорости и надежности (цикл 60 сек).
+3.  **SWING**: Таймфрейм 15m/1h, широкие стопы для ловли больших движений (цикл 15 мин).
 
 ---
 
@@ -89,7 +91,8 @@
 
  ### 3. Сбор данных и Фильтры
  *   **Smart Sampling**: Сжимает 720+ свечей в контекст для ИИ.
- *   **Pre-Filters**: Отсеивает "мёртвый" рынок (Volume < 0.3x) и экстремальные риски.
+ *   **Smart Momentum Filter**: Если включен Momentum Entry, бот **автоматически** вызывает ИИ даже на высоком RSI, если локальные индикаторы (Volume > 1.2x) подтверждают пробой. Это решает проблему пропуска сильных трендов.
+ *   **Low Volume Skip**: Если объем < 0.4x, бот "спит", не тратя деньги на запросы.
 
  ### 4. Валидация
  Полученный от ИИ сигнал проходит строгую проверку Risk/Reward (min 1.3 для агрессивного режима).
@@ -137,6 +140,8 @@
     DEEPSEEK_API_KEY="ваш_ключ_deepseek"
     # ИЛИ SiliconFlow API (альтернативный провайдер)
     SILICONFLOW_API_KEY="ваш_ключ_siliconflow"
+    # ИЛИ OpenRouter API
+    OPENROUTER_API_KEY="ваш_ключ_openrouter"
 
     # Режим работы
     # "demo" = VST Futures (Виртуальные деньги BingX)
@@ -170,10 +175,11 @@
   "EXCHANGE_SYMBOLS": {
     "bingx": ["ETHUSDT", "LTCUSDT", "XRPUSDT"]
   },
+  "STRATEGY_STYLE": "INTRADAY",
   "AI_SETTINGS": {
-    "provider": "siliconflow",
-    "model": "deepseek-ai/DeepSeek-V3.2",
-    "base_url": "https://api.siliconflow.com/v1/chat/completions"
+    "provider": "openrouter",
+    "model": "deepseek/deepseek-chat",
+    "base_url": "https://openrouter.ai/api/v1/chat/completions"
   },
   "ENABLE_ADVANCED_ANALYSIS": true,
   "ENABLE_PARALLEL_MODE": true,
@@ -204,7 +210,8 @@
   "MIN_RISK_REWARD_RATIO": 1.3,
   "POSITION_SIZE_PERCENT": 1.0,
   "LEVERAGE": 20,
-  "DEFAULT_PLOTTER_RANGE": "2h"
+  "DEFAULT_PLOTTER_RANGE": "2h",
+  "ENABLE_AI_SKIP_ON_RSI": true
 }
 ```
 
@@ -212,36 +219,31 @@
 
 | Параметр | Тип | Описание | Рекомендация |
 | :--- | :--- | :--- | :--- |
+| `STRATEGY_STYLE` | Str | **NEW**: Стиль торговли: `"SCALP"`, `"INTRADAY"`, `"SWING"`. | `INTRADAY` |
 | `EXCHANGE_SYMBOLS` | Dict | Список пар для торговли. Должны соответствовать тикерам BingX. | Топ-10 ликвидных |
 | `AGGRESSIVE_MODE` | Bool | Включает агрессивную стратегию с Momentum Entry. | `true` |
-| `AGGRESSIVE_SETTINGS` | Dict | RSI пороги и MIN_CONFIDENCE для агрессивного режима. | См. пример |
 | `MOMENTUM_STRATEGY` | Dict | **NEW**: Настройки Momentum Breakout стратегии. | `enabled: true` |
-| `trend_consensus_required` | Bool | Требовать ли совпадение обоих трендов для входа. | `false` (Aggressive) |
-| `momentum_entry_enabled` | Bool | Разрешить вход по 3+ однонаправленным свечам. | `true` |
+| `ENABLE_AI_SKIP_ON_RSI` | Bool | **UPDATED**: Умный экономайзер. Пропускает вызов AI при RSI > 70, **ЕСЛИ** нет подтверждения High Volume Momentum. | `true` (экономит $) |
 | `min_volume_ratio` | Float | Минимальный объём относительно среднего (0.7 = 70%). | `0.7` |
-| `MIN_RISK_REWARD_RATIO` | Float | Минимальное соотношение Прибыль/Риск. | `1.3` (Aggressive) |
-| `POSITION_SIZE_PERCENT` | Float | Какой % от баланса использовать в одной сделке. | `1.0` - `5.0` |
-| `LEVERAGE` | Int | Кредитное плечо. | `5` - `20` |
-| `ENABLE_AI_SKIP_ON_RSI` | Bool | Пропускать ли вызов AI при RSI > 70 или < 30 (экономия токенов). | `true` |
 
 ### 🤖 Настройка AI Провайдера
 
-Вы можете выбрать источник API для DeepSeek: официальный API или SiliconFlow.
+Вы можете выбрать источник API для DeepSeek: официальный API, SiliconFlow или OpenRouter.
 
 ```json
   "AI_SETTINGS": {
-    "provider": "deepseek_official",
-    "model": "deepseek-chat",
-    "base_url": null
+    "provider": "openrouter",
+    "model": "deepseek/deepseek-chat",
+    "base_url": "https://openrouter.ai/api/v1/chat/completions"
   }
 ```
 
-*   **provider**: `"deepseek_official"` (по умолчанию) или `"siliconflow"`.
-*   **model**: Имя модели (например, `"deepseek-chat"` или `"deepseek-ai/DeepSeek-V3.2"`).
-*   **base_url**: Опционально. URL для API запросов (если `null`, используется стандартный URL провайдера).
+*   **provider**: `"deepseek"`, `"siliconflow"`, или `"openrouter"`.
+*   **model**: Имя модели (для OpenRouter: `"deepseek/deepseek-chat"`).
+*   **base_url**: URL для API.
 
 > [!TIP]
-> Для использования SiliconFlow добавьте `SILICONFLOW_API_KEY` в ваш `.env` файл.
+> Для OpenRouter используйте `OPENROUTER_API_KEY` в `.env`. Для SiliconFlow - `SILICONFLOW_API_KEY`.
 
 ---
 
