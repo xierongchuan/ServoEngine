@@ -170,6 +170,7 @@ MOMENTUM_STRATEGY = BOT_CONFIG.get("MOMENTUM_STRATEGY", {
 })
 
 # DeepSeek / AI API Settings
+# DeepSeek / AI API Settings
 AI_SETTINGS = BOT_CONFIG.get("AI_SETTINGS", {})
 AI_PROVIDER = AI_SETTINGS.get("provider", "deepseek_official")
 AI_MODEL = AI_SETTINGS.get("model", "deepseek-chat")
@@ -177,6 +178,7 @@ AI_MODEL = AI_SETTINGS.get("model", "deepseek-chat")
 # Load API Keys
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 # Determine API Key and Base URL based on provider
 if AI_PROVIDER == "siliconflow":
@@ -184,6 +186,11 @@ if AI_PROVIDER == "siliconflow":
     # Default SiliconFlow OpenAI-compatible endpoint
     AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://api.siliconflow.cn/v1/chat/completions"
     print(f"🤖 AI Provider: SiliconFlow ({AI_MODEL})")
+elif AI_PROVIDER == "openrouter":
+    AI_API_KEY = OPENROUTER_API_KEY
+    # Default OpenRouter OpenAI-compatible endpoint
+    AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://openrouter.ai/api/v1/chat/completions"
+    print(f"🤖 AI Provider: OpenRouter ({AI_MODEL})")
 else:
     # Default to DeepSeek Official
     AI_API_KEY = DEEPSEEK_API_KEY

@@ -1,16 +1,20 @@
 import json
 import requests
 import time
-from src.config import AI_API_KEY, AI_BASE_URL, AI_MODEL
+from src.config import AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_PROVIDER
 from src.utils.logger import info, error, warning
 
 def get_prediction(prompt):
-    """Отправляет промпт в AI (DeepSeek/SiliconFlow) и получает ответ"""
+    """Отправляет промпт в AI (DeepSeek/SiliconFlow/OpenRouter) и получает ответ"""
     url = AI_BASE_URL
     headers = {
         "Authorization": f"Bearer {AI_API_KEY}",
         "Content-Type": "application/json"
     }
+
+    if AI_PROVIDER == "openrouter":
+        headers["HTTP-Referer"] = "https://github.com/temur/OpenProducer" # Replace with actual site if exists
+        headers["X-Title"] = "OpenProducerBot"
     payload = {
         "model": AI_MODEL,
         "messages": [{"role": "user", "content": prompt}],
@@ -148,8 +152,13 @@ def should_call_ai(analysis):
     rsi_oversold = AI_THRESHOLDS.get("RSI_OVERSOLD", 30)
 
     # --- НОВЫЕ ПРОВЕРКИ ДЛЯ ЭКОНОМИИ ТОКЕНОВ ---
-    from src.config import ENABLE_AI_SKIP_ON_RSI
-    if ENABLE_AI_SKIP_ON_RSI:
+    from src.config import ENABLE_AI_SKIP_ON_RSI, MOMENTUM_STRATEGY
+
+    # Пропускаем вызов ИИ для экономии, НО только если не активна Momentum-стратегия
+    # Momentum-стратегия ищет пробои именно на высоком RSI, поэтому скипать нельзя.
+    momentum_enabled = MOMENTUM_STRATEGY.get("enabled", False)
+
+    if ENABLE_AI_SKIP_ON_RSI and not momentum_enabled:
         # Если Тренд UP, но RSI уже перекуплен -> Мы не будем покупать (поздно), а продавать против тренда нельзя.
         # Значит, AI скажет HOLD. Экономим запрос.
         if current_price > sma and rsi > rsi_overbought:

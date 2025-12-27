@@ -18,7 +18,7 @@
   },
   "POSITION_SIZE_PERCENT": 1.0,
   "MIN_TRADE_AMOUNT_USDT": 10.0,
-  "LEVERAGE": 20,
+  "LEVERAGE": 6,
   "TAKE_PROFIT_PERCENT": 1.5,
   "STOP_LOSS_PERCENT": 1.5,
   "MIN_CONFIDENCE_THRESHOLD": 0.7,
@@ -140,11 +140,11 @@
   },
   "ENABLE_AI_SKIP_ON_RSI": true,
   "AI_SETTINGS": {
-    "provider": "deepseek",
-    "model": "deepseek-chat",
-    "base_url": "https://api.deepseek.com/v1/chat/completions"
+    "provider": "openrouter",
+    "model": "deepseek/deepseek-chat",
+    "base_url": "https://openrouter.ai/api/v1/chat/completions"
   },
-  "AGGRESSIVE_MODE": true,
+  "AGGRESSIVE_MODE": false,
   "AGGRESSIVE_SETTINGS": {
     "RSI_BUY_COND": 70,
     "RSI_BUY_FORBIDDEN": 85,

@@ -21,7 +21,7 @@ from src.core import plotter
 
 from src.utils.logger import info, error
 from src.exchanges.exchange_factory import get_exchange_client
-from src.config import DEEPSEEK_API_KEY
+from src.config import AI_API_KEY, AI_PROVIDER
 
 def print_banner():
     """Печатает приветственное сообщение"""
@@ -39,8 +39,18 @@ def check_prerequisites():
 
     errors = []
 
-    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY == "":
-        errors.append("❌ DEEPSEEK_API_KEY не настроен. Установите переменную окружения DEEPSEEK_API_KEY")
+    if not AI_API_KEY or AI_API_KEY == "":
+        errors.append(f"❌ API Key для провайдера {AI_PROVIDER} не настроен. Установите соответствующую переменную окружения.")
+
+    # Validation: Check for conflicting strategies
+    from src.config import ENABLE_AI_SKIP_ON_RSI, MOMENTUM_STRATEGY
+    momentum_enabled = MOMENTUM_STRATEGY.get("enabled", False)
+
+    if ENABLE_AI_SKIP_ON_RSI and momentum_enabled:
+        errors.append("❌ КОНФЛИКТ КОНФИГУРАЦИИ: Включены оба режима 'ENABLE_AI_SKIP_ON_RSI' и 'MOMENTUM_STRATEGY'.\n"
+                      "   - ENABLE_AI_SKIP_ON_RSI: Пропускает анализ при высоком RSI (Mean Reversion).\n"
+                      "   - MOMENTUM_STRATEGY: Ищет вход именно на высоком RSI (Breakout).\n"
+                      "   Пожалуйста, отключите одну из опций в bot_config.json.")
 
     # Check exchange prerequisites
     client = get_exchange_client()
@@ -89,8 +99,8 @@ def run_pipeline():
     analyses = analyzer.main()
 
     # Шаг 3: Прогнозирование
-    print("\n🧠 ШАГ 3: Генерация прогнозов с помощью DeepSeek")
-    info("🧠 ШАГ 3: Генерация прогнозов с помощью DeepSeek")
+    print(f"\n🧠 ШАГ 3: Генерация прогнозов с помощью {AI_PROVIDER}")
+    info(f"🧠 ШАГ 3: Генерация прогнозов с помощью {AI_PROVIDER}")
     predictions = predict.main(analyses)
 
     # Шаг 4: Исполнение ордеров
