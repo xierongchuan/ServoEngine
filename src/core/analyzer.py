@@ -619,34 +619,45 @@ def analyze_symbol(symbol, position=None):
     momentum_candles = MOMENTUM_STRATEGY.get("momentum_consecutive_candles", 3)
 
     # === ИСТОРИЯ СВЕЧЕЙ (Smart Sampling) ===
+    # === DATA PREPARATION & SAMPLING ===
+    # Strategy: Use ALL available fetched data for sampling/indicators to ensure "warmup".
+    # Only trim to context_limit at the very end for the Prompt Table.
+
     context_limit = 500
     if DEFAULT_CHART_RANGE in CHART_RANGES:
         context_limit = CHART_RANGES[DEFAULT_CHART_RANGE].get("ai_context_candles", 500)
 
-    if SMART_SAMPLING.get("enabled", True):
+    is_smart_sampling = SMART_SAMPLING.get("enabled", True)
+
+    if is_smart_sampling:
         recent_count = SMART_SAMPLING.get("recent_candles", 30)
-        step = SMART_SAMPLING.get("history_step", 10)
+        step = SMART_SAMPLING.get("history_step", 1)  # Default to 1 (Passthrough) if not set
 
-        full_context_prices = prices[-context_limit:]
+        # We take the FULL fetched prices buffer
+        full_buffer = prices
 
-        if len(full_context_prices) > recent_count:
-            recent_part = full_context_prices[-recent_count:]
-            history_part = full_context_prices[:-recent_count]
+        if len(full_buffer) > recent_count:
+            recent_part = full_buffer[-recent_count:]
+            history_part = full_buffer[:-recent_count]
 
             sampled_history = []
+            # Sample the history part
             for i in range(0, len(history_part), step):
                 chunk = history_part[i:i+step]
-                if not chunk:
-                    continue
+                if not chunk: continue
 
-                agg_open = get_price_value(chunk[0].get("openPrice", 0))
-                agg_close = get_price_value(chunk[-1].get("closePrice", 0))
-                agg_high = max(get_price_value(c.get("highPrice", 0)) for c in chunk)
-                agg_low = min(get_price_value(c.get("lowPrice", 0)) for c in chunk)
-                agg_vol = sum(float(c.get("volume", 0)) for c in chunk)
+                # Aggregate chunk
+                agg_open = chunk[0].get("openPrice", 0)
+                agg_close = chunk[-1].get("closePrice", 0)
+                agg_high = max(chunk, key=lambda x: get_price_value(x.get("highPrice", 0))).get("highPrice", 0)
+                agg_low = min(chunk, key=lambda x: get_price_value(x.get("lowPrice", 0))).get("lowPrice", 0)
+                agg_vol = sum(float(x.get("volume", 0)) for x in chunk)
+
+                # Use timestamp of the LAST candle in chunk (aligned with close)
+                agg_ts = chunk[-1].get("snapshotTimeUTC", "")
 
                 sampled_history.append({
-                    "snapshotTimeUTC": chunk[0].get("snapshotTimeUTC"),
+                    "snapshotTimeUTC": agg_ts,
                     "openPrice": agg_open,
                     "highPrice": agg_high,
                     "lowPrice": agg_low,
@@ -654,24 +665,43 @@ def analyze_symbol(symbol, position=None):
                     "volume": agg_vol
                 })
 
-            final_prices = sampled_history + recent_part
+            calculation_data = sampled_history + recent_part
         else:
-            final_prices = full_context_prices
+            calculation_data = full_buffer
     else:
-        final_prices = prices[-context_limit:]
+        # If disabled, use all fetched data directly (no decimation)
+        calculation_data = prices
 
-    # === CALCULATE HISTORY SERIES (For Prompt Table) ===
-    # Extract numerical closes from the final sampled data
-    hist_closes = [get_price_value(p.get("closePrice", 0)) for p in final_prices]
-
-    # Calculate series on this data so it aligns with the table rows
+    # === CALCULATE HISTORY SERIES (On Full Calculation Data) ===
+    # This ensures indicators (RSI, SMA) have "warmup" data and don't start with 0.
+    hist_closes = [get_price_value(p.get("closePrice", 0)) for p in calculation_data]
     hist_rsi = calculate_rsi_series(hist_closes)
     hist_sma = calculate_sma_series(hist_closes, AI_THRESHOLDS["SMA_PERIOD"])
     _, hist_seb_upper, hist_seb_lower = calculate_seb_series(hist_closes)
 
+    # === SLICING FOR PROMPT CONTEXT ===
+    # Now we trim the data to fit the AI Context Limit (e.g. 336 candles),
+    # discarding the "warmup" head which served its purpose.
+
+    if len(calculation_data) > context_limit:
+        # Take the LAST 'context_limit' candles
+        final_prices = calculation_data[-context_limit:]
+
+        # Slice the indicators to match
+        final_rsi = hist_rsi[-context_limit:]
+        final_sma = hist_sma[-context_limit:]
+        final_seb_u = hist_seb_upper[-context_limit:]
+        final_seb_l = hist_seb_lower[-context_limit:]
+    else:
+        final_prices = calculation_data
+        final_rsi = hist_rsi
+        final_sma = hist_sma
+        final_seb_u = hist_seb_upper
+        final_seb_l = hist_seb_lower
+
     # Формируем таблицу свечей
     candle_lines = []
-    for i, p in enumerate(final_prices):  # Все свечи после smart sampling
+    for i, p in enumerate(final_prices):
         ts = p.get("snapshotTimeUTC", "")[-8:] if p.get("snapshotTimeUTC") else ""
         o = get_price_value(p.get("openPrice", 0))
         h = get_price_value(p.get("highPrice", 0))
@@ -679,11 +709,11 @@ def analyze_symbol(symbol, position=None):
         c = get_price_value(p.get("closePrice", 0))
         v = float(p.get("volume", 0))
 
-        # Indicators for this row
-        row_rsi = hist_rsi[i]
-        row_sma = hist_sma[i]
-        row_seb_u = hist_seb_upper[i]
-        row_seb_l = hist_seb_lower[i]
+        # Access indicators by index (they are now aligned with final_prices)
+        row_rsi = final_rsi[i]
+        row_sma = final_sma[i]
+        row_seb_u = final_seb_u[i]
+        row_seb_l = final_seb_l[i]
 
         body = "🟢" if c > o else "🔴" if c < o else "⚪"
 
@@ -708,81 +738,103 @@ def analyze_symbol(symbol, position=None):
 **ВАЖНО**: Новости — вторичный фактор. Технический анализ имеет приоритет.
 """
 
-    # === DYNAMIC STRATEGY SELECTION ===
-    # AI Logic Optimization:
-    # Don't send "Pullback" instructions if the market is skyrocketing (Momentum).
-    # Don't send "Momentum" instructions if the market is sleeping (Pullback).
+    # === DYNAMIC ROLE & STRATEGY SELECTION ===
 
-    # 1. Determine Primary Context
-    # Calculate momentum detection locally
-    momentum_candles_detected = False
-    if len(final_prices) >= momentum_candles:
-        recent_chunk = final_prices[-momentum_candles:]
-        # Check for consecutive GREEN
-        all_green = all(get_price_value(c.get("closePrice", 0)) > get_price_value(c.get("openPrice", 0)) for c in recent_chunk)
-        # Check for consecutive RED
-        all_red = all(get_price_value(c.get("closePrice", 0)) < get_price_value(c.get("openPrice", 0)) for c in recent_chunk)
+    # 1. Define Role based on Style
+    if STRATEGY_STYLE == "SWING":
+        role_desc = "Ты — профессиональный Свинг-Трейдер (Swing Trader)."
+        objective = "Поиск крупных движений (Days/Weeks), игнорирование внутридневного шума."
+        time_horizon = "Horizon: 2-14 Days."
 
-        if all_green or all_red:
-            momentum_candles_detected = True
-
-    is_high_volume = volume_ratio > 1.2
-    is_momentum_market = is_high_volume or momentum_candles_detected
-
-    strategy_section = ""
-
-    if is_momentum_market:
-        # === MOMENTUM ONLY ===
+        # Swing Strategy
         strategy_section = f"""
-## 3. СТРАТЕГИЯ: 🔥 MOMENTUM BREAKOUT (ПРОБОЙ)
-*Контекст: Рынок активен (Vol={volume_ratio:.2f}x), возможен сильный импульс.*
+## 3. СТРАТЕГИЯ: 🌊 SWING TRADING (MULTI-DAY)
+*Контекст: Анализ 14 дней истории (1H свечи). Фокус на глобальном тренде.*
 
 **Твоя Задача:**
-Ищи точки входа на **ПРОБОЙ** уровней или продолжение сильного движения.
+Строить позицию для удержания от 2 до 10 дней.
 
 **Условия входа (LONG):**
-1.  **Trend:** Сильный аптренд.
-2.  **Volume:** 🔼 ВЫСОКИЙ (> 1.2x). Подтверждает силу движения.
-3.  **Momentum Override:** Игнорируй RSI > 70 ({rsi:.1f}), если видишь серию зеленых свечей и пробой уровня.
-4.  **Target:** Быстрое движение. Используй трейлинг.
+1.  **Macro Trend:** Цена выше SMA(200) или долгосрочный аптренд.
+2.  **Structure:** Higher Highs + Higher Lows на графике.
+3.  **Setup:** Откат к сильной поддержке или пробой консолидации.
+4.  **Confirm:** Нет противоречия с новостным фоном.
 
-**Условия входа (SHORT):**
-1.  **Trend:** Сильный даунтренд.
-2.  **Volume:** 🔼 ВЫСОКИЙ.
-3.  **Momentum Override:** Игнорируй RSI < 30 ({rsi:.1f}), если видишь серию красных свечей и пробой поддержки.
+**Условия выхода:**
+1.  **TP:** Минимум 3-5% (или 3R). Давай прибыли течь.
+2.  **SL:** Слом рыночной структуры (Structure Break).
+3.  **Noise:** НЕ реагируй на одиночные контр-свечи, если структура сохраняется.
 """
-    else:
-         # === PULLBACK ONLY ===
+
+    elif STRATEGY_STYLE == "SCALP":
+        role_desc = "Ты — высокочастотный HFT-алгоритм (Scalper)."
+        objective = "Захват быстрых импульсов (Minutes), жесткий риск-менеджмент."
+        time_horizon = "Horizon: 5-30 Minutes."
+
+        # Scalp Strategy (Momentum emphasis)
         strategy_section = f"""
-## 3. СТРАТЕГИЯ: ⚓ EMA PULLBACK (ОТКАТ)
-*Контекст: Рынок спокойный (Vol={volume_ratio:.2f}x), работаем от коррекций.*
+## 3. СТРАТЕГИЯ: ⚡ HFT SCALPING (MOMENTUM)
+*Контекст: Агрессивная торговля на малых ТФ. Нужна высокая точность.*
 
 **Твоя Задача:**
-Ищи точки входа на **ОТКАТЕ** к средним (EMA), чтобы войти по тренду по лучшей цене. НЕ торгуй пробои (ложные).
+Входить в импульсные движения (Breakout) и быстро забирать профит.
 
-**Условия входа (LONG):**
-1.  **Trend:** Общий тренд вверх, но локально цена снижается.
-2.  **Setup:** Цена касается **EMA9** или **EMA21**.
-3.  **Volume:** 🔽 НИЗКИЙ/ПАДАЕТ. Это "здоровая" коррекция.
-4.  **RSI:** Нейтральный (40-60). Остыл после роста.
-5.  **Trigger:** Свеча начинает "отскакивать" от средней.
+**Условия входа:**
+1.  **Momentum:** Резкий всплеск объема (>1.5x) и волатильности.
+2.  **Flow:** Серия одноцветных свечей (3+).
+3.  **Level:** Пробой локального экстремума.
+4.  **Override:** Игнорируй RSI Oversold/Overbought, если импульс сильный.
 
-**Условия входа (SHORT):**
-1.  **Trend:** Общий тренд вниз, цена растет к EMA.
-2.  **Setup:** Касание EMA9/21 снизу.
-3.  **Volume:** Низкий на росте.
+**Условия выхода:**
+1.  **TP:** Скальперский (0.5% - 1.5%).
+2.  **SL:** Жесткий. Выход сразу, если импульс затух.
+"""
+
+    else: # INTRADAY
+        role_desc = "Ты — внутридневной трейдер (Intraday Trader)."
+        objective = "Торговля внутри сессии, закрытие всех позиций к концу дня."
+        time_horizon = "Horizon: 4-12 Hours."
+
+        if is_momentum_market:
+            # Intraday Momentum
+             strategy_section = f"""
+## 3. СТРАТЕГИЯ: 🔥 INTRADAY BREAKOUT
+*Контекст: Рынок активен, работаем по тренду дня.*
+
+**Твоя Задача:**
+Найти точку входа в продолжение дневного тренда.
+
+**Условия:**
+1.  Пробой уровня сопротивления/поддержки дня.
+2.  Подтверждение объемом.
+3.  Удержание сделки до конца сессии или разворота.
+"""
+        else:
+            # Intraday Pullback
+             strategy_section = f"""
+## 3. СТРАТЕГИЯ: ⚓ INTRADAY PULLBACK (ОТКАТ)
+*Контекст: Спокойный рынок, работаем от коррекций.*
+
+**Твоя Задача:**
+Купить на низах (support/EMA) растущего тренда.
+
+**Условия:**
+1.  Касание EMA или уровня поддержки.
+2.  Снижение объема на откате.
+3.  RSI вернулся в нейтральную зону.
 """
 
     # === ФОРМИРУЕМ ОПТИМИЗИРОВАННЫЙ ПРОМПТ ===
     prompt = f"""## РОЛЬ И ЗАДАЧА
-Ты — профессиональный алгоритм HFT-торговли.
-Цель: Максимизация профита через захват движений.
-Стиль: **{STRATEGY_STYLE}** ({style_desc}).
+{role_desc}
+Цель: {objective}
+Стиль: **{STRATEGY_STYLE}**
+{time_horizon}
 
 **ТВОИ ПРИНЦИПЫ:**
-1.  **Trend is King:** Не торгуй против сильного импульса.
-2.  **No Hallucinations:** Опирайся ТОЛЬКО на цифры ниже.
-3.  **Risk/Reward:** Минимум {MIN_RISK_REWARD_RATIO}.
+1.  **Systematic:** Строго следуй алгоритму стратегии.
+2.  **Risk Averse:** Лучше пропустить сделку, чем войти с плохим R:R.
+3.  **Data Driven:** Никаких галлюцинаций. Только цифры из таблиц ниже.
 
 ---
 
@@ -790,7 +842,8 @@ def analyze_symbol(symbol, position=None):
 | Параметр | Значение |
 |----------|----------|
 | Пары | {symbol} |
-| Таймфрейм | {current_interval} |
+| Интервал | {current_interval} |
+| История | {context_limit} свечей |
 | Стиль | **{STRATEGY_STYLE}** |
 | Режим | **{strategy_mode}** |
 

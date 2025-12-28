@@ -196,14 +196,27 @@ class BingXClient(ExchangeClient):
         }
 
         # Используем requests напрямую для market_url, чтобы не путать с self.base_url
-        try:
-            response = requests.get(market_url, params=params)
-            response.raise_for_status()
-            data = response.json()
-        except Exception as e:
-            error(f"❌ BingX Market Data request failed: {e}")
-            print(f"❌ BingX Market Data request failed: {e}")
-            return []
+        # Retry logic with timeout to prevent hanging
+        max_retries = 3
+        retry_delay = 1
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(market_url, params=params, timeout=20)
+                response.raise_for_status()
+                data = response.json()
+                break  # Success, exit retry loop
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.ChunkedEncodingError) as e:
+                warning(f"⚠️ Market data network error (attempt {attempt+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    error(f"❌ BingX Market Data request failed after {max_retries} attempts: {e}")
+                    return []
+            except Exception as e:
+                error(f"❌ BingX Market Data request failed: {e}")
+                return []
 
         if data and data.get("code") == 0:
             # BingX returns: [time, open, high, low, close, volume, ...]

@@ -64,7 +64,8 @@ def load_bot_config():
         "CHART_RANGES": {
             "1D": {"days": 1, "candles": 288},
             "3D": {"days": 3, "candles": 864},
-            "1W": {"days": 7, "candles": 2016}
+            "1W": {"days": 7, "candles": 2016},
+            "14D": {"days": 14, "candles": 336, "interval": "1h"}
         },
         "DEFAULT_CHART_RANGE": "1D",
         "CLEANUP_SETTINGS": {
@@ -197,14 +198,14 @@ DEFAULT_STYLE_PRESETS = {
         "description": "Day trading, capturing daily trends."
     },
     "SWING": {
-        "timeframe": "15m", # or 1h
-        "chart_period": "3D",
-        "plotter_period": "1D",
-        "loop_interval": 900, # Relaxed search (15m)
-        "position_check_interval": 60, # Relaxed monitoring (1m)
+        "timeframe": "1h", # True Swing base timeframe
+        "chart_period": "14D", # 2 weeks of context
+        "plotter_period": "3D", # Visualise last 3 days
+        "loop_interval": 300, # Check every 5 minutes (sufficient for hourly closes)
+        "position_check_interval": 60, # Check positions every minute
         "atr_sl_mult": 3.0,
-        "atr_tp_mult": 5.0,
-        "description": "Multi-day holding, wider stops for volatility."
+        "atr_tp_mult": 6.0, # Target large moves
+        "description": "Multi-day holding (Days/Weeks), wide stops, ignoring intraday noise."
     }
 }
 STYLE_PRESETS = BOT_CONFIG.get("STYLE_PRESETS", DEFAULT_STYLE_PRESETS)

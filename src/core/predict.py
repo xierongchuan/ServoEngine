@@ -13,13 +13,17 @@ def get_prediction(prompt):
     }
 
     if AI_PROVIDER == "openrouter":
-        headers["HTTP-Referer"] = "https://github.com/temur/OpenProducer" # Replace with actual site if exists
+        headers["HTTP-Referer"] = "https://github.com/xierongchuan/OpenProducer" # Replace with actual site if exists
         headers["X-Title"] = "OpenProducerBot"
     payload = {
         "model": AI_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 512, # Increased for safety
-        "temperature": 0.3
+        "temperature": 0.3,
+        "reasoning": {
+            "exclude": False, # Set to true to exclude reasoning tokens from response
+            "enabled": False # Default: inferred from `effort` or `max_tokens`
+        }
     }
 
     try:
