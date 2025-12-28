@@ -117,7 +117,9 @@ TRADING_FEE = EXCHANGE_FEES.get(EXCHANGE, 0.05)
 
 POSITION_SIZE_PERCENT = BOT_CONFIG.get("POSITION_SIZE_PERCENT", 5.0)
 MIN_TRADE_AMOUNT_USDT = BOT_CONFIG.get("MIN_TRADE_AMOUNT_USDT", 10.0)
-LEVERAGE = BOT_CONFIG.get("LEVERAGE", 5)
+# LEVERAGE is now dynamic based on style, but we initialize a default here
+# It will be overwritten by style settings below
+LEVERAGE = 10
 TAKE_PROFIT_PERCENT = BOT_CONFIG.get("TAKE_PROFIT_PERCENT", 1.5)
 STOP_LOSS_PERCENT = BOT_CONFIG.get("STOP_LOSS_PERCENT", 1.5)
 MIN_CONFIDENCE_THRESHOLD = BOT_CONFIG.get("MIN_CONFIDENCE_THRESHOLD", 0.7)
@@ -216,6 +218,10 @@ if "atr_sl_multiplier" not in MOMENTUM_STRATEGY:
     MOMENTUM_STRATEGY["atr_sl_multiplier"] = current_preset["atr_sl_mult"]
 if "atr_tp_multiplier" not in MOMENTUM_STRATEGY:
     MOMENTUM_STRATEGY["atr_tp_multiplier"] = current_preset["atr_tp_mult"]
+
+# Set LEVERAGE from the current style preset
+LEVERAGE = current_preset.get("leverage", 10)
+print(f"🔧 Strategy: {STRATEGY_STYLE}, Leverage: {LEVERAGE}x")
 
 # --- DYNAMIC CONFIGURATION LOGIC ---
 def parse_interval_minutes(interval_str):

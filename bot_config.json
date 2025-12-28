@@ -14,7 +14,6 @@
   },
   "POSITION_SIZE_PERCENT": 1.0,
   "MIN_TRADE_AMOUNT_USDT": 10.0,
-  "LEVERAGE": 5,
   "TAKE_PROFIT_PERCENT": 1.5,
   "STOP_LOSS_PERCENT": 1.5,
   "MIN_CONFIDENCE_THRESHOLD": 0.7,
@@ -166,6 +165,7 @@
       "position_check_interval": 3,
       "atr_sl_mult": 1.5,
       "atr_tp_mult": 2.0,
+      "leverage": 20,
       "description": "High frequency, small moves, strict exits."
     },
     "INTRADAY": {
@@ -176,6 +176,7 @@
       "position_check_interval": 10,
       "atr_sl_mult": 2.0,
       "atr_tp_mult": 3.0,
+      "leverage": 10,
       "description": "Day trading, capturing daily trends."
     },
     "SWING": {
@@ -186,6 +187,7 @@
       "position_check_interval": 300,
       "atr_sl_mult": 3.0,
       "atr_tp_mult": 6.0,
+      "leverage": 5,
       "description": "Multi-day holding (Days/Weeks), wide stops, ignoring intraday noise."
     }
   }
