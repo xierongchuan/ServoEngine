@@ -5,7 +5,7 @@
       "EURUSD"
     ],
     "bingx": [
-      "ZECUSDT"
+      "LTCUSDT"
     ]
   },
   "EXCHANGE_FEES": {
@@ -159,7 +159,7 @@
     "momentum_entry_enabled": true,
     "momentum_consecutive_candles": 3
   },
-  "STRATEGY_STYLE": "INTRADAY",
+  "STRATEGY_STYLE": "SWING",
   "STYLE_PRESETS": {
     "SCALP": {
       "timeframe": "1m",

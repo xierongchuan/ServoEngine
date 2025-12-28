@@ -213,6 +213,46 @@ if "atr_sl_multiplier" not in MOMENTUM_STRATEGY:
 if "atr_tp_multiplier" not in MOMENTUM_STRATEGY:
     MOMENTUM_STRATEGY["atr_tp_multiplier"] = current_preset["atr_tp_mult"]
 
+# --- DYNAMIC CONFIGURATION LOGIC ---
+def parse_interval_minutes(interval_str):
+    """Converts '1m', '5m', '1h', '1d' to minutes"""
+    if not interval_str: return 1
+    unit = interval_str[-1].lower()
+    value = int(interval_str[:-1])
+    if unit == 'm': return value
+    if unit == 'h': return value * 60
+    if unit == 'd': return value * 1440
+    return value
+
+# 1. Override DEFAULT_CHART_RANGE based on Style Preset
+# (If user didn't explicitly override it in local config, or we want to enforce consistency)
+target_chart_period = current_preset.get("chart_period")
+if target_chart_period and target_chart_period in CHART_RANGES:
+    if DEFAULT_CHART_RANGE != target_chart_period:
+        print(f"🔄 Auto-adjusted CHART_RANGE to {target_chart_period} for {STRATEGY_STYLE} style")
+        DEFAULT_CHART_RANGE = target_chart_period
+        BOT_CONFIG["DEFAULT_CHART_RANGE"] = target_chart_period # Consistent update
+
+# 2. Auto-calculate Smart Sampling Step
+# We want the AI to see 'target_timeframe' candles (e.g. 15m), but we download 'base_interval' candles (e.g. 5m)
+chart_config = CHART_RANGES.get(DEFAULT_CHART_RANGE, {})
+base_interval_str = chart_config.get("interval", "1m")
+target_timeframe_str = current_preset.get("timeframe", "1m")
+
+base_minutes = parse_interval_minutes(base_interval_str)
+target_minutes = parse_interval_minutes(target_timeframe_str)
+
+if SMART_SAMPLING.get("enabled", True):
+    # Calculate optimal step to simulate target timeframe
+    # Example: Base=5m, Target=15m -> Step=3
+    optimal_step = max(1, target_minutes // base_minutes)
+
+    current_step = SMART_SAMPLING.get("history_step", 1)
+    if current_step != optimal_step:
+         print(f"🔄 Auto-adjusted Smart Sampling step to {optimal_step} (Target: {target_timeframe_str}, Base: {base_interval_str})")
+         SMART_SAMPLING["history_step"] = optimal_step
+
+
 # DeepSeek / AI API Settings
 # DeepSeek / AI API Settings
 AI_SETTINGS = BOT_CONFIG.get("AI_SETTINGS", {})
