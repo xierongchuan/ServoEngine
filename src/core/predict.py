@@ -21,8 +21,10 @@ def get_prediction(prompt):
         "max_tokens": 512, # Increased for safety
         "temperature": 0.3,
         "reasoning": {
+            "effort": "high", # Can be "xhigh", "high", "medium", "low", "minimal" or "none" (OpenAI-style)
+            "max_tokens": 1500, # Specific token limit (Anthropic-style)
             "exclude": False, # Set to true to exclude reasoning tokens from response
-            "enabled": False # Default: inferred from `effort` or `max_tokens`
+            "enabled": True # Default: inferred from `effort` or `max_tokens`
         }
     }
 

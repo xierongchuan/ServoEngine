@@ -132,7 +132,7 @@
     "extract_full_content": true
   },
   "ENABLE_AI_SKIP_ON_RSI": false,
-  "ENABLE_LOW_VOLUME_FILTER": true,
+  "ENABLE_LOW_VOLUME_FILTER": false,
   "AI_SETTINGS": {
     "provider": "openrouter",
     "model": "xiaomi/mimo-v2-flash:free",

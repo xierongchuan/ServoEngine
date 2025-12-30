@@ -251,15 +251,18 @@ if target_plotter_period and target_plotter_period in PLOTTER_RANGES:
         BOT_CONFIG["DEFAULT_PLOTTER_RANGE"] = target_plotter_period
 
 # 3. Auto-calculate Smart Sampling Step
-# We want the AI to see 'target_timeframe' candles (e.g. 15m), but we download 'base_interval' candles (e.g. 5m)
+# We assume the collector now fetches 'target_timeframe' candles directly (e.g. 5m for Intraday)
+# So 'base_interval' effectively becomes 'target_timeframe'
 chart_config = CHART_RANGES.get(DEFAULT_CHART_RANGE, {})
-base_interval_str = chart_config.get("interval", "1m")
 target_timeframe_str = current_preset.get("timeframe", "1m")
+
+# In the new logic, we fetch AT broader intervals if needed, so base is effectively target
+base_interval_str = target_timeframe_str
 
 base_minutes = parse_interval_minutes(base_interval_str)
 target_minutes = parse_interval_minutes(target_timeframe_str)
 
-# Force enable Smart Sampling if we need it for aggregation
+# Force enable Smart Sampling if we need it for aggregation (Logic kept for backward compatibility if logic drifts)
 if target_minutes > base_minutes:
      if not SMART_SAMPLING.get("enabled", True):
           print(f"🔄 Force-enabling Smart Sampling for aggregation ({base_interval_str} -> {target_timeframe_str})")

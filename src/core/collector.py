@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from src.config import SYMBOLS, DATA_DIR, NEWS_SETTINGS, ENABLE_NEWS, CHART_RANGES, DEFAULT_CHART_RANGE
+from src.config import SYMBOLS, DATA_DIR, NEWS_SETTINGS, ENABLE_NEWS, CHART_RANGES, DEFAULT_CHART_RANGE, STYLE_PRESETS, STRATEGY_STYLE, parse_interval_minutes
 from src.utils.logger import info, error
 from src.utils.helpers import get_filename
 from src.utils.news_api import get_news_for_symbol
@@ -22,8 +22,32 @@ def fetch_prices(symbol):
     try:
         # Determine interval and limit from config
         chart_config = CHART_RANGES.get(DEFAULT_CHART_RANGE, {})
-        interval = chart_config.get("interval", "1m") # Default to 1m if not set
-        limit = chart_config.get("candles", 288)
+
+        # 1. Get Target Interval (from Strategy Style)
+        current_preset = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS["INTRADAY"])
+        target_interval_str = current_preset.get("timeframe", "1m") # e.g. "5m"
+
+        # 2. Get Duration in minutes (from Chart Range)
+        # Chart Range dictates "How far back we look" (e.g. 1D = 1440 minutes)
+        chart_days = chart_config.get("days", 0)
+        chart_hours = chart_config.get("hours", 0)
+        chart_minutes = chart_config.get("minutes", 0)
+        total_duration_minutes = (chart_days * 1440) + (chart_hours * 60) + chart_minutes
+
+        # Fallback if duration is 0 (shouldn't happen with valid config)
+        if total_duration_minutes == 0:
+             # Fallback to hardcoded candles count if provided, assuming 1m base or config error
+             total_duration_minutes = chart_config.get("candles", 288) * 1 # Assume 1m worst case
+
+        # 3. Calculate Limit (Duration / Interval)
+        interval_minutes = parse_interval_minutes(target_interval_str)
+        required_candles = int(total_duration_minutes // interval_minutes)
+
+        # Add buffer (optional, e.g. +10%)
+        limit = required_candles
+        interval = target_interval_str
+
+        info(f"📐 Config: Style={STRATEGY_STYLE}, Range={DEFAULT_CHART_RANGE} ({total_duration_minutes}m), TF={interval}, Candles={limit}")
 
         prices = client.get_kline_data(symbol, interval=interval, limit=limit)
 
