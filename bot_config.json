@@ -1,19 +1,18 @@
 {
   "EXCHANGE_SYMBOLS": {
     "bingx": [
-      "BTCUSDT",
-      "SOLUSDT"
+      "BTCUSDT"
     ]
   },
   "EXCHANGE_FEES": {
     "bingx": 0.1
   },
-  "POSITION_SIZE_PERCENT": 1.0,
+  "POSITION_SIZE_PERCENT": 2.0,
   "MIN_TRADE_AMOUNT_USDT": 10.0,
-  "TAKE_PROFIT_PERCENT": 1.5,
-  "STOP_LOSS_PERCENT": 1.5,
-  "MIN_CONFIDENCE_THRESHOLD": 0.7,
-  "MIN_RISK_REWARD_RATIO": 1.5,
+  "TAKE_PROFIT_PERCENT": 8.0,
+  "STOP_LOSS_PERCENT": 4.0,
+  "MIN_CONFIDENCE_THRESHOLD": 0.78,
+  "MIN_RISK_REWARD_RATIO": 2.0,
   "MIN_PARTIAL_CLOSE_PNL": 0.5,
   "AI_THRESHOLDS": {
     "RSI_OVERSOLD": 30,
@@ -126,7 +125,7 @@
     "news_timeout_seconds": 30,
     "extract_full_content": true
   },
-  "ENABLE_AI_SKIP_ON_RSI": false,
+  "ENABLE_AI_SKIP_ON_RSI": true,
   "ENABLE_LOW_VOLUME_FILTER": false,
   "AI_SETTINGS": {
     "provider": "openrouter",
@@ -136,7 +135,7 @@
     "max_tokens": 4096,
     "reasoning": {
       "enabled": true,
-      "effort": "high",
+      "effort": "medium",
       "exclude": true
     },
     "retry_count": 3,
@@ -156,15 +155,15 @@
   },
   "MOMENTUM_STRATEGY": {
     "enabled": true,
-    "atr_sl_multiplier": 1.5,
-    "atr_tp_multiplier": 2.5,
-    "min_volume_ratio": 0.7,
+    "atr_sl_multiplier": 3.0,
+    "atr_tp_multiplier": 6.0,
+    "min_volume_ratio": 0.5,
     "max_candles_in_prompt": 50,
     "trend_consensus_required": false,
     "momentum_entry_enabled": true,
     "momentum_consecutive_candles": 3
   },
-  "STRATEGY_STYLE": "INTRADAY",
+  "STRATEGY_STYLE": "SWING",
   "STYLE_PRESETS": {
     "SCALP": {
       "timeframe": "1m",
