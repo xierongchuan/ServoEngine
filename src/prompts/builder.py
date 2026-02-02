@@ -38,11 +38,17 @@ class PromptBuilder:
         # Стратегическая секция (## 3.)
         strategy_section = strategy.get_strategy_section(ctx)
 
+        # Decision history (опционально, если передан контекст)
+        decision_block = ""
+        if ctx.get("decision_history"):
+            decision_block = load_block("decision_history.txt").format_map(ctx)
+
         # Собираем блоки
         parts = [
             load_block("role.txt").format_map(ctx),
             load_block("principles.txt"),
             load_block("context_table.txt").format_map(ctx),
+            decision_block,
             load_block("market_analysis.txt").format_map(ctx),
             strategy_section,
             load_block("special_situations.txt"),
@@ -52,4 +58,4 @@ class PromptBuilder:
             load_block("response_format.txt").format_map(ctx),
         ]
 
-        return "\n\n---\n\n".join(parts).strip()
+        return "\n\n---\n\n".join(p for p in parts if p).strip()

@@ -365,26 +365,23 @@ def analyze_volume_profile(volumes, prices):
 
 from src.exchanges.exchange_factory import get_exchange_client
 
-def analyze_symbol_with_position(symbol):
+def analyze_symbol_with_position(symbol, decision_context=""):
     """
     Анализирует один символ, самостоятельно получая информацию о текущей позиции.
     Используется в режиме multiprocessing.
     """
     try:
         client = get_exchange_client()
-        # Получаем все позиции (к сожалению, API часто не имеет метода get_position(symbol))
-        # Но мы можем отфильтровать
         positions = client.get_positions()
         symbol_positions = positions.get(symbol, [])
         current_position = symbol_positions[0] if symbol_positions else None
 
-        return analyze_symbol(symbol, position=current_position)
+        return analyze_symbol(symbol, position=current_position, decision_context=decision_context)
     except Exception as e:
         error(f"❌ Ошибка получения позиции для {symbol}: {e}")
-        # Пробуем анализировать без позиции
-        return analyze_symbol(symbol, position=None)
+        return analyze_symbol(symbol, position=None, decision_context=decision_context)
 
-def analyze_symbol(symbol, position=None):
+def analyze_symbol(symbol, position=None, decision_context=""):
     """
     Анализирует один символ и готовит оптимизированный промпт для AI.
     Стратегия: Momentum Breakout с трендовым фильтром
@@ -790,6 +787,7 @@ def analyze_symbol(symbol, position=None):
         "news_section": news_section,
         "min_confidence": min_confidence,
         "is_momentum_market": is_momentum_market,
+        "decision_history": decision_context,
     }
 
     prompt = PromptBuilder.build(STRATEGY_STYLE, prompt_ctx)

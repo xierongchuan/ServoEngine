@@ -25,8 +25,11 @@ def run_symbol_pipeline(symbol: str):
         # Импортируем модули один раз
         from src.core import collector, analyzer, predict, executor, monitor, plotter
         from src.core.trade_tracker import TradeTracker
+        from src.core.decision_journal import DecisionJournal
+        from src.config import STRATEGY_STYLE
 
         tracker = TradeTracker()
+        journal = DecisionJournal()
 
         while True:
             try:
@@ -37,9 +40,10 @@ def run_symbol_pipeline(symbol: str):
                 info(f"📊 [{symbol}] Сбор данных...")
                 collector.process_symbol(symbol)
 
-                # 3. Анализ
+                # 3. Анализ (с контекстом предыдущих решений)
+                decision_context = journal.get_context(symbol, STRATEGY_STYLE)
                 info(f"🔍 [{symbol}] Анализ индикаторов...")
-                analysis_result = analyzer.analyze_symbol_with_position(symbol)
+                analysis_result = analyzer.analyze_symbol_with_position(symbol, decision_context=decision_context)
 
                 # Sync Trade Tracker (History & Manual Close Detection)
                 real_position = analysis_result.get("position")
@@ -49,7 +53,26 @@ def run_symbol_pipeline(symbol: str):
                 info(f"🧠 [{symbol}] AI Прогноз...")
                 prediction = predict.process_analysis(analysis_result)
 
-                # 5. Исполнение
+                # 5. Запись решения в журнал
+                current_price = analysis_result.get("current_price", 0)
+                current_pnl = None
+                if real_position:
+                    entry_price = float(real_position.get("entry", real_position.get("avgPrice", 0)))
+                    if entry_price > 0:
+                        current_pnl = ((current_price - entry_price) / entry_price) * 100
+
+                journal.record(symbol, prediction, current_price, current_pnl)
+
+                # Trade plan: фиксируем при открытии, очищаем при закрытии
+                action = prediction.get("action", "hold")
+                if action in ("buy", "sell") and not real_position:
+                    journal.set_trade_plan(symbol, prediction, current_price)
+                elif not real_position and journal.data.get(symbol, {}).get("trade_plan"):
+                    journal.clear_trade_plan(symbol)
+
+                journal.trim_entries(symbol, STRATEGY_STYLE)
+
+                # 6. Исполнение
                 info(f"💰 [{symbol}] Исполнение сигналов...")
                 executor.execute_prediction(prediction)
 
@@ -63,7 +86,7 @@ def run_symbol_pipeline(symbol: str):
                 elapsed = time.time() - start_time
 
                 # Dynamic Sleep based on Strategy & Position Status
-                from src.config import STRATEGY_STYLE, STYLE_PRESETS
+                from src.config import STYLE_PRESETS
                 preset = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS["INTRADAY"])
                 base_interval = preset.get("loop_interval", 60)
 

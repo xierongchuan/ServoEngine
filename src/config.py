@@ -155,6 +155,7 @@ NEWS_SETTINGS = BOT_CONFIG.get("NEWS_SETTINGS", {})
 SMART_SAMPLING = BOT_CONFIG.get("SMART_SAMPLING", {"enabled": True, "recent_candles": 30, "history_step": 10})
 MIN_RISK_REWARD_RATIO = BOT_CONFIG.get("MIN_RISK_REWARD_RATIO", 1.5)
 ENABLE_AI_SKIP_ON_RSI = BOT_CONFIG.get("ENABLE_AI_SKIP_ON_RSI", True)
+DECISION_JOURNAL = BOT_CONFIG.get("DECISION_JOURNAL", {"enabled": True, "max_entries": {"SCALP": 5, "INTRADAY": 10, "SWING": 10}})
 MOMENTUM_STRATEGY = BOT_CONFIG.get("MOMENTUM_STRATEGY", {
     "enabled": True,
     "atr_sl_multiplier": 1.5,

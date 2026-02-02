@@ -127,6 +127,14 @@
   },
   "ENABLE_AI_SKIP_ON_RSI": true,
   "ENABLE_LOW_VOLUME_FILTER": false,
+  "DECISION_JOURNAL": {
+    "enabled": true,
+    "max_entries": {
+      "SCALP": 5,
+      "INTRADAY": 10,
+      "SWING": 10
+    }
+  },
   "AI_SETTINGS": {
     "provider": "openrouter",
     "model": "deepseek/deepseek-v3.2",
