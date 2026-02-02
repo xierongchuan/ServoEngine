@@ -38,13 +38,18 @@ log_message "Биржа: $EXCHANGE"
 log_message "Режим: $MODE"
 log_message "🚀 Запуск торгового бота в контейнере..."
 
+# Собираем образ с зависимостями (пересобирается только при изменении requirements.txt)
+IMAGE_NAME="openproducer-bot"
+log_message "Проверка/сборка образа $IMAGE_NAME..."
+podman build -q -t "$IMAGE_NAME" .
+
 # Запускаем бота в контейнере с --init для корректной обработки Ctrl+C
 if podman run --rm -it --init \
     --env-file .env \
     -v .:/app:Z \
     -w /app \
-    python:3.12-slim \
-    sh -c "pip install -q -r requirements.txt && python3 run.py"; then
+    "$IMAGE_NAME" \
+    python3 run.py; then
     log_message "✅ Торговый бот остановлен (штатно)"
 else
     log_error "❌ Торговый бот упал с ошибкой"

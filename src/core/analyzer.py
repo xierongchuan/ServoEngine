@@ -1,6 +1,6 @@
 import json
 import os
-from src.config import DATA_DIR, AI_THRESHOLDS, SYMBOLS, ENABLE_NEWS
+from src.config import DATA_DIR, AI_THRESHOLDS, SYMBOLS, ENABLE_NEWS, TECHNICAL_ANALYSIS
 from src.utils.logger import info, error
 from src.utils.helpers import get_filename
 
@@ -117,7 +117,9 @@ def calculate_indicators(prices):
 
     return round(sma, 5), round(rsi, 2)
 
-def calculate_support_resistance(prices, window=20):
+def calculate_support_resistance(prices, window=None):
+    if window is None:
+        window = TECHNICAL_ANALYSIS.get("sr_window", 20)
     """
     Определяет уровни поддержки и сопротивления на основе локальных минимумов и максимумов.
     :param prices: Список цен (Close)
@@ -237,7 +239,11 @@ def calculate_rsi_series(prices, period=14):
 
     return rsi_values
 
-def calculate_seb_series(prices, length=20, mult=2.0):
+def calculate_seb_series(prices, length=None, mult=None):
+    if length is None:
+        length = TECHNICAL_ANALYSIS.get("seb_length", 20)
+    if mult is None:
+        mult = TECHNICAL_ANALYSIS.get("seb_multiplier", 2.0)
     """
     Calculates Standard Error Bands (Linear Regression + StdErr) for the END of the series only,
     but returns arrays populated with the LAST regression line values for visualization purposes
@@ -285,7 +291,11 @@ def calculate_seb_series(prices, length=20, mult=2.0):
 
     return linreg_series, upper_series, lower_series
 
-def calculate_seb(prices, length=20, mult=2.0):
+def calculate_seb(prices, length=None, mult=None):
+    if length is None:
+        length = TECHNICAL_ANALYSIS.get("seb_length", 20)
+    if mult is None:
+        mult = TECHNICAL_ANALYSIS.get("seb_multiplier", 2.0)
     """
     Calculates Standard Error Bands (Linear Regression + StdErr) for LAST point only.
     Use calculate_seb_series for full history.
@@ -401,8 +411,9 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     close_prices = [get_price_value(p.get("closePrice", 0)) for p in prices]
 
     # EMA расчёты
-    ema9 = calculate_ema(close_prices, 9)
-    ema21 = calculate_ema(close_prices, 21)
+    _ema_periods = TECHNICAL_ANALYSIS.get("ema_periods", [9, 21])
+    ema9 = calculate_ema(close_prices, _ema_periods[0])
+    ema21 = calculate_ema(close_prices, _ema_periods[1] if len(_ema_periods) > 1 else 21)
 
     # ATR расчёт
     atr = calculate_atr(prices, 14)
@@ -417,8 +428,9 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     trends_aligned = (global_trend == "UP" and local_trend == "BULLISH") or \
                      (global_trend == "DOWN" and local_trend == "BEARISH")
 
-    # Анализ последних 5 свечей
-    last_5_closes = close_prices[-5:] if len(close_prices) >= 5 else close_prices
+    # Анализ последних N свечей
+    _trend_candles = TECHNICAL_ANALYSIS.get("trend_candle_count", 5)
+    last_5_closes = close_prices[-_trend_candles:] if len(close_prices) >= _trend_candles else close_prices
     if len(last_5_closes) >= 2:
         up_candles = sum(1 for i in range(1, len(last_5_closes)) if last_5_closes[i] > last_5_closes[i-1])
         down_candles = len(last_5_closes) - 1 - up_candles
@@ -475,19 +487,25 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     elif seb_r_sq > 0.5: trend_quality_desc = "Medium"
 
     # === ОБЪЁМ И ВОЛАТИЛЬНОСТЬ ===
+    _vol_avg_window = TECHNICAL_ANALYSIS.get("volume_avg_window", 20)
+    _vol_thresh = TECHNICAL_ANALYSIS.get("volume_thresholds", {})
+    _vol_anomaly = _vol_thresh.get("anomaly", 2.0)
+    _vol_elevated = _vol_thresh.get("elevated", 1.2)
+    _vol_low = _vol_thresh.get("low", 0.5)
+
     volumes = [float(p.get('volume', 0)) for p in prices]
-    if len(volumes) >= 20:
-        avg_volume = sum(volumes[-20:]) / 20
+    if len(volumes) >= _vol_avg_window:
+        avg_volume = sum(volumes[-_vol_avg_window:]) / _vol_avg_window
         current_volume = volumes[-1] if volumes else 0
         volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
     else:
         volume_ratio = 1.0
 
-    if volume_ratio > 2.0:
+    if volume_ratio > _vol_anomaly:
         volume_status = "🔥 АНОМАЛЬНО ВЫСОКИЙ"
-    elif volume_ratio > 1.2:
+    elif volume_ratio > _vol_elevated:
         volume_status = "📈 Повышенный"
-    elif volume_ratio < 0.5:
+    elif volume_ratio < _vol_low:
         volume_status = "💤 Низкий"
     else:
         volume_status = "✅ Норма"
@@ -724,7 +742,8 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     news_section = ""
     if ENABLE_NEWS and news:
         news_items = []
-        for item in news[:5]:  # Максимум 5 новостей
+        _max_news = TECHNICAL_ANALYSIS.get("news_items_in_prompt", 5)
+        for item in news[:_max_news]:
             news_items.append(f"- [{item.get('timestamp', 'N/A')}] {item.get('title', 'N/A')}")
         news_section = f"""
 ---
@@ -736,10 +755,12 @@ def analyze_symbol(symbol, position=None, decision_context=""):
 """
 
     # === MOMENTUM MARKET CHECK ===
+    _mom_vol = TECHNICAL_ANALYSIS.get("momentum_volume_threshold", 1.2)
+    _mom_trend_vol = TECHNICAL_ANALYSIS.get("momentum_trend_volume_threshold", 1.0)
     is_momentum_market = False
-    if volume_ratio > 1.2:
+    if volume_ratio > _mom_vol:
         is_momentum_market = True
-    elif trends_aligned and volume_ratio > 1.0:
+    elif trends_aligned and volume_ratio > _mom_trend_vol:
         is_momentum_market = True
 
     # === СБОРКА ПРОМПТА ===

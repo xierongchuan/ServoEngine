@@ -34,7 +34,7 @@ class TestPredictFix(unittest.TestCase):
         data = parse_response(response)
         self.assertEqual(data["action"], "hold")
         self.assertEqual(data["confidence"], 0.0)
-        self.assertEqual(data["reason"], "Ошибка парсинга ответа DeepSeek")
+        self.assertEqual(data["reason"], "Ошибка парсинга ответа AI")
 
 if __name__ == '__main__':
     unittest.main()

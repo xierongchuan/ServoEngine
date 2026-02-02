@@ -26,7 +26,7 @@ def run_symbol_pipeline(symbol: str):
         from src.core import collector, analyzer, predict, executor, monitor, plotter
         from src.core.trade_tracker import TradeTracker
         from src.core.decision_journal import DecisionJournal
-        from src.config import STRATEGY_STYLE
+        from src.config import STRATEGY_STYLE, ERROR_HANDLING
 
         tracker = TradeTracker()
         journal = DecisionJournal()
@@ -106,7 +106,7 @@ def run_symbol_pipeline(symbol: str):
             except Exception as e:
                 error(f"❌ [{symbol}] Ошибка внутри торгового цикла: {str(e)}")
                 error(traceback.format_exc())
-                sleep_time = 5 # Error fallback
+                sleep_time = ERROR_HANDLING.get("cycle_error_fallback_sleep", 5)
 
             # Пауза между циклами
             time.sleep(sleep_time)

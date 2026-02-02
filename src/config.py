@@ -156,6 +156,11 @@ SMART_SAMPLING = BOT_CONFIG.get("SMART_SAMPLING", {"enabled": True, "recent_cand
 MIN_RISK_REWARD_RATIO = BOT_CONFIG.get("MIN_RISK_REWARD_RATIO", 1.5)
 ENABLE_AI_SKIP_ON_RSI = BOT_CONFIG.get("ENABLE_AI_SKIP_ON_RSI", True)
 DECISION_JOURNAL = BOT_CONFIG.get("DECISION_JOURNAL", {"enabled": True, "max_entries": {"SCALP": 5, "INTRADAY": 10, "SWING": 10}})
+POSITION_LIMITS = BOT_CONFIG.get("POSITION_LIMITS", {"max_positions": 5, "price_precision": 4, "quantity_precision": 4, "balance_safety_margin": 0.95, "position_sync_wait": 1.0})
+VALIDATION = BOT_CONFIG.get("VALIDATION", {"rr_soft_limit": 0.5})
+TECHNICAL_ANALYSIS = BOT_CONFIG.get("TECHNICAL_ANALYSIS", {"sr_window": 20, "ema_periods": [9, 21], "trend_candle_count": 5, "volume_avg_window": 20, "volume_thresholds": {"anomaly": 2.0, "elevated": 1.2, "low": 0.5}, "seb_length": 20, "seb_multiplier": 2.0, "momentum_volume_threshold": 1.2, "momentum_trend_volume_threshold": 1.0, "news_items_in_prompt": 5})
+CHART_SETTINGS = BOT_CONFIG.get("CHART_SETTINGS", {"update_interval": 10, "min_sleep": 0.5, "sma_periods": [10, 20, 50, 100, 200], "chart_height": 13.5, "dpi": 200})
+ERROR_HANDLING = BOT_CONFIG.get("ERROR_HANDLING", {"cycle_error_fallback_sleep": 5})
 MOMENTUM_STRATEGY = BOT_CONFIG.get("MOMENTUM_STRATEGY", {
     "enabled": True,
     "atr_sl_multiplier": 1.5,
@@ -283,6 +288,8 @@ AI_REASONING = AI_SETTINGS.get("reasoning", {})
 AI_RETRY_COUNT = AI_SETTINGS.get("retry_count", 3)
 AI_PROVIDER_ROUTING = AI_SETTINGS.get("provider_routing", {})
 AI_FALLBACK_MODELS = AI_SETTINGS.get("fallback_models", [])
+AI_REQUEST_TIMEOUT = AI_SETTINGS.get("request_timeout", 60)
+AI_RETRY_BACKOFF_BASE = AI_SETTINGS.get("retry_backoff_base", 2)
 
 # Load API Keys
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")

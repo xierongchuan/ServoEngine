@@ -1,7 +1,7 @@
 import json
 import requests
 import time
-from src.config import AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_PROVIDER, AI_TEMPERATURE, AI_MAX_TOKENS, AI_REASONING, AI_RETRY_COUNT, AI_PROVIDER_ROUTING, AI_FALLBACK_MODELS
+from src.config import AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_PROVIDER, AI_TEMPERATURE, AI_MAX_TOKENS, AI_REASONING, AI_RETRY_COUNT, AI_PROVIDER_ROUTING, AI_FALLBACK_MODELS, AI_REQUEST_TIMEOUT, AI_RETRY_BACKOFF_BASE, VALIDATION
 from src.utils.logger import info, error, warning
 
 # HTTP status codes worth retrying
@@ -46,13 +46,13 @@ def get_prediction(prompt):
     last_error = None
     for attempt in range(AI_RETRY_COUNT + 1):
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=60)
+            response = requests.post(url, json=payload, headers=headers, timeout=AI_REQUEST_TIMEOUT)
 
             # Check for retryable HTTP errors (502, 429, etc.)
             if response.status_code in _RETRYABLE_STATUS_CODES:
                 error(f"❌ API ответ ({response.status_code}): {response.text[:500]}")
                 if attempt < AI_RETRY_COUNT:
-                    delay = 2 ** (attempt + 1)  # 2, 4, 8 ...
+                    delay = AI_RETRY_BACKOFF_BASE ** (attempt + 1)
                     warning(f"⚠️ Retryable HTTP {response.status_code}. Повтор через {delay} сек (попытка {attempt+1}/{AI_RETRY_COUNT})...")
                     time.sleep(delay)
                     continue
@@ -71,7 +71,7 @@ def get_prediction(prompt):
                 err_msg = json.dumps(data, ensure_ascii=False)[:1000]
                 error(f"❌ Полный ответ API: {err_msg}")
                 if attempt < AI_RETRY_COUNT:
-                    delay = 2 ** (attempt + 1)
+                    delay = AI_RETRY_BACKOFF_BASE ** (attempt + 1)
                     warning(f"⚠️ API вернул ошибку в JSON. Повтор через {delay} сек (попытка {attempt+1}/{AI_RETRY_COUNT})...")
                     time.sleep(delay)
                     continue
@@ -92,7 +92,7 @@ def get_prediction(prompt):
                 refusal = msg.get("refusal") or ""
                 warning(f"⚠️ Empty content. Message keys: {list(msg.keys())}, reasoning len: {len(reasoning)}, refusal: '{refusal}'")
                 if attempt < AI_RETRY_COUNT:
-                    delay = 2 ** (attempt + 1)
+                    delay = AI_RETRY_BACKOFF_BASE ** (attempt + 1)
                     warning(f"⚠️ Пустой content от API. Повтор через {delay} сек (попытка {attempt+1}/{AI_RETRY_COUNT})...")
                     time.sleep(delay)
                     continue
@@ -110,7 +110,7 @@ def get_prediction(prompt):
                 continue
         except Exception as e:
             last_error = e
-            error(f"❌ Ошибка DeepSeek API: {str(e)}")
+            error(f"❌ Ошибка AI API: {str(e)}")
             break  # Non-retryable error
 
     # All retries exhausted or non-retryable error
@@ -122,7 +122,7 @@ def get_prediction(prompt):
     }
 
 def parse_response(response):
-    """Парсит ответ DeepSeek в структурированный формат"""
+    """Парсит ответ AI в структурированный формат"""
     try:
         # Если response уже dict (при ошибке API), возвращаем его
         if isinstance(response, dict):
@@ -200,7 +200,7 @@ def parse_response(response):
         return {
             "action": "hold",
             "confidence": 0.0,
-            "reason": "Ошибка парсинга ответа DeepSeek"
+            "reason": "Ошибка парсинга ответа AI"
         }
 
 def smart_filter(analysis):
@@ -214,6 +214,7 @@ def smart_filter(analysis):
         AI_THRESHOLDS,
         ENABLE_AI_SKIP_ON_RSI,
         MOMENTUM_STRATEGY,
+        TECHNICAL_ANALYSIS,
         BOT_CONFIG as bot_config # Import full config to access dynamic keys
     )
 
@@ -230,7 +231,9 @@ def smart_filter(analysis):
     # Default to True if not present to maintain backward compatibility, BUT user requested control.
     enable_low_vol_filter = bot_config.get("ENABLE_LOW_VOLUME_FILTER", False)
 
-    if enable_low_vol_filter and volume_ratio < 0.4:
+    _vol_thresholds = TECHNICAL_ANALYSIS.get("volume_thresholds", {})
+    _low_vol = _vol_thresholds.get("low", 0.5)
+    if enable_low_vol_filter and volume_ratio < _low_vol:
         # Ignore filter if RSI is extreme (possible reversal)
         if 25 < analysis_rsi < 75:
             return False, f"Low Volume ({volume_ratio:.2f}x) -> Auto-HOLD (Save Cost)"
@@ -249,7 +252,8 @@ def smart_filter(analysis):
     prompt_text = analysis.get("prompt", "")
 
     # Clean Volume Check
-    high_volume = volume_ratio > 1.2
+    _momentum_vol = TECHNICAL_ANALYSIS.get("momentum_volume_threshold", 1.2)
+    high_volume = volume_ratio > _momentum_vol
 
     # Проверка на тренд (Global=UP, Local=BULLISH)
     strong_uptrend = "Global) | UP" in prompt_text and "Local) | BULLISH" in prompt_text
@@ -327,19 +331,19 @@ def process_analysis(analysis):
 
         response = get_prediction(current_prompt)
 
-        # Логируем очищенный ответ от DeepSeek (без markdown)
+        # Логируем очищенный ответ от AI (без markdown)
         if isinstance(response, str):
             import re
             cleaned = re.sub(r'```json\s*', '', response)
             cleaned = re.sub(r'```', '', cleaned)
-            info(f"📨 Ответ DeepSeek ({analysis['symbol']}, Попытка {attempt+1}): {cleaned}")
+            info(f"📨 Ответ AI ({analysis['symbol']}, Попытка {attempt+1}): {cleaned}")
         else:
-            info(f"📨 Ответ DeepSeek ({analysis['symbol']}, Попытка {attempt+1}): (dict) {response}")
+            info(f"📨 Ответ AI ({analysis['symbol']}, Попытка {attempt+1}): (dict) {response}")
 
         prediction = parse_response(response)
 
         # 1. Check Technical Errors (API/Parsing)
-        if prediction["reason"] == "Ошибка парсинга ответа DeepSeek" or prediction["reason"].startswith("Ошибка API"):
+        if prediction["reason"] == "Ошибка парсинга ответа AI" or prediction["reason"].startswith("Ошибка API"):
             if attempt < max_retries:
                 warning(f"⚠️ {analysis['symbol']}: Ошибка парсинга/API. Повторная попытка через 1 сек...")
                 time.sleep(1)
@@ -429,7 +433,7 @@ def validate_prediction(prediction, current_price, has_position=False):
     # Relaxed validation: Just log a warning if R/R is very low, but do not reject unless it's catastrophic (e.g. < 0.3)
     # The user wants "normal" risk management, relying on the AI's judgment.
 
-    soft_limit = 0.5
+    soft_limit = VALIDATION.get("rr_soft_limit", 0.5)
     if rr_ratio < soft_limit:
         warning(f"⚠️ Низкий Risk/Reward ({rr_ratio:.2f}). AI считает это допустимым, но риск высок.")
         # We DO NOT reject the signal, just log it.

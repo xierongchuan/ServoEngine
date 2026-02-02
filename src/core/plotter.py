@@ -13,7 +13,7 @@ try:
 except ImportError:
     PANDAS_AVAILABLE = False
 
-from src.config import DATA_DIR, CHARTS_DIR, PLOTTER_RANGES, DEFAULT_PLOTTER_RANGE, CLEANUP_SETTINGS, SYMBOLS, AI_THRESHOLDS, AGGRESSIVE_MODE, BOT_CONFIG
+from src.config import DATA_DIR, CHARTS_DIR, PLOTTER_RANGES, DEFAULT_PLOTTER_RANGE, CLEANUP_SETTINGS, SYMBOLS, AI_THRESHOLDS, AGGRESSIVE_MODE, BOT_CONFIG, CHART_SETTINGS, TECHNICAL_ANALYSIS
 from src.utils.logger import info, error
 from src.utils.helpers import get_filename
 
@@ -265,7 +265,7 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     # Calculate indicators on FULL filtered/resampled dataset
     # SMAs
     all_smas = {}
-    sma_periods = [10, 20, 50, 100, 200]
+    sma_periods = CHART_SETTINGS.get("sma_periods", [10, 20, 50, 100, 200])
     for period in sma_periods:
         if len(all_closes) >= period:
             all_smas[period] = [sum(all_closes[max(0, i-period+1):i+1])/min(period, i+1) for i in range(len(all_closes))]
@@ -322,8 +322,8 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     seb_lower = []
 
     # SEB Parameters
-    seb_length = 20
-    seb_mult = 2.0
+    seb_length = TECHNICAL_ANALYSIS.get("seb_length", 20)
+    seb_mult = TECHNICAL_ANALYSIS.get("seb_multiplier", 2.0)
 
     for i in range(len(all_closes)):
         if i < seb_length:
@@ -358,7 +358,8 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     # Creates subplot figure (PRICE, VOLUME, RSI)
     # Reduced height by 25% (18 -> 13.5)
     plt.close('all') # Fix for RuntimeWarning: More than 20 figures have been opened
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(chart_width, 13.5), gridspec_kw={'height_ratios': [3, 1, 1]}, sharex=True)
+    _chart_height = CHART_SETTINGS.get("chart_height", 13.5)
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(chart_width, _chart_height), gridspec_kw={'height_ratios': [3, 1, 1]}, sharex=True)
 
     # ... (Prepare plotting data arrays for filtered range) ...
     plot_seb_upper = []
@@ -582,7 +583,8 @@ def plot_symbol(symbol, time_range=None, current_position=None):
 
     # Сохраняем с высоким разрешением (перезаписываем файл)
     filename = f"{CHARTS_DIR}/{get_filename(symbol)}.png"
-    plt.savefig(filename, dpi=200, bbox_inches='tight')
+    _dpi = CHART_SETTINGS.get("dpi", 200)
+    plt.savefig(filename, dpi=_dpi, bbox_inches='tight')
     plt.close(fig) # Explicitly close the specific figure object
 
     info(f"🖼️ График для {symbol} сохранен как {filename} (Range: {time_range})")

@@ -6,7 +6,7 @@ import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 
-from src.config import SYMBOLS, DATA_DIR, ENABLE_PARALLEL_PROCESSING, DEFAULT_PLOTTER_RANGE
+from src.config import SYMBOLS, DATA_DIR, ENABLE_PARALLEL_PROCESSING, DEFAULT_PLOTTER_RANGE, CHART_SETTINGS
 from src.utils.logger import info, error, warning
 from src.core import plotter
 
@@ -32,7 +32,7 @@ def run_chart_worker():
     info(f"🎨 [ChartWorker] Process started (PID: {os.getpid()})")
 
     # Configuration
-    UPDATE_INTERVAL = 10 # seconds
+    UPDATE_INTERVAL = CHART_SETTINGS.get("update_interval", 10)
 
     # 3. Parallel Execution Setup
     if ENABLE_PARALLEL_PROCESSING:
@@ -86,7 +86,8 @@ def run_chart_worker():
             # 4. Sleep ensuring accurate interval
             # 4. Sleep ensuring accurate interval
             execution_time = time.time() - start_time
-            sleep_time = max(0.5, UPDATE_INTERVAL - execution_time)
+            _min_sleep = CHART_SETTINGS.get("min_sleep", 0.5)
+            sleep_time = max(_min_sleep, UPDATE_INTERVAL - execution_time)
             time.sleep(sleep_time)
 
     except KeyboardInterrupt:

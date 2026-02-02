@@ -46,8 +46,9 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
             sl_price = float(ai_sl)
 
         # Rounding (optional, but good for APIs)
-        tp_price = round(tp_price, 4) # 4 decimals is safe for most forex/crypto
-        sl_price = round(sl_price, 4)
+        _price_prec = POSITION_LIMITS.get("price_precision", 4)
+        tp_price = round(tp_price, _price_prec)
+        sl_price = round(sl_price, _price_prec)
 
         info(f"🎯 Calculated TP: {tp_price}, SL: {sl_price}")
 
@@ -79,14 +80,16 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
 
         # Check if we have enough balance for this trade (simplified check)
         if trade_amount > total_balance:
-             warning(f"⚠️ Trade amount ${trade_amount:.2f} exceeds balance ${total_balance:.2f}. Adjusting to 95% of balance.")
-             trade_amount = total_balance * 0.95
+             _safety = POSITION_LIMITS.get("balance_safety_margin", 0.95)
+             warning(f"⚠️ Trade amount ${trade_amount:.2f} exceeds balance ${total_balance:.2f}. Adjusting to {_safety*100:.0f}% of balance.")
+             trade_amount = total_balance * _safety
 
         quantity = trade_amount / price
 
         # Round quantity to appropriate precision (e.g., 4 decimals for crypto)
         # In a real scenario, this should be symbol-specific
-        quantity = round(quantity, 4)
+        _qty_prec = POSITION_LIMITS.get("quantity_precision", 4)
+        quantity = round(quantity, _qty_prec)
 
         info(f"🧮 Calculated quantity: {quantity} (Balance: ${total_balance:.2f} | Amount: ${trade_amount:.2f} [{POSITION_SIZE_PERCENT}%])")
 
@@ -122,7 +125,7 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
             # Force update of active_trades.json so charts show the line instantly
             try:
                 info(f"🔄 Performing immediate position sync for {symbol}...")
-                time.sleep(1.0) # Short wait for API propagation
+                time.sleep(POSITION_LIMITS.get("position_sync_wait", 1.0)) # Short wait for API propagation
 
                 # Fetch fresh positions
                 fresh_positions = client.get_positions()
@@ -176,7 +179,7 @@ def execute_prediction(prediction):
         return
 
     # Проверяем лимит позиций (максимум 5)
-    MAX_POSITIONS = 5
+    MAX_POSITIONS = POSITION_LIMITS.get("max_positions", 5)
     total_positions = sum(len(p) for p in positions.values())
 
     # Флаг, есть ли у нас позиция по этому символу
@@ -284,7 +287,7 @@ def main(predictions):
         info(f"📊 Открытые позиции: {', '.join(pos_details)}")
 
     # Проверяем лимит позиций (максимум 5)
-    MAX_POSITIONS = 5
+    MAX_POSITIONS = POSITION_LIMITS.get("max_positions", 5)
     total_positions = sum(len(p) for p in positions.values())
 
     # Determine confidence threshold
