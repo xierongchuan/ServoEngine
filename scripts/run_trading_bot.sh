@@ -1,7 +1,6 @@
 #!/bin/bash
-# Скрипт для автоматического запуска торгового бота
+# Скрипт для автоматического запуска торгового бота в контейнере
 # Автор: Claude Code
-# Дата: 2025-11-02
 
 # Цвета для вывода
 RED='\033[0;31m'
@@ -9,7 +8,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Функция для вывода сообщений
 log_message() {
     echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"
 }
@@ -22,7 +20,6 @@ log_warning() {
     echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] WARNING:${NC} $1"
 }
 
-# Переходим в директорию со скриптом
 # Переходим в корневую директорию проекта (на уровень выше скрипта)
 cd "$(dirname "$0")/.."
 
@@ -32,14 +29,6 @@ if [ -f .env ]; then
     source .env
 fi
 
-# Проверка наличия Python
-if ! command -v python3 &> /dev/null; then
-    log_error "Python3 не найден! Установите Python 3.12+"
-    exit 1
-fi
-
-# Проверка наличия переменных окружения - пропущена, так как все берется из .env
-
 # Создаем директории если их нет
 mkdir -p data/prices data/news charts
 
@@ -47,17 +36,19 @@ mkdir -p data/prices data/news charts
 log_message "Запуск торгового бота OpenProducer..."
 log_message "Биржа: $EXCHANGE"
 log_message "Режим: $MODE"
+log_message "🚀 Запуск торгового бота в контейнере..."
 
-# Логируем завершение
-log_message "🚀 Запуск торгового бота..."
-
-# Запускаем бота с использованием виртуального окружения
-if ./venv/bin/python3 run.py; then
+# Запускаем бота в контейнере с --init для корректной обработки Ctrl+C
+if podman run --rm -it --init \
+    --env-file .env \
+    -v .:/app:Z \
+    -w /app \
+    python:3.12-slim \
+    sh -c "pip install -q -r requirements.txt && python3 run.py"; then
     log_message "✅ Торговый бот остановлен (штатно)"
 else
     log_error "❌ Торговый бот упал с ошибкой"
     log_warning "Проверьте логи: data/steps.log"
 fi
-log_message "Завершено. Логи сохранены в data/steps.log и data/trades.log"
 
 log_message "Завершено. Логи сохранены в data/steps.log и data/trades.log"

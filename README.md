@@ -223,24 +223,53 @@ AI получает не просто список свечей, а **полну
 | `ENABLE_AI_SKIP_ON_RSI` | Bool | Умный экономайзер. Пропускает вызов AI при RSI > 70, **ЕСЛИ** нет подтверждения High Volume Momentum. | `true` (экономит $) |
 | `LEVERAGE` | Int | Кредитное плечо для позиций. | `20` |
 
-### 🤖 Настройка AI Провайдера
+### 🤖 Настройка AI Провайдера (`AI_SETTINGS`)
 
 Система поддерживает работу через **OpenRouter**, **DeepSeek Official API** или **SiliconFlow**.
 
 ```json
-  "AI_SETTINGS": {
-    "provider": "openrouter",
-    "model": "deepseek/deepseek-chat",
-    "base_url": "https://openrouter.ai/api/v1/chat/completions"
-  }
+"AI_SETTINGS": {
+  "provider": "openrouter",
+  "model": "deepseek/deepseek-v3.2",
+  "base_url": "https://openrouter.ai/api/v1/chat/completions",
+  "temperature": 0.3,
+  "max_tokens": 4096,
+  "reasoning": {
+    "enabled": true,
+    "effort": "high",
+    "exclude": true
+  },
+  "retry_count": 3,
+  "provider_routing": {
+    "allow_fallbacks": true
+  },
+  "fallback_models": []
+}
 ```
 
-*   **provider**: `"openrouter"` (рекомендуется), `"deepseek"`, или `"siliconflow"`.
-*   **model**: Имя модели (например: `"deepseek/deepseek-chat"` для OpenRouter, `"x-ai/grok-2-vision-1212"` для Grok и т.д.).
-*   **base_url**: URL для API.
+| Параметр | Тип | Описание |
+| :--- | :--- | :--- |
+| `provider` | Str | Провайдер API: `"openrouter"` (рекомендуется), `"deepseek"`, `"siliconflow"` |
+| `model` | Str | ID модели. Для OpenRouter: `"deepseek/deepseek-v3.2"`, `"deepseek/deepseek-chat"` и др. |
+| `base_url` | Str | URL эндпоинта API. Обычно менять не нужно |
+| `temperature` | Float | Креативность ответа (0.0–1.0). Для трейдинга лучше 0.2–0.4 |
+| `max_tokens` | Int | Максимум токенов в ответе (**включая** reasoning). Для reasoning-моделей нужно 4096+, т.к. reasoning съедает часть лимита |
+| **reasoning** | | **Настройки reasoning-моделей (DeepSeek V3.2, R1 и др.)** |
+| `reasoning.enabled` | Bool | Включить reasoning. `false` — обычная модель без рассуждений |
+| `reasoning.effort` | Str | Глубина рассуждений: `"low"`, `"medium"`, `"high"`. Нельзя использовать вместе с `max_tokens` |
+| `reasoning.max_tokens` | Int | Лимит токенов на рассуждения (альтернатива `effort`). Нельзя использовать вместе с `effort` |
+| `reasoning.exclude` | Bool | **`true`** — рассуждения не попадают в ответ (рекомендуется). `false` — рассуждения включаются в content, съедая лимит `max_tokens` |
+| **retry_count** | Int | Количество повторных попыток при ошибках сети/API (502, 429, таймауты). Backoff: 2с, 4с, 8с |
+| **provider_routing** | Dict | Настройки роутинга провайдеров (только OpenRouter). Передаётся как `provider` в запросе |
+| `provider_routing.allow_fallbacks` | Bool | Разрешить OpenRouter переключаться на другого провайдера при ошибке |
+| `provider_routing.ignore` | List | Список провайдеров для игнорирования, например `["ModelRun"]` |
+| **fallback_models** | List | Запасные модели. Если основная модель падает, OpenRouter автоматически попробует следующую. Пример: `["deepseek/deepseek-chat"]` |
 
 > [!TIP]
-> Для OpenRouter используйте `OPENROUTER_API_KEY` в `.env`. Для других провайдеров - соответствующие ключи.
+> Для OpenRouter используйте `OPENROUTER_API_KEY` в `.env`. Для других провайдеров — соответствующие ключи.
+
+> [!WARNING]
+> Для reasoning-моделей **обязательно** ставьте `"exclude": true`. Иначе рассуждения попадут в content вместо JSON-ответа и парсинг сломается.
 
 ---
 

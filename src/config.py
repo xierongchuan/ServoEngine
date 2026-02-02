@@ -276,6 +276,12 @@ if SMART_SAMPLING.get("enabled", True):
 AI_SETTINGS = BOT_CONFIG.get("AI_SETTINGS", {})
 AI_PROVIDER = AI_SETTINGS.get("provider", "deepseek_official")
 AI_MODEL = AI_SETTINGS.get("model", "deepseek-chat")
+AI_TEMPERATURE = AI_SETTINGS.get("temperature", 0.3)
+AI_MAX_TOKENS = AI_SETTINGS.get("max_tokens", 512)
+AI_REASONING = AI_SETTINGS.get("reasoning", {})
+AI_RETRY_COUNT = AI_SETTINGS.get("retry_count", 3)
+AI_PROVIDER_ROUTING = AI_SETTINGS.get("provider_routing", {})
+AI_FALLBACK_MODELS = AI_SETTINGS.get("fallback_models", [])
 
 # Load API Keys
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")

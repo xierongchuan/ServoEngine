@@ -1,8 +1,11 @@
 import json
 import requests
 import time
-from src.config import AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_PROVIDER
+from src.config import AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_PROVIDER, AI_TEMPERATURE, AI_MAX_TOKENS, AI_REASONING, AI_RETRY_COUNT, AI_PROVIDER_ROUTING, AI_FALLBACK_MODELS
 from src.utils.logger import info, error, warning
+
+# HTTP status codes worth retrying
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 def get_prediction(prompt):
     """Отправляет промпт в AI (DeepSeek/SiliconFlow/OpenRouter) и получает ответ"""
@@ -18,38 +21,105 @@ def get_prediction(prompt):
     payload = {
         "model": AI_MODEL,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 512, # Increased for safety
-        "temperature": 0.3,
-        "reasoning": {
-            "effort": "high", # Can be "xhigh", "high", "medium", "low", "minimal" or "none" (OpenAI-style)
-            "max_tokens": 1500, # Specific token limit (Anthropic-style)
-            "exclude": False, # Set to true to exclude reasoning tokens from response
-            "enabled": True # Default: inferred from `effort` or `max_tokens`
-        }
+        "max_tokens": AI_MAX_TOKENS,
+        "temperature": AI_TEMPERATURE,
     }
 
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-        data = response.json()
+    if AI_REASONING.get("enabled", False):
+        reasoning = {}
+        if "effort" in AI_REASONING:
+            reasoning["effort"] = AI_REASONING["effort"]
+        elif "max_tokens" in AI_REASONING:
+            reasoning["max_tokens"] = AI_REASONING["max_tokens"]
+        if "exclude" in AI_REASONING:
+            reasoning["exclude"] = AI_REASONING["exclude"]
+        payload["reasoning"] = reasoning
 
-        # Проверяем структуру ответа
-        if "choices" not in data or not data["choices"]:
-            raise ValueError("Некорректный ответ DeepSeek API: нет поля choices")
+    # OpenRouter: provider routing and model fallbacks
+    if AI_PROVIDER == "openrouter":
+        if AI_PROVIDER_ROUTING:
+            payload["provider"] = AI_PROVIDER_ROUTING
+        if AI_FALLBACK_MODELS:
+            payload["models"] = [AI_MODEL] + AI_FALLBACK_MODELS
+            del payload["model"]
 
-        content = data["choices"][0]["message"]["content"]
-        if not content:
-            raise ValueError("Некорректный ответ DeepSeek API: пустой content")
+    last_error = None
+    for attempt in range(AI_RETRY_COUNT + 1):
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=60)
 
-        return content
-    except Exception as e:
-        error(f"❌ Ошибка DeepSeek API: {str(e)}")
-        # Возвращаем dict вместо строки JSON
-        return {
-            "action": "hold",
-            "confidence": 0.0,
-            "reason": f"Ошибка API: {str(e)}"
-        }
+            # Check for retryable HTTP errors (502, 429, etc.)
+            if response.status_code in _RETRYABLE_STATUS_CODES:
+                error(f"❌ API ответ ({response.status_code}): {response.text[:500]}")
+                if attempt < AI_RETRY_COUNT:
+                    delay = 2 ** (attempt + 1)  # 2, 4, 8 ...
+                    warning(f"⚠️ Retryable HTTP {response.status_code}. Повтор через {delay} сек (попытка {attempt+1}/{AI_RETRY_COUNT})...")
+                    time.sleep(delay)
+                    continue
+                response.raise_for_status()
+
+            if response.status_code != 200:
+                error(f"❌ API ответ ({response.status_code}): {response.text[:500]}")
+            response.raise_for_status()
+            data = response.json()
+
+            # Логируем структуру ответа для отладки
+            info(f"📡 API response keys: {list(data.keys())}")
+
+            # Проверяем структуру ответа — может быть ошибка внутри JSON (OpenRouter)
+            if "error" in data and "choices" not in data:
+                err_msg = json.dumps(data, ensure_ascii=False)[:1000]
+                error(f"❌ Полный ответ API: {err_msg}")
+                if attempt < AI_RETRY_COUNT:
+                    delay = 2 ** (attempt + 1)
+                    warning(f"⚠️ API вернул ошибку в JSON. Повтор через {delay} сек (попытка {attempt+1}/{AI_RETRY_COUNT})...")
+                    time.sleep(delay)
+                    continue
+                raise ValueError("Некорректный ответ API: нет поля choices")
+
+            if "choices" not in data or not data["choices"]:
+                error(f"❌ Полный ответ API: {json.dumps(data, ensure_ascii=False)[:1000]}")
+                raise ValueError("Некорректный ответ API: нет поля choices")
+
+            msg = data["choices"][0]["message"]
+            content = msg.get("content", "")
+            # Reasoning-модели (R1) могут вернуть пустой content, а ответ — в reasoning_content/reasoning
+            reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
+            if not content and reasoning:
+                info(f"📝 Reasoning model: content пуст, используем reasoning ({len(reasoning)} символов)")
+                content = reasoning
+            if not content:
+                refusal = msg.get("refusal") or ""
+                warning(f"⚠️ Empty content. Message keys: {list(msg.keys())}, reasoning len: {len(reasoning)}, refusal: '{refusal}'")
+                if attempt < AI_RETRY_COUNT:
+                    delay = 2 ** (attempt + 1)
+                    warning(f"⚠️ Пустой content от API. Повтор через {delay} сек (попытка {attempt+1}/{AI_RETRY_COUNT})...")
+                    time.sleep(delay)
+                    continue
+                raise ValueError("Пустой content от API после всех попыток")
+
+
+            return content
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            last_error = e
+            error(f"❌ Ошибка сети: {str(e)}")
+            if attempt < AI_RETRY_COUNT:
+                delay = 2 ** (attempt + 1)
+                warning(f"⚠️ Ошибка соединения. Повтор через {delay} сек (попытка {attempt+1}/{AI_RETRY_COUNT})...")
+                time.sleep(delay)
+                continue
+        except Exception as e:
+            last_error = e
+            error(f"❌ Ошибка DeepSeek API: {str(e)}")
+            break  # Non-retryable error
+
+    # All retries exhausted or non-retryable error
+    error(f"❌ Все попытки исчерпаны ({AI_RETRY_COUNT + 1})")
+    return {
+        "action": "hold",
+        "confidence": 0.0,
+        "reason": f"Ошибка API: {str(last_error)}"
+    }
 
 def parse_response(response):
     """Парсит ответ DeepSeek в структурированный формат"""
@@ -247,7 +317,7 @@ def process_analysis(analysis):
 
     info(f"🧠 Генерация прогноза для {analysis['symbol']}...")
     # Retry logic for API/Parsing errors AND Logic Validation
-    max_retries = 1
+    max_retries = 2
     current_prompt = analysis["prompt"]
     final_prediction = None
 
