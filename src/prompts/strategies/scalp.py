@@ -90,20 +90,21 @@ class ScalpStrategy(BaseStrategy):
 
 Условия для LONG:
 - Цена пробивает resistance ({resistance:.2f}) или SEB Upper ({seb_upper:.2f})
-- Volume Ratio > 1.5x (сейчас: {volume_ratio:.2f}x — {volume_status})
+- Volume Ratio >= 1.0x (сейчас: {volume_ratio:.2f}x — {volume_status})
 - RSI растет, НО < 80 (сейчас: {rsi:.1f})
-- Last 5 Direction: STRONG UP или UP (сейчас: {last_5_direction})
+- Last 5 Direction: UP, STRONG UP или WEAK UP (сейчас: {last_5_direction})
 
 Условия для SHORT:
 - Цена пробивает support ({support:.2f}) или SEB Lower ({seb_lower:.2f})
-- Volume Ratio > 1.5x
+- Volume Ratio >= 1.0x
 - RSI падает, НО > 20
-- Last 5 Direction: STRONG DOWN или DOWN
+- Last 5 Direction: DOWN, STRONG DOWN или WEAK DOWN
 
 **RSI для MOMENTUM:**
-- RSI > 70 + Volume > 1.5x + Trend Aligned = СИЛА (покупай импульс)
-- RSI > 70 + Volume < 1.0x = ИСТОЩЕНИЕ (не входи)
-- RSI 60-70 при UP тренде = оптимальная зона
+- RSI > 70 + Volume >= 1.0x + Trend Aligned = СИЛА (покупай импульс)
+- RSI > 75 + Volume < 0.8x = возможно ИСТОЩЕНИЕ (осторожно)
+- RSI 55-70 при UP тренде = оптимальная зона для LONG
+- RSI 30-45 при DOWN тренде = оптимальная зона для SHORT
 
 ---
 
@@ -124,16 +125,37 @@ class ScalpStrategy(BaseStrategy):
 
 ---
 
-**3. MEAN REVERSION (Возврат к среднему)**
+**3. RANGE SCALP (Работа в боковике)**
+
+Условия:
+- SEB Status = INSIDE (цена внутри канала)
+- Trend Quality = Low или Medium (нет сильного тренда — это ОК для range)
+- Volume >= 0.6x (не мертвый рынок)
+
+**LONG у нижней границы:**
+- Цена касается support ({support:.2f}) или SEB Lower ({seb_lower:.2f})
+- RSI < 45
+
+**SHORT у верхней границы:**
+- Цена касается resistance ({resistance:.2f}) или SEB Upper ({seb_upper:.2f})
+- RSI > 55
+
+**Вход:** От границы к центру диапазона.
+**SL:** За границу диапазона (tight).
+**TP:** До середины или противоположной границы.
+
+---
+
+**4. MEAN REVERSION (Возврат к среднему)**
 
 Условия:
 - SEB Status = ABOVE_UPPER или BELOW_LOWER (экстремум)
 - Trend Quality = Low или Medium (нестабильный тренд)
 - Volume затухает (< 0.8x)
-- RSI в экстремуме (> 75 или < 25)
+- RSI в экстремуме (> 70 или < 30)
 
 **Вход:** Против направления, к середине канала.
-**ВНИМАНИЕ:** Самый рискованный сетап. Используй confidence >= 0.8 и tight SL.
+**ВНИМАНИЕ:** Рискованный сетап, но часто срабатывает. Используй confidence >= 0.65 и tight SL.
 
 ---
 
@@ -171,23 +193,30 @@ class ScalpStrategy(BaseStrategy):
 
 | Состояние | Volume | Действие |
 |-----------|--------|----------|
-| Trending + High Vol | > 1.2x | Агрессивный Momentum |
-| Trending + Low Vol | < 0.8x | Осторожный вход, tight SL |
-| Ranging (INSIDE) | < 0.8x | HOLD или Mean Reversion |
-| Extreme (ABOVE/BELOW) | Any | Liquidity Grab setup |
+| Trending + High Vol | >= 1.0x | Momentum Breakout |
+| Trending + Normal Vol | 0.6-1.0x | Осторожный Momentum, tight SL |
+| Ranging (INSIDE) | >= 0.5x | Range Scalp от границ |
+| Extreme (ABOVE/BELOW) | Any | Liquidity Grab или Mean Reversion |
+| Low Volume | < 0.3x | HOLD (мёртвый рынок) |
 
 ---
 
 ### КОГДА НЕ ВХОДИТЬ (HOLD)
 
-**Абсолютные фильтры — если хоть один = HOLD:**
-1. Volume Ratio < 0.5x (рынок спит)
-2. Last 5 Direction = MIXED + Trend Quality = Low (хаос)
-3. Цена в середине диапазона без импульса
-4. Только что был резкий move > 2x ATR (жди консолидацию)
-5. Нет четкого сетапа из списка выше
+**Жёсткие фильтры (HOLD если все выполнены):**
+1. Volume Ratio < 0.3x (рынок мёртв)
+2. Last 5 Direction = MIXED + Trend Quality = Low + RSI 45-55 (полный хаос)
+3. Только что был резкий move > 3x ATR без отката (жди 2-3 свечи)
 
-**Помни:** HOLD — это дисциплина, не слабость."""
+**Мягкие фильтры (HOLD если 2+ выполнены):**
+- Цена точно в середине диапазона (>0.3% от обоих уровней)
+- Volume < 0.5x И RSI 40-60
+- MIXED direction + Low trend quality
+
+**ВАЖНО:** Не пропускай сделку только потому что "нет идеального сетапа".
+Если есть явный дисбаланс (RSI, уровень, объём) — рассмотри вход.
+
+**Помни:** Скальпинг — это про РЕАКЦИЮ, не про предсказания."""
 
     def get_position_management(self, ctx: dict) -> str:
         """Специфичное управление позицией для скальпинга."""

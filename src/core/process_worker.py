@@ -17,7 +17,7 @@ def run_symbol_pipeline(symbol: str):
     """
     try:
         # 1. Настройка логгера (один раз на старте процесса)
-        from src.utils.logger import setup_symbol_logger, info, error
+        from src.utils.logger import setup_symbol_logger, info, error, StageTimer
         setup_symbol_logger(symbol)
 
         info(f"🚀 [PROCESS START] Запущен бесконечный процесс для {symbol} (PID: {os.getpid()})")
@@ -37,13 +37,13 @@ def run_symbol_pipeline(symbol: str):
                 info(f"▶️ [{symbol}] Начало торгового цикла")
 
                 # 2. Сбор данных
-                info(f"📊 [{symbol}] Сбор данных...")
-                collector.process_symbol(symbol)
+                with StageTimer("Сбор данных", symbol, "📊"):
+                    collector.process_symbol(symbol)
 
                 # 3. Анализ (с контекстом предыдущих решений)
                 decision_context = journal.get_context(symbol, STRATEGY_STYLE)
-                info(f"🔍 [{symbol}] Анализ индикаторов...")
-                analysis_result = analyzer.analyze_symbol_with_position(symbol, decision_context=decision_context)
+                with StageTimer("Анализ индикаторов", symbol, "🔍"):
+                    analysis_result = analyzer.analyze_symbol_with_position(symbol, decision_context=decision_context)
 
                 # Sync Trade Tracker (History & Manual Close Detection)
                 real_position = analysis_result.get("position")
@@ -61,8 +61,8 @@ def run_symbol_pipeline(symbol: str):
                         analysis_result["force_hold"] = True
 
                 # 5. Прогноз (AI)
-                info(f"🧠 [{symbol}] AI Прогноз...")
-                prediction = predict.process_analysis(analysis_result)
+                with StageTimer("AI Прогноз", symbol, "🧠"):
+                    prediction = predict.process_analysis(analysis_result)
 
                 # Проверка cooldown (если нет позиции и хотим открыть)
                 cooldown_hours = preset.get("cooldown_after_close_hours", 0)
@@ -95,12 +95,12 @@ def run_symbol_pipeline(symbol: str):
                 journal.trim_entries(symbol, STRATEGY_STYLE)
 
                 # 6. Исполнение
-                info(f"💰 [{symbol}] Исполнение сигналов...")
-                executor.execute_prediction(prediction)
+                with StageTimer("Исполнение сигналов", symbol, "💰"):
+                    executor.execute_prediction(prediction)
 
-                # 6. Мониторинг
-                info(f"👀 [{symbol}] Мониторинг позиции...")
-                monitor.monitor_symbol(symbol)
+                # 7. Мониторинг
+                with StageTimer("Мониторинг позиции", symbol, "👀"):
+                    monitor.monitor_symbol(symbol)
 
                 # 7. Графики (moved to separate process)
                 # plotter.plot_symbol(symbol, current_position=active_trade)

@@ -14,15 +14,26 @@ import time
 LOG_DIR = "data"
 os.makedirs(LOG_DIR, exist_ok=True)
 
+
+# Filter для установки default elapsed времени
+class ElapsedFilter(logging.Filter):
+    """Добавляет поле elapsed к записям без него"""
+    def filter(self, record):
+        if not hasattr(record, 'elapsed'):
+            record.elapsed = '-----'
+        return True
+
+
 # Настройка логгера для кода
 code_logger = logging.getLogger('steps')
 code_logger.setLevel(logging.INFO)
 code_logger.handlers.clear()  # Убираем дубликаты
 code_logger.propagate = False  # Не распространять на родительские логгеры
+code_logger.addFilter(ElapsedFilter())  # Добавляем filter для elapsed
 
-# Форматтер для логов
+# Форматтер для логов — время этапа вместо имени логгера
 formatter = logging.Formatter(
-    '%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
+    '%(asctime)s | %(levelname)-8s | %(elapsed)-5s | %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 formatter.converter = time.gmtime  # Force UTC
@@ -106,3 +117,27 @@ def error(msg):
 
 def debug(msg):
     safe_log(code_logger.debug, msg)
+
+
+def info_timed(msg, elapsed):
+    """Логирует сообщение с указанием времени выполнения"""
+    elapsed_str = f'{elapsed:.2f}s'
+    safe_log(code_logger.info, msg, extra={'elapsed': elapsed_str})
+
+
+class StageTimer:
+    """Context manager для замера и логирования времени этапа"""
+    def __init__(self, stage_name, symbol=None, emoji="⏱️"):
+        self.stage_name = stage_name
+        self.symbol = symbol
+        self.emoji = emoji
+        self.start = None
+
+    def __enter__(self):
+        self.start = time.time()
+        return self
+
+    def __exit__(self, *args):
+        elapsed = time.time() - self.start
+        prefix = f"[{self.symbol}] " if self.symbol else ""
+        info_timed(f"{self.emoji} {prefix}{self.stage_name}", elapsed)

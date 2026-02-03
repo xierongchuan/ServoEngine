@@ -1,18 +1,18 @@
 {
   "EXCHANGE_SYMBOLS": {
     "bingx": [
-      "BTCUSDT"
+      "SUIUSDT"
     ]
   },
   "EXCHANGE_FEES": {
     "bingx": 0.1
   },
-  "POSITION_SIZE_PERCENT": 30.0,
+  "POSITION_SIZE_PERCENT": 10.0,
   "MIN_TRADE_AMOUNT_USDT": 10.0,
-  "TAKE_PROFIT_PERCENT": 8.0,
-  "STOP_LOSS_PERCENT": 4.0,
-  "MIN_CONFIDENCE_THRESHOLD": 0.78,
-  "MIN_RISK_REWARD_RATIO": 2.0,
+  "TAKE_PROFIT_PERCENT": 1.5,
+  "STOP_LOSS_PERCENT": 1.0,
+  "MIN_CONFIDENCE_THRESHOLD": 0.65,
+  "MIN_RISK_REWARD_RATIO": 1.2,
   "MIN_PARTIAL_CLOSE_PNL": 0.5,
   "AI_THRESHOLDS": {
     "RSI_OVERSOLD": 30,
@@ -149,7 +149,7 @@
     "position_sync_wait": 1.0
   },
   "VALIDATION": {
-    "rr_soft_limit": 1.5
+    "rr_soft_limit": 0.8
   },
   "TECHNICAL_ANALYSIS": {
     "sr_window": 20,
@@ -207,8 +207,8 @@
   },
   "MOMENTUM_STRATEGY": {
     "enabled": true,
-    "atr_sl_multiplier": 3.0,
-    "atr_tp_multiplier": 6.0,
+    "atr_sl_multiplier": 1.5,
+    "atr_tp_multiplier": 2.0,
     "min_volume_ratio": 0.5,
     "max_candles_in_prompt": 50,
     "trend_consensus_required": false,
@@ -221,11 +221,11 @@
       "timeframe": "1m",
       "chart_period": "6h",
       "plotter_period": "30m",
-      "loop_interval": 20,
+      "loop_interval": 5,
       "position_check_interval": 1,
       "atr_sl_mult": 1.5,
       "atr_tp_mult": 2.0,
-      "leverage": 20,
+      "leverage": 15,
       "description": "High frequency, small moves, strict exits."
     },
     "INTRADAY": {
