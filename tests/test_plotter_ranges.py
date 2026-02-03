@@ -31,6 +31,7 @@ class TestPlotterRanges(unittest.TestCase):
         # Reverse to be chronological
         self.prices.reverse()
 
+    @patch('src.core.plotter.BOT_CONFIG', {'STRATEGY_STYLE': 'SCALP', 'STYLE_PRESETS': {'SCALP': {'timeframe': '1m'}}})
     @patch('src.core.plotter.json.load')
     @patch('src.core.plotter.open')
     @patch('src.core.plotter.plt')
@@ -50,7 +51,7 @@ class TestPlotterRanges(unittest.TestCase):
         mock_ax3 = MagicMock()
         mock_plt.subplots.return_value = (mock_fig, (mock_ax1, mock_ax2, mock_ax3))
 
-        # Run plot_symbol with 1h range
+        # Run plot_symbol with 1h range (no resampling since timeframe=1m)
         plot_symbol(self.symbol, "1h")
 
         # Verify that ax1.bar was called (candlesticks)
@@ -67,6 +68,7 @@ class TestPlotterRanges(unittest.TestCase):
 
         print(f"✅ 1h range test passed: {len(dates)} candles plotted")
 
+    @patch('src.core.plotter.BOT_CONFIG', {'STRATEGY_STYLE': 'SCALP', 'STYLE_PRESETS': {'SCALP': {'timeframe': '1m'}}})
     @patch('src.core.plotter.json.load')
     @patch('src.core.plotter.open')
     @patch('src.core.plotter.plt')
@@ -85,6 +87,7 @@ class TestPlotterRanges(unittest.TestCase):
         mock_ax3 = MagicMock()
         mock_plt.subplots.return_value = (mock_fig, (mock_ax1, mock_ax2, mock_ax3))
 
+        # Run plot_symbol with 4h range (no resampling since timeframe=1m)
         plot_symbol(self.symbol, "4h")
 
         # Verify that ax1.bar was called (candlesticks)

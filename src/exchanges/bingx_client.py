@@ -120,7 +120,10 @@ class BingXClient(ExchangeClient):
         response = self.make_request("get", endpoint)
 
         if response and response.get("code") == 0:
-            return response.get("data", {}).get("balance", {})
+            balance_data = response.get("data", {}).get("balance", {})
+            # DEBUG: Log raw balance response to diagnose parsing issues
+            info(f"🔍 [DEBUG] Raw balance API response: {balance_data}")
+            return balance_data
 
         error(f"❌ Failed to get perpetual balance. Response: {response}")
         return None

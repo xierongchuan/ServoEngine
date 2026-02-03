@@ -7,7 +7,7 @@
   "EXCHANGE_FEES": {
     "bingx": 0.1
   },
-  "POSITION_SIZE_PERCENT": 2.0,
+  "POSITION_SIZE_PERCENT": 30.0,
   "MIN_TRADE_AMOUNT_USDT": 10.0,
   "TAKE_PROFIT_PERCENT": 8.0,
   "STOP_LOSS_PERCENT": 4.0,
@@ -63,6 +63,12 @@
       "candles": 400,
       "interval": "1h",
       "ai_context_candles": 336
+    },
+    "30D": {
+      "days": 30,
+      "candles": 720,
+      "interval": "1h",
+      "ai_context_candles": 720
     }
   },
   "PLOTTER_RANGES": {
@@ -132,18 +138,18 @@
     "max_entries": {
       "SCALP": 5,
       "INTRADAY": 10,
-      "SWING": 10
+      "SWING": 50
     }
   },
   "POSITION_LIMITS": {
-    "max_positions": 5,
+    "max_positions": 1,
     "price_precision": 4,
     "quantity_precision": 4,
     "balance_safety_margin": 0.95,
     "position_sync_wait": 1.0
   },
   "VALIDATION": {
-    "rr_soft_limit": 0.5
+    "rr_soft_limit": 1.5
   },
   "TECHNICAL_ANALYSIS": {
     "sr_window": 20,
@@ -173,7 +179,7 @@
   },
   "AI_SETTINGS": {
     "provider": "openrouter",
-    "model": "deepseek/deepseek-v3.2",
+    "model": "x-ai/grok-4.1-fast",
     "base_url": "https://openrouter.ai/api/v1/chat/completions",
     "temperature": 0.3,
     "max_tokens": 4096,
@@ -235,13 +241,15 @@
     },
     "SWING": {
       "timeframe": "1h",
-      "chart_period": "14D",
+      "chart_period": "30D",
       "plotter_period": "14D",
-      "loop_interval": 1800,
-      "position_check_interval": 300,
+      "loop_interval": 14400,
+      "position_check_interval": 3600,
       "atr_sl_mult": 3.0,
       "atr_tp_mult": 6.0,
       "leverage": 5,
+      "min_hold_hours": 24,
+      "cooldown_after_close_hours": 6,
       "description": "Multi-day holding (Days/Weeks), wide stops, ignoring intraday noise."
     }
   }

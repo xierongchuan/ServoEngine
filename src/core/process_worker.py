@@ -49,9 +49,29 @@ def run_symbol_pipeline(symbol: str):
                 real_position = analysis_result.get("position")
                 active_trade = tracker.sync_position(symbol, real_position)
 
-                # 4. Прогноз (AI)
+                # 4. Проверка min_hold_hours (SWING режим)
+                from src.config import STYLE_PRESETS
+                preset = STYLE_PRESETS.get(STRATEGY_STYLE, {})
+                min_hold_hours = preset.get("min_hold_hours", 0)
+
+                if real_position and min_hold_hours > 0:
+                    position_age = journal.get_position_age_hours(symbol)
+                    if position_age is not None and position_age < min_hold_hours:
+                        info(f"⏳ [{symbol}] Position age: {position_age:.1f}h < min_hold: {min_hold_hours}h. Forcing HOLD")
+                        analysis_result["force_hold"] = True
+
+                # 5. Прогноз (AI)
                 info(f"🧠 [{symbol}] AI Прогноз...")
                 prediction = predict.process_analysis(analysis_result)
+
+                # Проверка cooldown (если нет позиции и хотим открыть)
+                cooldown_hours = preset.get("cooldown_after_close_hours", 0)
+                if not real_position and cooldown_hours > 0:
+                    in_cooldown, hours_left = journal.is_in_cooldown(symbol, cooldown_hours)
+                    if in_cooldown and prediction.get("action") in ("buy", "sell"):
+                        info(f"❄️ [{symbol}] Cooldown active: {hours_left:.1f}h remaining. Skipping entry signal.")
+                        prediction["action"] = "hold"
+                        prediction["reason"] = f"Cooldown period: {hours_left:.1f}h left"
 
                 # 5. Запись решения в журнал
                 current_price = analysis_result.get("current_price", 0)
@@ -68,6 +88,8 @@ def run_symbol_pipeline(symbol: str):
                 if action in ("buy", "sell") and not real_position:
                     journal.set_trade_plan(symbol, prediction, current_price)
                 elif not real_position and journal.data.get(symbol, {}).get("trade_plan"):
+                    # Позиция закрылась - записываем для cooldown и очищаем план
+                    journal.record_close(symbol)
                     journal.clear_trade_plan(symbol)
 
                 journal.trim_entries(symbol, STRATEGY_STYLE)
@@ -86,8 +108,7 @@ def run_symbol_pipeline(symbol: str):
                 elapsed = time.time() - start_time
 
                 # Dynamic Sleep based on Strategy & Position Status
-                from src.config import STYLE_PRESETS
-                preset = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS["INTRADAY"])
+                # preset already loaded above for min_hold check
                 base_interval = preset.get("loop_interval", 60)
 
                 if real_position:

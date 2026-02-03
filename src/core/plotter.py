@@ -79,8 +79,8 @@ def resample_data(dates, opens, highs, lows, closes, volumes, timeframe):
         df.set_index('date', inplace=True)
 
         # Convert timeframe to pandas offset (e.g. 5m -> 5min)
-        # Note: 'T' is deprecated in favor of 'min' in newer pandas
-        rule = timeframe.replace('m', 'min').replace('h', 'H').replace('d', 'D')
+        # Pandas 2.x requires lowercase: 'h' for hours, 'd' for days, 'min' for minutes
+        rule = timeframe.replace('m', 'min')  # 5m -> 5min, 1h stays 1h, 1d stays 1d
 
         # Resample
         # Aggregation rules:

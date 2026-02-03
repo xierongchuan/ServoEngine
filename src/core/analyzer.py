@@ -655,6 +655,12 @@ def analyze_symbol(symbol, position=None, decision_context=""):
             recent_part = full_buffer[-recent_count:]
             history_part = full_buffer[:-recent_count]
 
+            # Log aggregation details
+            if step > 1:
+                agg_count = len(history_part) // step
+                info(f"📊 Smart Sampling: Aggregating {len(history_part)} history candles (step={step}) → "
+                     f"~{agg_count} aggregated + {recent_count} recent = ~{agg_count + recent_count} total")
+
             sampled_history = []
             # Sample the history part
             for i in range(0, len(history_part), step):

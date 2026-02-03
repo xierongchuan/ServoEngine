@@ -28,10 +28,12 @@ def test_retry_logic():
     def side_effect(prompt):
         return mock_responses.pop(0)
 
-    with patch('src.core.predict.get_prediction', side_effect=side_effect):
-        with patch('src.core.predict.should_call_ai', return_value=True):
-            # We also need to mock time.sleep to speed up test
-            with patch('time.sleep', return_value=None) as mock_sleep:
+    with patch('src.core.predict.get_prediction', side_effect=side_effect), \
+         patch('src.core.predict.should_call_ai', return_value=(True, None)), \
+         patch('src.core.predict.info'), \
+         patch('src.core.predict.warning'), \
+         patch('src.core.predict.error'), \
+         patch('time.sleep', return_value=None) as mock_sleep:
                 result = process_analysis(analysis)
 
                 print(f"Result: {result['reason']}")

@@ -1,8 +1,11 @@
 import unittest
+from unittest.mock import patch
 from src.core.predict import validate_prediction
 
 class TestRRValidation(unittest.TestCase):
-    def test_good_rr(self):
+    @patch('src.core.predict.warning')
+    @patch('src.core.predict.info')
+    def test_good_rr(self, mock_info, mock_warning):
         """Test that a good R/R ratio is accepted"""
         prediction = {
             "action": "buy",
@@ -18,7 +21,9 @@ class TestRRValidation(unittest.TestCase):
         self.assertEqual(result["action"], "buy")
         self.assertEqual(result["confidence"], 0.9)
 
-    def test_bad_rr_buy(self):
+    @patch('src.core.predict.warning')
+    @patch('src.core.predict.info')
+    def test_bad_rr_buy(self, mock_info, mock_warning):
         """Test that a bad R/R ratio for BUY is rejected"""
         prediction = {
             "action": "buy",
@@ -35,7 +40,9 @@ class TestRRValidation(unittest.TestCase):
         self.assertEqual(result["confidence"], 0.0)
         self.assertIn("Low R/R", result["reason"])
 
-    def test_bad_rr_sell(self):
+    @patch('src.core.predict.warning')
+    @patch('src.core.predict.info')
+    def test_bad_rr_sell(self, mock_info, mock_warning):
         """Test that a bad R/R ratio for SELL is rejected"""
         prediction = {
             "action": "sell",
@@ -52,7 +59,9 @@ class TestRRValidation(unittest.TestCase):
         self.assertEqual(result["confidence"], 0.0)
         self.assertIn("Low R/R", result["reason"])
 
-    def test_missing_sl_tp(self):
+    @patch('src.core.predict.warning')
+    @patch('src.core.predict.info')
+    def test_missing_sl_tp(self, mock_info, mock_warning):
         """Test that missing SL/TP results in HOLD"""
         prediction = {
             "action": "buy",
@@ -65,7 +74,9 @@ class TestRRValidation(unittest.TestCase):
         self.assertEqual(result["action"], "hold")
         self.assertIn("Missing SL/TP", result["reason"])
 
-    def test_hold_action_ignored(self):
+    @patch('src.core.predict.warning')
+    @patch('src.core.predict.info')
+    def test_hold_action_ignored(self, mock_info, mock_warning):
         """Test that HOLD action is not validated for R/R"""
         prediction = {
             "action": "hold",

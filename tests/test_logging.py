@@ -19,8 +19,11 @@ def test_trade_logging():
     mock_client.check_prerequisites.return_value = True
     mock_client.close_position.return_value = True
 
-    # Mock log_trade
-    with patch('src.core.executor.log_trade') as mock_log_trade:
+    # Mock log_trade AND all logger functions to prevent contaminating production logs
+    with patch('src.core.executor.log_trade') as mock_log_trade, \
+         patch('src.core.executor.info') as mock_info, \
+         patch('src.core.executor.warning') as mock_warning, \
+         patch('src.core.executor.error') as mock_error:
         with patch('src.core.executor.get_exchange_client', return_value=mock_client):
 
             # Test 1: Open Order Logging

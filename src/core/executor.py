@@ -54,13 +54,23 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
 
         # Calculate quantity based on Balance Percentage
         balance_data = client.get_balance()
+        info(f"🔍 [DEBUG] Raw balance_data in executor: {balance_data}")
+        info(f"🔍 [DEBUG] balance_data type: {type(balance_data)}, keys: {balance_data.keys() if isinstance(balance_data, dict) else 'N/A'}")
 
         # Extract equity/balance based on exchange response structure
         total_balance = 0.0
 
         if isinstance(balance_data, dict):
-            # BingX Perpetual: {'balance': 1000, 'equity': 1000, ...}
-            total_balance = float(balance_data.get("equity", balance_data.get("balance", 0.0)))
+            # BingX Perpetual: try multiple possible field names
+            # API may return: equity, availableBalance, balance, availableMargin
+            total_balance = float(
+                balance_data.get("equity") or
+                balance_data.get("availableBalance") or
+                balance_data.get("balance") or
+                balance_data.get("availableMargin") or
+                0.0
+            )
+            info(f"🔍 [DEBUG] Parsed balance: ${total_balance:.2f} from fields: {list(balance_data.keys())}")
         elif isinstance(balance_data, list):
             for acc in balance_data:
                 b = float(acc.get("equity", acc.get("balance", 0.0)))
@@ -91,7 +101,12 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         _qty_prec = POSITION_LIMITS.get("quantity_precision", 4)
         quantity = round(quantity, _qty_prec)
 
-        info(f"🧮 Calculated quantity: {quantity} (Balance: ${total_balance:.2f} | Amount: ${trade_amount:.2f} [{POSITION_SIZE_PERCENT}%])")
+        # Enhanced position size logging with leverage info
+        notional_value = quantity * price
+        info(f"🧮 Position Size:")
+        info(f"   Balance: ${total_balance:.2f} | Risk: {POSITION_SIZE_PERCENT}% = ${trade_amount:.2f} margin")
+        info(f"   Leverage: {LEVERAGE}x | Exposure: ${notional_value:.2f} (market control)")
+        info(f"   Quantity: {quantity} {symbol.replace('USDT', '')}")
 
         # Place order WITHOUT SL/TP first
         # We will set SL/TP separately using set_sl_tp to ensure reliability and correct mode handling

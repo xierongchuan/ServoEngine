@@ -249,33 +249,45 @@ if target_plotter_period and target_plotter_period in PLOTTER_RANGES:
         DEFAULT_PLOTTER_RANGE = target_plotter_period
         BOT_CONFIG["DEFAULT_PLOTTER_RANGE"] = target_plotter_period
 
-# 3. Auto-calculate Smart Sampling Step
-# We assume the collector now fetches 'target_timeframe' candles directly (e.g. 5m for Intraday)
-# So 'base_interval' effectively becomes 'target_timeframe'
+# 3. Auto-calculate Smart Sampling Step based on max_candles_in_prompt
+# This ensures proper OHLCV aggregation to fit within AI token budget
 chart_config = CHART_RANGES.get(DEFAULT_CHART_RANGE, {})
 target_timeframe_str = current_preset.get("timeframe", "1m")
-
-# In the new logic, we fetch AT broader intervals if needed, so base is effectively target
-base_interval_str = target_timeframe_str
-
-base_minutes = parse_interval_minutes(base_interval_str)
 target_minutes = parse_interval_minutes(target_timeframe_str)
 
-# Force enable Smart Sampling if we need it for aggregation (Logic kept for backward compatibility if logic drifts)
-if target_minutes > base_minutes:
-     if not SMART_SAMPLING.get("enabled", True):
-          print(f"🔄 Force-enabling Smart Sampling for aggregation ({base_interval_str} -> {target_timeframe_str})")
-          SMART_SAMPLING["enabled"] = True
+# Calculate how many candles will be fetched
+chart_days = chart_config.get("days", 0)
+chart_hours = chart_config.get("hours", 0)
+chart_minutes_duration = chart_config.get("minutes", 0)
+total_duration_minutes = (chart_days * 1440) + (chart_hours * 60) + chart_minutes_duration
 
-if SMART_SAMPLING.get("enabled", True):
-    # Calculate optimal step to simulate target timeframe
-    optimal_step = max(1, target_minutes // base_minutes)
+if target_minutes > 0 and total_duration_minutes > 0:
+    fetched_candles = total_duration_minutes // target_minutes
+else:
+    fetched_candles = chart_config.get("candles", 720)
 
-    current_step = SMART_SAMPLING.get("history_step", 1)
-    # Always overwrite with optimal step to ensure correctness
-    if current_step != optimal_step:
-         print(f"🔄 Auto-adjusted Smart Sampling step to {optimal_step} (Target: {target_timeframe_str}, Base: {base_interval_str})")
+# Get AI prompt limits
+max_ai_candles = MOMENTUM_STRATEGY.get("max_candles_in_prompt", 50)
+recent_candles = SMART_SAMPLING.get("recent_candles", 30)
+
+# Calculate optimal step for history aggregation
+history_candles = max(0, fetched_candles - recent_candles)
+ai_history_budget = max(1, max_ai_candles - recent_candles)
+
+if SMART_SAMPLING.get("enabled", True) and history_candles > ai_history_budget:
+    # Need aggregation: step = ceil(history_candles / ai_history_budget)
+    import math
+    optimal_step = max(1, math.ceil(history_candles / ai_history_budget))
+
+    expected_total = (history_candles // optimal_step) + recent_candles
+    print(f"🔄 Smart Sampling: step={optimal_step} | {fetched_candles} candles → ~{expected_total} for AI "
+          f"({history_candles // optimal_step} aggregated + {recent_candles} recent)")
     SMART_SAMPLING["history_step"] = optimal_step
+else:
+    # No aggregation needed
+    SMART_SAMPLING["history_step"] = 1
+    if fetched_candles > max_ai_candles:
+        print(f"⚠️ Smart Sampling disabled but {fetched_candles} > {max_ai_candles} candles")
 
 
 # DeepSeek / AI API Settings

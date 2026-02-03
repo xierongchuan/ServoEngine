@@ -88,6 +88,48 @@ class DecisionJournal:
         self.data[symbol]["trade_plan"] = None
         self._save()
 
+    def record_close(self, symbol: str):
+        """Записывает время закрытия позиции для cooldown tracking."""
+        self._ensure_symbol(symbol)
+        self.data[symbol]["last_close_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._save()
+        info(f"❄️ [DecisionJournal] Close time recorded for {symbol}")
+
+    def is_in_cooldown(self, symbol: str, cooldown_hours: float) -> tuple[bool, float]:
+        """
+        Проверяет в cooldown ли символ после закрытия.
+        Returns: (is_in_cooldown, hours_remaining)
+        """
+        self._ensure_symbol(symbol)
+        last_close = self.data[symbol].get("last_close_time")
+
+        if not last_close:
+            return False, 0.0
+
+        try:
+            close_dt = datetime.strptime(last_close, "%Y-%m-%d %H:%M:%S")
+            hours_since = (datetime.now() - close_dt).total_seconds() / 3600
+
+            if hours_since < cooldown_hours:
+                return True, cooldown_hours - hours_since
+            return False, 0.0
+        except Exception:
+            return False, 0.0
+
+    def get_position_age_hours(self, symbol: str) -> float | None:
+        """Возвращает возраст позиции в часах (по trade_plan time)."""
+        self._ensure_symbol(symbol)
+        trade_plan = self.data[symbol].get("trade_plan")
+
+        if not trade_plan or not trade_plan.get("time"):
+            return None
+
+        try:
+            entry_dt = datetime.strptime(trade_plan["time"], "%Y-%m-%d %H:%M:%S")
+            return (datetime.now() - entry_dt).total_seconds() / 3600
+        except Exception:
+            return None
+
     def get_context(self, symbol: str, style: str) -> str:
         """Возвращает отформатированную строку для вставки в промпт."""
         if not JOURNAL_ENABLED:
@@ -113,14 +155,27 @@ class DecisionJournal:
 
         decision_history = "\n".join(lines) if lines else "Нет предыдущих решений."
 
-        # Trade plan
+        # Trade plan с временем удержания
         if trade_plan:
             tp_sl = f"SL: {trade_plan['planned_sl']}" if trade_plan.get("planned_sl") else "SL: N/A"
             tp_tp = f"TP: {trade_plan['planned_tp']}" if trade_plan.get("planned_tp") else "TP: N/A"
+
+            # Рассчитываем время удержания
+            duration_str = "N/A"
+            try:
+                entry_dt = datetime.strptime(trade_plan["time"], "%Y-%m-%d %H:%M:%S")
+                hours_held = (datetime.now() - entry_dt).total_seconds() / 3600
+                if hours_held < 48:
+                    duration_str = f"{hours_held:.1f}h"
+                else:
+                    duration_str = f"{hours_held / 24:.1f}d"
+            except Exception:
+                pass
+
             trade_plan_block = (
                 f"Вход: {trade_plan['action'].upper()} @ {trade_plan['entry_price']} | {tp_sl} | {tp_tp}\n"
                 f"Причина: {trade_plan['reason']} | Confidence: {trade_plan['confidence']}\n"
-                f"Время: {trade_plan['time']}"
+                f"Время: {trade_plan['time']} | ⏱ Держим: {duration_str}"
             )
         else:
             trade_plan_block = "Нет активного плана."

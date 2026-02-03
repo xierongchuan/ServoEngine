@@ -374,6 +374,18 @@ def process_analysis(analysis):
              "reason": "Unknown Error (Loop Finished)"
          }
 
+    # Enforce min_hold_hours: block close signals if force_hold is set
+    if analysis.get("force_hold", False):
+        if final_prediction["action"] in ("close", "close_partial"):
+            info(f"🔒 {analysis['symbol']}: Close signal blocked by min_hold_hours. Forcing HOLD.")
+            final_prediction = {
+                "action": "hold",
+                "confidence": final_prediction["confidence"],
+                "reason": f"Min hold not reached. Original: {final_prediction['action']}",
+                "stop_loss": final_prediction.get("stop_loss"),
+                "take_profit": final_prediction.get("take_profit"),
+            }
+
     return {
         **analysis,
         "action": final_prediction["action"],
@@ -430,15 +442,20 @@ def validate_prediction(prediction, current_price, has_position=False):
 
     rr_ratio = reward / risk
 
-    # Relaxed validation: Just log a warning if R/R is very low, but do not reject unless it's catastrophic (e.g. < 0.3)
-    # The user wants "normal" risk management, relying on the AI's judgment.
-
+    # R/R validation: reject bad R/R for entry signals (buy/sell)
     soft_limit = VALIDATION.get("rr_soft_limit", 0.5)
-    if rr_ratio < soft_limit:
-        warning(f"⚠️ Низкий Risk/Reward ({rr_ratio:.2f}). AI считает это допустимым, но риск высок.")
-        # We DO NOT reject the signal, just log it.
+    action = prediction.get("action", "hold")
 
-    # We accept the prediction as is.
+    if rr_ratio < soft_limit:
+        if action in ("buy", "sell"):
+            # Reject entry signals with bad R/R
+            warning(f"⚠️ Low R/R ({rr_ratio:.2f} < {soft_limit}) for {action.upper()}. Forcing HOLD.")
+            prediction["action"] = "hold"
+            prediction["confidence"] = 0.0
+            prediction["reason"] += f" [AUTO-FIX: Low R/R {rr_ratio:.2f}]"
+        else:
+            # For hold/close, just warn
+            warning(f"⚠️ Низкий Risk/Reward ({rr_ratio:.2f}) на SL/TP update. Applying anyway.")
 
     return prediction
 

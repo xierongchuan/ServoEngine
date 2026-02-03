@@ -34,7 +34,11 @@ def test_dynamic_sltp():
     # 2. Test Execution (New Order)
     print("\n2. Testing Execution (New Order):")
 
-    with patch('src.core.executor.get_exchange_client') as mock_get_client:
+    with patch('src.core.executor.get_exchange_client') as mock_get_client, \
+         patch('src.core.executor.info'), \
+         patch('src.core.executor.warning'), \
+         patch('src.core.executor.error'), \
+         patch('src.core.executor.log_trade'):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
 
@@ -56,21 +60,31 @@ def test_dynamic_sltp():
 
         main(predictions)
 
-        # Verify place_order called with correct SL/TP
+        # Verify place_order called (SL/TP are now set separately via set_sl_tp)
+        assert mock_client.place_order.called
         args, kwargs = mock_client.place_order.call_args
         print(f"   place_order called with: {kwargs}")
 
-        # Check if SL/TP passed to place_order (via create_order logic)
-        # Note: create_order calculates quantity and calls place_order
-        # We need to verify that the SL/TP passed to place_order matches AI values
-        assert kwargs["sl"] == 90000
-        assert kwargs["tp"] == 95000
-        print("   ✅ New order used AI SL/TP")
+        # New behavior: SL/TP are set via set_sl_tp after order placement
+        # Verify that set_sl_tp was called with correct values
+        mock_client.set_sl_tp.assert_called_once()
+        sltp_args, sltp_kwargs = mock_client.set_sl_tp.call_args
+        print(f"   set_sl_tp called with: args={sltp_args}, kwargs={sltp_kwargs}")
+
+        assert sltp_args[0] == "BTCUSDT"  # symbol
+        assert sltp_args[1] == "LONG"  # position_side
+        assert sltp_kwargs["sl"] == 90000
+        assert sltp_kwargs["tp"] == 95000
+        print("   ✅ New order SL/TP set via set_sl_tp")
 
     # 3. Test Update (Existing Position)
     print("\n3. Testing Update (Existing Position):")
 
-    with patch('src.core.executor.get_exchange_client') as mock_get_client:
+    with patch('src.core.executor.get_exchange_client') as mock_get_client, \
+         patch('src.core.executor.info'), \
+         patch('src.core.executor.warning'), \
+         patch('src.core.executor.error'), \
+         patch('src.core.executor.log_trade'):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
         mock_client.check_prerequisites.return_value = True
