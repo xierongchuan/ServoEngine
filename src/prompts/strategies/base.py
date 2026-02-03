@@ -23,3 +23,17 @@ class BaseStrategy(ABC):
     def get_strategy_section(self, ctx: dict) -> str:
         """Полная секция стратегии (## 3. СТРАТЕГИЯ)."""
         ...
+
+    # --- Override методы для замены общих блоков ---
+
+    def get_position_management(self, ctx: dict) -> str | None:
+        """Override для замены блока position_management. None = дефолтный."""
+        return None
+
+    def get_special_situations(self, ctx: dict) -> str | None:
+        """Override для замены блока special_situations. None = дефолтный."""
+        return None
+
+    def get_risk_table(self, ctx: dict) -> str | None:
+        """Override для замены блока risk_table. None = дефолтный."""
+        return None

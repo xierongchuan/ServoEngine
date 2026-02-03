@@ -6,7 +6,7 @@
 
 **OpenProducer** - это профессиональная автоматизированная торговая система, разработанная для торговли криптовалютными фьючерсами на бирже **BingX** (Standard & VST Futures).
 
-Система использует передовые модели искусственного интеллекта (**DeepSeek**, **Grok**, **Claude** через **OpenRouter**) для принятия торговых решений, комбинируя классический технический анализ с анализом рыночной структуры, психологии толпы и управлением рисками.
+Система использует передовые модели искусственного интеллекта (**Grok**, **Claude** и другие через **OpenRouter**) для принятия торговых решений, комбинируя классический технический анализ с анализом рыночной структуры, психологии толпы и управлением рисками.
 
 ---
 
@@ -39,7 +39,7 @@
 ## <a id="features"></a>🚀 Ключевые возможности
 
 ### 🧠 Интеллектуальный анализ
-*   **Multi-Model AI Core**: Поддержка **DeepSeek**, **Grok**, **Claude** и других моделей через единый интерфейс (OpenRouter/SiliconFlow). Гибкое переключение между моделями без изменения кода.
+*   **Multi-Model AI Core**: Поддержка **Grok**, **Claude** и других моделей через единый интерфейс **OpenRouter**. Гибкое переключение между моделями без изменения кода.
 *   **Психология рынка**: Оценивает, кто контролирует рынок (быки/медведи), ищет признаки "ловушек" и панических продаж.
 *   **Smart Sampling**: Умное сжатие исторических данных (до 1000+ свечей) в компактный контекст для ИИ, сохраняя важные экстремумы и объемы.
 *   **Smart Skip**: Пропускает очевидно нейтральные рынки (флэт), экономя API токены и снижая шум.
@@ -141,10 +141,8 @@ AI получает не просто список свечей, а **полну
     BINGX_API_KEY="ваш_публичный_ключ"
     BINGX_SECRET_KEY="ваш_секретный_ключ"
 
-    # AI Provider Keys (заполните один из них)
-    OPENROUTER_API_KEY="ваш_ключ_openrouter"      # Рекомендуется (Grok, Claude, DeepSeek)
-    DEEPSEEK_API_KEY="ваш_ключ_deepseek"          # DeepSeek Direct
-    SILICONFLOW_API_KEY="ваш_ключ_siliconflow"    # SiliconFlow
+    # AI API (OpenRouter)
+    OPENROUTER_API_KEY="ваш_ключ_openrouter"      # Grok, Claude и другие модели
 
     # Режим работы
     # "demo" = VST Futures (Виртуальные деньги BingX)
@@ -225,7 +223,7 @@ AI получает не просто список свечей, а **полну
 
 ### 🤖 Настройка AI Провайдера (`AI_SETTINGS`)
 
-Система поддерживает работу через **OpenRouter**, **DeepSeek Official API** или **SiliconFlow**.
+Система работает через **OpenRouter** — единый интерфейс для доступа к различным AI моделям.
 
 ```json
 "AI_SETTINGS": {
@@ -249,12 +247,12 @@ AI получает не просто список свечей, а **полну
 
 | Параметр | Тип | Описание |
 | :--- | :--- | :--- |
-| `provider` | Str | Провайдер API: `"openrouter"` (рекомендуется), `"deepseek"`, `"siliconflow"` |
+| `provider` | Str | Провайдер API: `"openrouter"` |
 | `model` | Str | ID модели. Для OpenRouter: `"deepseek/deepseek-v3.2"`, `"deepseek/deepseek-chat"` и др. |
 | `base_url` | Str | URL эндпоинта API. Обычно менять не нужно |
 | `temperature` | Float | Креативность ответа (0.0–1.0). Для трейдинга лучше 0.2–0.4 |
 | `max_tokens` | Int | Максимум токенов в ответе (**включая** reasoning). Для reasoning-моделей нужно 4096+, т.к. reasoning съедает часть лимита |
-| **reasoning** | | **Настройки reasoning-моделей (DeepSeek V3.2, R1 и др.)** |
+| **reasoning** | | **Настройки reasoning-моделей** |
 | `reasoning.enabled` | Bool | Включить reasoning. `false` — обычная модель без рассуждений |
 | `reasoning.effort` | Str | Глубина рассуждений: `"low"`, `"medium"`, `"high"`. Нельзя использовать вместе с `max_tokens` |
 | `reasoning.max_tokens` | Int | Лимит токенов на рассуждения (альтернатива `effort`). Нельзя использовать вместе с `effort` |
@@ -266,7 +264,7 @@ AI получает не просто список свечей, а **полну
 | **fallback_models** | List | Запасные модели. Если основная модель падает, OpenRouter автоматически попробует следующую. Пример: `["deepseek/deepseek-chat"]` |
 
 > [!TIP]
-> Для OpenRouter используйте `OPENROUTER_API_KEY` в `.env`. Для других провайдеров — соответствующие ключи.
+> Укажите `OPENROUTER_API_KEY` в файле `.env`.
 
 > [!WARNING]
 > Для reasoning-моделей **обязательно** ставьте `"exclude": true`. Иначе рассуждения попадут в content вместо JSON-ответа и парсинг сломается.
@@ -290,7 +288,7 @@ graph TD
     subgraph "Worker Process for BTC (Isolated Loop)"
         Worker1 --> Collector1[Collector]
         Collector1 --> Analyzer1[Analyzer]
-        Analyzer1 --> Predictor1[DeepSeek AI]
+        Analyzer1 --> Predictor1[AI Predictor]
         Predictor1 --> Executor1[Executor]
         Executor1 --> Monitor1[Monitor]
         Monitor1 -.->|Loop| Worker1
@@ -342,7 +340,7 @@ tail -f data/trades.log
 *   Убедитесь, что системное время на сервере синхронизировано.
 
 ### Ошибка `AI Provider Error`
-*   Закончились кредиты на балансе (OpenRouter/DeepSeek/SiliconFlow).
+*   Закончились кредиты на балансе OpenRouter.
 *   API недоступен или модель перегружена (проверьте статус провайдера).
 
 ---

@@ -290,10 +290,10 @@ else:
         print(f"⚠️ Smart Sampling disabled but {fetched_candles} > {max_ai_candles} candles")
 
 
-# DeepSeek / AI API Settings
+# AI API Settings (OpenRouter)
 AI_SETTINGS = BOT_CONFIG.get("AI_SETTINGS", {})
-AI_PROVIDER = AI_SETTINGS.get("provider", "deepseek_official")
-AI_MODEL = AI_SETTINGS.get("model", "deepseek-chat")
+AI_PROVIDER = "openrouter"
+AI_MODEL = AI_SETTINGS.get("model", "x-ai/grok-4.1-fast")
 AI_TEMPERATURE = AI_SETTINGS.get("temperature", 0.3)
 AI_MAX_TOKENS = AI_SETTINGS.get("max_tokens", 512)
 AI_REASONING = AI_SETTINGS.get("reasoning", {})
@@ -303,27 +303,13 @@ AI_FALLBACK_MODELS = AI_SETTINGS.get("fallback_models", [])
 AI_REQUEST_TIMEOUT = AI_SETTINGS.get("request_timeout", 60)
 AI_RETRY_BACKOFF_BASE = AI_SETTINGS.get("retry_backoff_base", 2)
 
-# Load API Keys
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
+# Load API Key
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
-# Determine API Key and Base URL based on provider
-if AI_PROVIDER == "siliconflow":
-    AI_API_KEY = SILICONFLOW_API_KEY
-    # Default SiliconFlow OpenAI-compatible endpoint
-    AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://api.siliconflow.cn/v1/chat/completions"
-    print(f"🤖 AI Provider: SiliconFlow ({AI_MODEL})")
-elif AI_PROVIDER == "openrouter":
-    AI_API_KEY = OPENROUTER_API_KEY
-    # Default OpenRouter OpenAI-compatible endpoint
-    AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://openrouter.ai/api/v1/chat/completions"
-    print(f"🤖 AI Provider: OpenRouter ({AI_MODEL})")
-else:
-    # Default to DeepSeek Official
-    AI_API_KEY = DEEPSEEK_API_KEY
-    AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://api.deepseek.com/v1/chat/completions"
-    print(f"🤖 AI Provider: DeepSeek Official ({AI_MODEL})")
+# OpenRouter API configuration
+AI_API_KEY = OPENROUTER_API_KEY
+AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://openrouter.ai/api/v1/chat/completions"
+print(f"🤖 AI Provider: OpenRouter ({AI_MODEL})")
 
 if not AI_API_KEY:
     print(f"⚠️ WARNING: API Key for provider '{AI_PROVIDER}' is missing!")

@@ -60,7 +60,6 @@ export EXCHANGE=bingx && python3 run.py
 
 # Тестирование интеграции
 export EXCHANGE=bingx && python3 tests/test_integration.py
-export DEEPSEEK_API_KEY="key"            # Настроить API ключ
 
 # Права доступа
 chmod +x *.sh                            # Сделать скрипты исполняемыми
@@ -101,7 +100,7 @@ pip install pandas matplotlib requests   # Установить зависимо
 
 # Проверка API
 curl -I https://open-api-vst.bingx.com/openApi/swap/v2/server/time # Статус BingX API (Demo)
-curl -I https://api.deepseek.com                                # Статус DeepSeek API
+curl -I https://openrouter.ai/api/v1                               # Статус OpenRouter API
 
 # Логи системы
 dmesg | tail                            # Системные логи (Linux)

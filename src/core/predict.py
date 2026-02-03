@@ -8,7 +8,7 @@ from src.utils.logger import info, error, warning
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 def get_prediction(prompt):
-    """Отправляет промпт в AI (DeepSeek/SiliconFlow/OpenRouter) и получает ответ"""
+    """Отправляет промпт в AI (OpenRouter) и получает ответ"""
     url = AI_BASE_URL
     headers = {
         "Authorization": f"Bearer {AI_API_KEY}",

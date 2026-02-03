@@ -4,40 +4,230 @@ from src.prompts.strategies.base import BaseStrategy
 class ScalpStrategy(BaseStrategy):
 
     def get_role(self) -> str:
-        return "Ты — Algo-Scalper (High Frequency Trading)."
+        return "Ты — Algo-Scalper (адаптированный для крипто-фьючерсов)."
 
     def get_objective(self) -> str:
-        return "Сбор ликвидности, быстрые сделки, минимизация времени в рынке."
+        return "Быстрые сделки с минимальным временем экспозиции. Цель: забрать дисбаланс, не угадывать тренд."
 
     def get_time_horizon(self) -> str:
-        return "Horizon: 1-15 Minutes."
+        return "Horizon: 1-15 минут. Максимум 30 минут в позиции."
 
     def get_strategy_section(self, ctx: dict) -> str:
-        return """## 3. СТРАТЕГИЯ: ⚡ PROFESSIONAL SCALPING (1m TF)
-*Контекст: Работа на микро-структуре рынка. Скорость и точность важнее всего.*
+        # Извлекаем переменные из контекста
+        current_price = ctx.get("current_price", 0)
+        atr = ctx.get("atr", 0)
+        rsi = ctx.get("rsi", 50)
+        volume_ratio = ctx.get("volume_ratio", 1.0)
+        volume_status = ctx.get("volume_status", "Норма")
 
-**🧠 МЕНТАЛИТЕТ:**
-Ты — не инвестор. Ты не гадаешь будущее. Ты ищешь **дисбаланс спроса и предложения** прямо сейчас.
-Твоя задача: "Укусить и убежать".
+        global_trend = ctx.get("global_trend", "N/A")
+        local_trend = ctx.get("local_trend", "N/A")
+        last_5_direction = ctx.get("last_5_direction", "MIXED")
 
-**🎯 СЕТАПЫ ДЛЯ ВХОДА:**
-1.  **🚀 IMPULSE BREAKOUT (Пробой):**
-    *   Цена пробивает локальный уровень на всплеске объема (>1.5x средних).
-    *   **ВАЖНО:** RSI > 70 при пробое вверх — это **СИЛА**, а не перекупленность. Покупай силу!
-    *   *Цель:* Забрать импульсное расширение диапазона.
+        support = ctx.get("support", 0)
+        resistance = ctx.get("resistance", 0)
+        support_dist_pct = ctx.get("support_dist_pct", 0)
+        resistance_dist_pct = ctx.get("resistance_dist_pct", 0)
 
-2.  **🎣 LIQUIDITY GRAB (Сбор ликвидности/Откат):**
-    *   Резкий "прокол" уровня поддержки/сопротивления и моментальный возврат.
-    *   "Снятие стопов" толпы.
-    *   *Вход:* Лимитный/Market вход на возврате в диапазон.
+        seb_upper = ctx.get("seb_upper", 0)
+        seb_lower = ctx.get("seb_lower", 0)
+        seb_status = ctx.get("seb_status", "INSIDE")
+        trend_quality_desc = ctx.get("trend_quality_desc", "Low")
 
-**🛑 УПРАВЛЕНИЕ ПОЗИЦИЕЙ:**
-1.  **TP (Take Profit):** Реалистичный скальп: **0.3% - 0.8%** чистого движения.
-    *   *Закрывай часть (50%) сразу, как видишь зеленый PnL.*
-2.  **TIME STOP:** Если цена не пошла в твою сторону за **3 свечи** (3 минуты) -> ВЫХОДИ.
-    *   *Не "замораживай" капитал. Мертвые деньги = убыток.*
-3.  **SL (Stop Loss):** Слом микро-структуры.
+        long_sl = ctx.get("long_sl", 0)
+        long_tp = ctx.get("long_tp", 0)
+        short_sl = ctx.get("short_sl", 0)
+        short_tp = ctx.get("short_tp", 0)
 
-**⚠️ ФИЛЬТРЫ:**
-*   Если спред широкий или рынок "рваный" (gaps) -> SKIP.
-*   Если нет объема -> SKIP."""
+        # Расчет % потенциала для наглядности
+        if current_price > 0:
+            long_potential_pct = (long_tp - current_price) / current_price * 100
+            short_potential_pct = (current_price - short_tp) / current_price * 100
+            long_risk_pct = (current_price - long_sl) / current_price * 100
+            short_risk_pct = (short_sl - current_price) / current_price * 100
+        else:
+            long_potential_pct = short_potential_pct = long_risk_pct = short_risk_pct = 0
+
+        # Динамические предупреждения
+        warnings = []
+        if volume_ratio < 0.5:
+            warnings.append("LOW VOLUME: Высокий риск ложных движений.")
+        if "MIXED" in last_5_direction:
+            warnings.append("CHOPPY: Последние свечи без направления — жди ясности.")
+        if trend_quality_desc == "Low":
+            warnings.append("WEAK TREND: R2 низкий, тренд нестабильный.")
+        if abs(support_dist_pct) < 0.3 or abs(resistance_dist_pct) < 0.3:
+            warnings.append("NEAR LEVEL: Цена у ключевого уровня — вероятен отбой или пробой.")
+
+        warnings_block = ""
+        if warnings:
+            warnings_block = "\n**ТЕКУЩИЕ РИСКИ:**\n" + "\n".join(f"- {w}" for w in warnings)
+
+        return f"""## 3. СТРАТЕГИЯ: ADAPTIVE SCALPING (1m TF)
+*Контекст: Микро-структура рынка. Скорость важнее предсказаний. Рынок ГРЯЗНЫЙ — большинство сигналов ложные.*
+
+---
+
+### МЕНТАЛИТЕТ СКАЛЬПЕРА
+
+**Реальность рынка:**
+- 60-70% сетапов НЕ сработают идеально — это НОРМАЛЬНО
+- Твоя задача: быстро распознать ошибку и выйти с минимальным убытком
+- НЕ пытайся предсказать будущее — реагируй на ТЕКУЩИЙ дисбаланс
+- "Укусить и убежать" — не жадничай
+
+**Враги скальпера:**
+1. Овертрейдинг (входить в каждое движение)
+2. Надежда ("сейчас развернется")
+3. Жадность ("еще немного подождать")
+{warnings_block}
+
+---
+
+### СЕТАПЫ ДЛЯ ВХОДА
+
+**1. MOMENTUM BREAKOUT (Пробой с импульсом)**
+
+Условия для LONG:
+- Цена пробивает resistance ({resistance:.2f}) или SEB Upper ({seb_upper:.2f})
+- Volume Ratio > 1.5x (сейчас: {volume_ratio:.2f}x — {volume_status})
+- RSI растет, НО < 80 (сейчас: {rsi:.1f})
+- Last 5 Direction: STRONG UP или UP (сейчас: {last_5_direction})
+
+Условия для SHORT:
+- Цена пробивает support ({support:.2f}) или SEB Lower ({seb_lower:.2f})
+- Volume Ratio > 1.5x
+- RSI падает, НО > 20
+- Last 5 Direction: STRONG DOWN или DOWN
+
+**RSI для MOMENTUM:**
+- RSI > 70 + Volume > 1.5x + Trend Aligned = СИЛА (покупай импульс)
+- RSI > 70 + Volume < 1.0x = ИСТОЩЕНИЕ (не входи)
+- RSI 60-70 при UP тренде = оптимальная зона
+
+---
+
+**2. LIQUIDITY GRAB (Сбор стопов + разворот)**
+
+Условия для LONG (Fake Breakdown):
+- Цена ПРОКОЛОЛА support ({support:.2f}) минимум на 0.1-0.3%
+- SEB Status = BELOW_LOWER (сейчас: {seb_status})
+- НО свеча ЗАКРЫВАЕТСЯ ВЫШЕ support (возврат в диапазон)
+- Volume spike на проколе
+
+Условия для SHORT (Fake Breakout):
+- Цена ПРОКОЛОЛА resistance минимум на 0.1-0.3%
+- SEB Status = ABOVE_UPPER
+- Свеча закрывается НИЖЕ resistance
+
+**Триггер:** Жди закрытия свечи ВНУТРИ диапазона после прокола.
+
+---
+
+**3. MEAN REVERSION (Возврат к среднему)**
+
+Условия:
+- SEB Status = ABOVE_UPPER или BELOW_LOWER (экстремум)
+- Trend Quality = Low или Medium (нестабильный тренд)
+- Volume затухает (< 0.8x)
+- RSI в экстремуме (> 75 или < 25)
+
+**Вход:** Против направления, к середине канала.
+**ВНИМАНИЕ:** Самый рискованный сетап. Используй confidence >= 0.8 и tight SL.
+
+---
+
+### УПРАВЛЕНИЕ ПОЗИЦИЕЙ (ATR-BASED)
+
+**Для LONG:**
+| Параметр | Уровень | % от цены |
+|----------|---------|-----------|
+| Entry | ~{current_price:.2f} | — |
+| Stop Loss | {long_sl:.2f} | -{long_risk_pct:.2f}% |
+| Take Profit | {long_tp:.2f} | +{long_potential_pct:.2f}% |
+
+**Для SHORT:**
+| Параметр | Уровень | % от цены |
+|----------|---------|-----------|
+| Entry | ~{current_price:.2f} | — |
+| Stop Loss | {short_sl:.2f} | +{short_risk_pct:.2f}% |
+| Take Profit | {short_tp:.2f} | -{short_potential_pct:.2f}% |
+
+**Правила SL/TP:**
+1. ВСЕГДА ставь SL — без исключений
+2. Используй рекомендованные уровни (ATR-based)
+3. Можешь УЖЕСТОЧИТЬ SL если видишь сильный уровень
+4. НЕ расширяй SL дальше рекомендованного
+
+---
+
+### АДАПТАЦИЯ К СОСТОЯНИЮ РЫНКА
+
+**Текущее состояние:**
+- Тренд: Global={global_trend}, Local={local_trend}
+- Импульс: {last_5_direction} ({volume_status})
+- Качество тренда: {trend_quality_desc}
+- SEB: {seb_status}
+
+| Состояние | Volume | Действие |
+|-----------|--------|----------|
+| Trending + High Vol | > 1.2x | Агрессивный Momentum |
+| Trending + Low Vol | < 0.8x | Осторожный вход, tight SL |
+| Ranging (INSIDE) | < 0.8x | HOLD или Mean Reversion |
+| Extreme (ABOVE/BELOW) | Any | Liquidity Grab setup |
+
+---
+
+### КОГДА НЕ ВХОДИТЬ (HOLD)
+
+**Абсолютные фильтры — если хоть один = HOLD:**
+1. Volume Ratio < 0.5x (рынок спит)
+2. Last 5 Direction = MIXED + Trend Quality = Low (хаос)
+3. Цена в середине диапазона без импульса
+4. Только что был резкий move > 2x ATR (жди консолидацию)
+5. Нет четкого сетапа из списка выше
+
+**Помни:** HOLD — это дисциплина, не слабость."""
+
+    def get_position_management(self, ctx: dict) -> str:
+        """Специфичное управление позицией для скальпинга."""
+        return """### УПРАВЛЕНИЕ ПОЗИЦИЕЙ (SCALP MODE)
+
+**ПРАВИЛО:** Быстро входи, быстро выходи. НЕ жди "runners".
+
+1. **В плюсе (+0.3% и выше):**
+   - Фиксируй прибыль ИЛИ подтягивай SL в безубыток
+   - НЕ жди больше если импульс затухает (volume падает)
+   - Частичное закрытие (50%) — нормальная практика
+
+2. **В небольшом минусе (до -0.5%):**
+   - HOLD если сетап еще валиден (структура не сломана)
+   - CLOSE если структура сломана (пробит уровень против тебя)
+
+3. **Близко к SL:**
+   - НЕ двигай SL дальше — это нарушение плана
+   - Прими убыток, переходи к следующей сделке
+   - Убыток по SL — это НОРМАЛЬНО, не ошибка
+
+4. **Позиция "зависла" (нет движения):**
+   - Если цена стоит на месте > 5 свечей — рассмотри CLOSE
+   - "Мертвые деньги" = упущенные возможности"""
+
+    def get_special_situations(self, ctx: dict) -> str:
+        """Упрощенные специальные ситуации для скальпа."""
+        return """### СПЕЦИАЛЬНЫЕ СИТУАЦИИ (SCALP)
+
+**1. PANIC DUMP (RSI < 25, резкое падение > 2%):**
+- НЕ шортить дно — скорее всего будет отскок
+- Рассмотри counter-trend LONG на возврате выше support
+- Жди подтверждение (зеленая свеча + volume)
+
+**2. FAKEOUT / ЛОЖНЫЙ ПРОБОЙ:**
+- Цена пробила уровень, но вернулась обратно
+- Это Liquidity Grab — вход ПРОТИВ направления прокола
+- SL: за экстремум прокола
+
+**3. NEWS SPIKE (если есть новость):**
+- Резкий move на новости — НЕ входи сразу
+- Жди 2-3 свечи для понимания направления
+- Или пропусти — волатильность слишком высокая"""

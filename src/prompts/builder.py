@@ -43,6 +43,19 @@ class PromptBuilder:
         if ctx.get("decision_history"):
             decision_block = load_block("decision_history.txt").format_map(ctx)
 
+        # Проверяем override блоков от стратегии
+        special_situations = strategy.get_special_situations(ctx)
+        if special_situations is None:
+            special_situations = load_block("special_situations.txt")
+
+        position_management = strategy.get_position_management(ctx)
+        if position_management is None:
+            position_management = load_block("position_management.txt")
+
+        risk_table = strategy.get_risk_table(ctx)
+        if risk_table is None:
+            risk_table = load_block("risk_table.txt").format_map(ctx)
+
         # Собираем блоки
         parts = [
             load_block("role.txt").format_map(ctx),
@@ -51,9 +64,9 @@ class PromptBuilder:
             decision_block,
             load_block("market_analysis.txt").format_map(ctx),
             strategy_section,
-            load_block("special_situations.txt"),
-            load_block("position_management.txt"),
-            load_block("risk_table.txt").format_map(ctx),
+            special_situations,
+            position_management,
+            risk_table,
             load_block("candle_history.txt").format_map(ctx),
             load_block("response_format.txt").format_map(ctx),
         ]

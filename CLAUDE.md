@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-AI-powered cryptocurrency futures trading bot for BingX exchange. Combines technical analysis (SMA, EMA, RSI, ATR, Bollinger Bands) with LLM-based decision making via OpenRouter/DeepSeek/SiliconFlow. Written in Python 3.12+.
+AI-powered cryptocurrency futures trading bot for BingX exchange. Combines technical analysis (SMA, EMA, RSI, ATR, Bollinger Bands) with LLM-based decision making via OpenRouter. Written in Python 3.12+.
 
 ## Commands
 
@@ -59,6 +59,15 @@ Key config concepts:
 - `data/steps.log` — system events
 - `data/logs/{SYMBOL}.log` — per-symbol logs (setup via `setup_symbol_logger()` in each worker)
 - `data/trades.log` — trade execution records
+
+## Development
+
+**All development tools and commands MUST run inside podman containers.** Do not install dependencies or run tests directly on the host system.
+
+Base container command pattern:
+```bash
+podman run --rm -v .:/app:Z -w /app python:3.12-slim sh -c "<commands>"
+```
 
 ## Language
 
