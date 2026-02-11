@@ -26,6 +26,59 @@ def calculate_ema(prices, period):
     return round(ema, 5)
 
 
+def calculate_macd(prices, fast=12, slow=26, signal=9):
+    """
+    Рассчитывает MACD (Moving Average Convergence Divergence)
+    Returns: (macd_line, signal_line, histogram)
+    """
+    if len(prices) < slow + signal:
+        return 0, 0, 0
+
+    ema_fast = calculate_ema(prices, fast)
+    ema_slow = calculate_ema(prices, slow)
+    macd_line = ema_fast - ema_slow
+
+    # Calculate MACD history for signal line
+    macd_history = []
+    for i in range(slow, len(prices)):
+        subset = prices[:i+1]
+        ef = calculate_ema(subset, fast)
+        es = calculate_ema(subset, slow)
+        macd_history.append(ef - es)
+
+    if len(macd_history) >= signal:
+        signal_line = calculate_ema(macd_history, signal)
+    else:
+        signal_line = macd_line
+
+    histogram = macd_line - signal_line
+    return round(macd_line, 6), round(signal_line, 6), round(histogram, 6)
+
+
+def calculate_bollinger_bands(prices, period=20, std_mult=2.0):
+    """
+    Рассчитывает Bollinger Bands
+    Returns: (upper_band, middle_band, lower_band, width_percent)
+    """
+    if len(prices) < period:
+        return 0, 0, 0, 0
+
+    recent = prices[-period:]
+    middle = sum(recent) / period
+
+    # Calculate standard deviation
+    variance = sum((p - middle) ** 2 for p in recent) / period
+    std_dev = variance ** 0.5
+
+    upper = middle + (std_mult * std_dev)
+    lower = middle - (std_mult * std_dev)
+
+    # Width as percentage
+    width_pct = ((upper - lower) / middle * 100) if middle > 0 else 0
+
+    return round(upper, 5), round(middle, 5), round(lower, 5), round(width_pct, 2)
+
+
 def calculate_atr(prices_data, period=14):
     """
     Рассчитывает Average True Range
@@ -418,6 +471,20 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     # ATR расчёт
     atr = calculate_atr(prices, 14)
 
+    # ATR ratio for volatility filter (current vs average)
+    if len(close_prices) >= 20:
+        price_changes = [abs(close_prices[i] - close_prices[i-1]) for i in range(1, len(close_prices))]
+        avg_atr = sum(price_changes[-20:]) / 20 if price_changes else atr
+        atr_ratio = atr / avg_atr if avg_atr > 0 else 1.0
+    else:
+        atr_ratio = 1.0
+
+    # MACD calculation
+    macd_line, macd_signal, macd_hist = calculate_macd(close_prices)
+
+    # Bollinger Bands calculation
+    bb_upper, bb_middle, bb_lower, bb_width = calculate_bollinger_bands(close_prices)
+
     # Текущая цена
     last_close = prices[-1]["closePrice"]
     current_price = get_price_value(last_close)
@@ -615,13 +682,11 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     # === MOMENTUM STRATEGY SETTINGS ===
     from src.config import CHART_RANGES, DEFAULT_CHART_RANGE, SMART_SAMPLING, MOMENTUM_STRATEGY, STRATEGY_STYLE, STYLE_PRESETS
 
-    current_interval = "1m"
-    if DEFAULT_CHART_RANGE in CHART_RANGES:
-        current_interval = CHART_RANGES[DEFAULT_CHART_RANGE].get("interval", "1m")
-
     # Get current style settings
     current_style = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS["INTRADAY"])
     style_desc = current_style.get("description", "")
+
+    current_interval = current_style.get("timeframe", "5m")
 
     # Используем настройки из конфига (с приоритетом MOMENTUM_STRATEGY если задано вручную)
     atr_sl_mult = MOMENTUM_STRATEGY.get("atr_sl_multiplier", current_style.get("atr_sl_mult", 2.0))
@@ -789,6 +854,16 @@ def analyze_symbol(symbol, position=None, decision_context=""):
             "resistance": resistance,
             "ema9": ema9,
             "ema21": ema21,
+            "last_5_direction": last_5_direction,
+            # New indicators for improved scoring
+            "atr": atr,
+            "atr_ratio": atr_ratio,
+            "macd_line": macd_line,
+            "macd_signal": macd_signal,
+            "macd_hist": macd_hist,
+            "bb_upper": bb_upper,
+            "bb_lower": bb_lower,
+            "bb_width": bb_width,
         }
 
         # Генерируем детерминированный сигнал

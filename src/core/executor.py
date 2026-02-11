@@ -210,10 +210,8 @@ def execute_prediction(prediction):
     # 1. OPEN NEW POSITION
     if not has_position:
         if prediction["action"] in ["buy", "sell"]:
-            # Check limits
-            if total_positions >= MAX_POSITIONS:
-                warning(f"⚠️ {symbol}: Лимит позиций ({MAX_POSITIONS}) достигнут. Пропуск сигнала.")
-                return
+            # Position limit is per-symbol (max 1 per symbol)
+            # has_position already ensures we don't open duplicate
 
             if prediction["confidence"] >= confidence_threshold:
                 direction = prediction["action"].upper()

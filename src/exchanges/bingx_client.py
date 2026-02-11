@@ -16,6 +16,16 @@ from src.utils.logger import info, error, warning
 from .exchange_client import ExchangeClient
 
 class BingXClient(ExchangeClient):
+    # Class-level cache for positions (shared across instances)
+    _positions_cache = None
+    _positions_cache_time = 0
+    _positions_cache_ttl = 5  # Cache TTL in seconds
+
+    # Class-level cache for balance
+    _balance_cache = None
+    _balance_cache_time = 0
+    _balance_cache_ttl = 10  # Cache TTL in seconds
+
     def __init__(self, api_key=None, secret_key=None):
         self.api_key = api_key or BINGX_API_KEY
         self.secret_key = secret_key or BINGX_SECRET_KEY
@@ -115,14 +125,21 @@ class BingXClient(ExchangeClient):
         return None
 
     def get_perpetual_balance(self):
-        """Получает баланс Perpetual Futures (Swap)"""
+        """Получает баланс Perpetual Futures (Swap) с кэшированием"""
+        # Check cache first
+        now = time.time()
+        if (BingXClient._balance_cache is not None and
+            now - BingXClient._balance_cache_time < BingXClient._balance_cache_ttl):
+            return BingXClient._balance_cache
+
         endpoint = "/openApi/swap/v2/user/balance"
         response = self.make_request("get", endpoint)
 
         if response and response.get("code") == 0:
             balance_data = response.get("data", {}).get("balance", {})
-            # DEBUG: Log raw balance response to diagnose parsing issues
-            info(f"🔍 [DEBUG] Raw balance API response: {balance_data}")
+            # Update cache
+            BingXClient._balance_cache = balance_data
+            BingXClient._balance_cache_time = time.time()
             return balance_data
 
         error(f"❌ Failed to get perpetual balance. Response: {response}")
@@ -164,19 +181,36 @@ class BingXClient(ExchangeClient):
         return self.get_perpetual_balance()
 
     def get_kline_data(self, symbol, interval="5m", limit=288):
-        """Получает исторические данные свечей"""
+        """
+        Получает исторические данные свечей.
+        Сначала пробует WebSocket кэш, потом REST API.
+        """
+        # 1. Try WebSocket shared cache first
+        try:
+            from src.exchanges.ws_data_provider import is_cache_ready, get_klines_from_shared_cache
+
+            if is_cache_ready(symbol):
+                cached = get_klines_from_shared_cache(symbol, limit)
+                if len(cached) >= limit * 0.8:  # 80% data available
+                    return cached
+        except ImportError:
+            pass  # WS provider not available
+        except Exception as e:
+            warning(f"⚠️ WS cache error for {symbol}: {e}")
+
+        # 2. Fallback to REST API
+        return self._fetch_klines_rest(symbol, interval, limit)
+
+    def _fetch_klines_rest(self, symbol, interval="5m", limit=288):
+        """REST API fallback для получения свечей."""
         # BingX формат символа: BTC-USDT
-        # Если символ заканчивается на /USD, меняем на -USDT
         if symbol.endswith("/USD"):
             formatted_symbol = symbol.replace("/USD", "-USDT")
         elif symbol.endswith("USDT") and "-" not in symbol and "/" not in symbol:
-             # Handle BTCUSDT -> BTC-USDT
             formatted_symbol = symbol[:-4] + "-USDT"
         else:
             formatted_symbol = symbol.replace("/", "-")
 
-        # Для рыночных данных всегда используем основной API, так как на VST может не быть ликвидности/данных
-        # или эндпоинт может отличаться. Рыночные данные одинаковы для демо и реала.
         market_url = "https://open-api.bingx.com/openApi/swap/v3/quote/klines"
 
         # Map verbose interval constants to BingX format
@@ -198,8 +232,6 @@ class BingXClient(ExchangeClient):
             "limit": limit
         }
 
-        # Используем requests напрямую для market_url, чтобы не путать с self.base_url
-        # Retry logic with timeout to prevent hanging
         max_retries = 3
         retry_delay = 1
 
@@ -208,12 +240,12 @@ class BingXClient(ExchangeClient):
                 response = requests.get(market_url, params=params, timeout=6)
                 response.raise_for_status()
                 data = response.json()
-                break  # Success, exit retry loop
+                break
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.ChunkedEncodingError) as e:
                 warning(f"⚠️ Market data network error (attempt {attempt+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
+                    retry_delay *= 2
                 else:
                     error(f"❌ BingX Market Data request failed after {max_retries} attempts: {e}")
                     return []
@@ -222,14 +254,10 @@ class BingXClient(ExchangeClient):
                 return []
 
         if data and data.get("code") == 0:
-            # BingX returns: [time, open, high, low, close, volume, ...]
-            # Convert to unified format:
-
             klines = data.get("data", [])
             formatted_data = []
 
             for k in klines:
-                # k structure: {"time": 123, "open": "1.2", ...}
                 if isinstance(k, dict):
                     ts_ms = k.get("time")
                     close_price = float(k.get("close"))
@@ -238,7 +266,6 @@ class BingXClient(ExchangeClient):
                     low_price = float(k.get("low"))
                     volume = float(k.get("volume"))
                 elif isinstance(k, list):
-                    # Fallback for list format if API changes
                     ts_ms = k[0]
                     open_price = float(k[1])
                     high_price = float(k[2])
@@ -248,7 +275,6 @@ class BingXClient(ExchangeClient):
                 else:
                     continue
 
-                # Convert timestamp to ISO format
                 dt = time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(ts_ms / 1000))
 
                 formatted_data.append({
@@ -260,15 +286,19 @@ class BingXClient(ExchangeClient):
                     "volume": volume
                 })
 
-            # Sort by time ascending
             formatted_data.sort(key=lambda x: x["snapshotTimeUTC"])
-
             return formatted_data
 
         return []
 
     def get_positions(self):
-        """Получает открытые позиции"""
+        """Получает открытые позиции (с кэшированием)"""
+        # Check cache first
+        now = time.time()
+        if (BingXClient._positions_cache is not None and
+            now - BingXClient._positions_cache_time < BingXClient._positions_cache_ttl):
+            return BingXClient._positions_cache
+
         endpoint = "/openApi/swap/v2/user/positions"
         response = self.make_request("get", endpoint)
 
@@ -309,6 +339,10 @@ class BingXClient(ExchangeClient):
                     "size": abs(size),
                     "pnl": float(pos.get("unrealizedProfit", 0))
                 })
+
+        # Update cache
+        BingXClient._positions_cache = positions
+        BingXClient._positions_cache_time = time.time()
 
         return positions
 

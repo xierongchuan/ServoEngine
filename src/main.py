@@ -120,13 +120,39 @@ def run_pipeline():
 def run_multiprocess_pipeline():
     """Запускает отдельный процесс для каждого символа (Multiprocessing)"""
     import multiprocessing
-    from src.config import SYMBOLS, STRATEGY_STYLE, BOT_CONFIG
+    from src.config import SYMBOLS, STRATEGY_STYLE, BOT_CONFIG, STYLE_PRESETS
     from src.core.process_worker import run_symbol_pipeline
     from src.core.chart_worker import run_chart_worker
 
     print("\n🚀 Запуск мультипроцессного пайплайна...")
     info("🚀 Запуск мультипроцессного пайплайна...")
     info(f"📋 Режим стратегии: {STRATEGY_STYLE}")
+
+    # 0. Start WebSocket data provider BEFORE workers
+    ws_cache = None
+    ws_ready = None
+    try:
+        from src.exchanges.ws_data_provider import start_ws_provider
+
+        # Get timeframe from strategy preset
+        current_preset = STYLE_PRESETS.get(STRATEGY_STYLE, {})
+        ws_interval = current_preset.get("timeframe", "5m")
+
+        print(f"   📡 Запуск WebSocket провайдера (interval={ws_interval})...")
+        info(f"📡 Запуск WebSocket провайдера для {len(SYMBOLS)} символов")
+
+        ws_cache, ws_ready = start_ws_provider(SYMBOLS, interval=ws_interval)
+
+        # Wait for initial REST backfill to complete
+        print("   ⏳ Загрузка исторических данных...")
+        time.sleep(3)  # Give time for backfill
+
+        print("   ✅ WebSocket провайдер запущен")
+        info("✅ WebSocket провайдер запущен и кэш заполнен")
+
+    except Exception as e:
+        print(f"   ⚠️ WebSocket провайдер недоступен: {e}")
+        info(f"⚠️ WebSocket провайдер недоступен, используем REST: {e}")
 
     processes = []
 
@@ -145,7 +171,7 @@ def run_multiprocess_pipeline():
         else:
             p = multiprocessing.Process(
                 target=run_symbol_pipeline,
-                args=(symbol,),
+                args=(symbol, ws_cache, ws_ready),
                 name=f"Worker-{symbol}"
             )
             worker_type = STRATEGY_STYLE
@@ -183,13 +209,19 @@ def run_multiprocess_pipeline():
         print("\n🛑 Остановка главного процесса...")
         info("🛑 Остановка главного процесса...")
     finally:
+        # Stop WebSocket provider
+        try:
+            from src.exchanges.ws_data_provider import stop_ws_provider
+            stop_ws_provider()
+            info("📡 WebSocket провайдер остановлен")
+        except:
+            pass
+
         # Graceful shutdown of ALL processes
         for p in processes:
             if p.is_alive():
-                 # Send SIGTERM
                 p.terminate()
 
-        # Wait a bit
         time.sleep(0.5)
 
         # Force kill if still alive

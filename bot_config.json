@@ -1,30 +1,15 @@
 {
   "EXCHANGE_SYMBOLS": {
     "bingx": [
-      "BTCUSDT",
-      "ETCUSDT",
-      "LTCUSDT",
-      "XRPUSDT",
-      "BCHUSDT",
-      "ADAUSDT",
-      "DOTUSDT",
-      "LINKUSDT",
-      "XLMUSDT",
-      "DOGEUSDT",
-      "SOLUSDT",
-      "AVAXUSDT",
-      "UNIUSDT",
-      "ATOMUSDT",
-      "ALGOUSDT",
-      "TRXUSDT"
+      "BTCUSDT"
     ]
   },
   "EXCHANGE_FEES": {
-    "bingx": 0.1
+    "bingx": 0.05
   },
   "POSITION_SIZE_PERCENT": 10.0,
   "MIN_TRADE_AMOUNT_USDT": 10.0,
-  "TAKE_PROFIT_PERCENT": 1.5,
+  "TAKE_PROFIT_PERCENT": 2.5,
   "STOP_LOSS_PERCENT": 1.0,
   "MIN_CONFIDENCE_THRESHOLD": 0.65,
   "MIN_RISK_REWARD_RATIO": 1.2,
@@ -169,7 +154,10 @@
   },
   "TECHNICAL_ANALYSIS": {
     "sr_window": 20,
-    "ema_periods": [9, 21],
+    "ema_periods": [
+      9,
+      21
+    ],
     "trend_candle_count": 5,
     "volume_avg_window": 20,
     "volume_thresholds": {
@@ -186,7 +174,13 @@
   "CHART_SETTINGS": {
     "update_interval": 10,
     "min_sleep": 0.5,
-    "sma_periods": [10, 20, 50, 100, 200],
+    "sma_periods": [
+      10,
+      20,
+      50,
+      100,
+      200
+    ],
     "chart_height": 13.5,
     "dpi": 200
   },
@@ -279,35 +273,39 @@
       "timeframe": "5m",
       "chart_period": "1D",
       "plotter_period": "6h",
-      "loop_interval": 120,
-      "position_check_interval": 30,
+      "loop_interval": 60,
+      "position_check_interval": 15,
       "atr_sl_mult": 1.5,
-      "atr_tp_mult": 2.5,
+      "atr_tp_mult": 3.0,
       "leverage": 10,
-      "description": "Deterministic signals + AI filter. Most reliable mode."
+      "description": "5m swing with deterministic signals. Better quality."
     }
   },
   "HYBRID_SETTINGS": {
     "enabled": true,
     "signal_rules": {
-      "trend_alignment_required": true,
-      "min_volume_ratio": 0.7,
-      "rsi_long_max": 65,
-      "rsi_long_min": 35,
-      "rsi_short_max": 65,
-      "rsi_short_min": 35,
+      "trend_alignment_required": false,
+      "min_volume_ratio": 0.5,
+      "rsi_long_max": 55,
+      "rsi_long_min": 20,
+      "rsi_short_max": 80,
+      "rsi_short_min": 45,
       "require_sr_proximity": true,
-      "sr_proximity_pct": 1.0,
+      "sr_proximity_pct": 4.0,
       "ema_cross_weight": 2,
-      "rsi_zone_weight": 1,
+      "rsi_zone_weight": 2,
       "volume_weight": 1,
       "sr_weight": 2,
+      "momentum_weight": 1,
+      "macd_weight": 2,
+      "bb_weight": 1,
+      "min_atr_ratio": 0.5,
       "min_score_for_signal": 4
     },
     "ai_filter": {
-      "enabled": true,
+      "enabled": false,
       "can_generate_signals": false,
-      "min_confidence_to_approve": 0.6
+      "min_confidence_to_approve": 0.55
     }
   },
   "GRID_SETTINGS": {

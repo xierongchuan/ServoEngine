@@ -130,3 +130,48 @@ class TradeTracker:
 
     def get_active_trade_info(self, symbol):
         return self.active_trades.get(symbol)
+
+    def force_sync_all(self, real_positions_dict: dict):
+        """
+        Force sync all trades with actual exchange positions.
+        real_positions_dict: {symbol: position_data} from exchange
+
+        Removes stale trades that don't exist on exchange.
+        Adds trades that exist on exchange but not in tracker.
+        """
+        # 1. Remove stale trades (in tracker but not on exchange)
+        stale_symbols = []
+        for symbol in list(self.active_trades.keys()):
+            if symbol not in real_positions_dict:
+                stale_symbols.append(symbol)
+
+        for symbol in stale_symbols:
+            stored = self.active_trades[symbol]
+            log_trade(f"🧹 [TradeTracker] Removing STALE trade {symbol} (not on exchange)")
+            # Move to history as closed
+            stored["status"] = "CLOSED_SYNC"
+            stored["close_time"] = datetime.now().isoformat()
+            stored["reason"] = "STALE_SYNC_CLEANUP"
+            history = self._load_json(HISTORY_FILE)
+            if isinstance(history, dict): history = []
+            history.append(stored)
+            self._save_json(HISTORY_FILE, history)
+            del self.active_trades[symbol]
+
+        # 2. Add missing trades (on exchange but not in tracker)
+        for symbol, real_pos in real_positions_dict.items():
+            if symbol not in self.active_trades and real_pos:
+                self._handle_new_trade(symbol, real_pos)
+
+        self._save_json(ACTIVE_TRADES_FILE, self.active_trades)
+
+        if stale_symbols:
+            info(f"🧹 [TradeTracker] Cleaned {len(stale_symbols)} stale trades: {stale_symbols}")
+
+        return len(stale_symbols)
+
+    def reload_from_disk(self):
+        """Reload active trades from disk (useful if file was edited externally)"""
+        self.active_trades = self._load_json(ACTIVE_TRADES_FILE)
+        return len(self.active_trades)
+

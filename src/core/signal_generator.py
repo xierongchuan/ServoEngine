@@ -2,6 +2,16 @@
 Deterministic Signal Generator for HYBRID mode.
 Generates trading signals based on technical indicators with scoring system.
 AI only confirms/rejects these signals - it cannot generate its own.
+
+SCORING SYSTEM v2:
+- EMA alignment: +2
+- RSI zone: +2
+- S/R proximity: +2
+- Momentum: +1
+- MACD crossover: +2
+- Bollinger Bands: +1
+- Volume: +1
+Max: 11, Min for signal: 4
 """
 
 from src.config import BOT_CONFIG
@@ -9,17 +19,7 @@ from src.utils.logger import info, warning
 
 
 class SignalGenerator:
-    """
-    Детерминированный генератор сигналов.
-
-    Система очков:
-    - EMA alignment (EMA9 > EMA21 для LONG): +2
-    - RSI в благоприятной зоне: +1
-    - Volume подтверждение: +1
-    - Близость к S/R уровню: +2
-
-    Минимум очков для сигнала: 4 (настраивается)
-    """
+    """Детерминированный генератор сигналов с фильтром волатильности."""
 
     def __init__(self):
         self.settings = BOT_CONFIG.get("HYBRID_SETTINGS", {})
@@ -29,22 +29,13 @@ class SignalGenerator:
         """
         Генерирует детерминированный сигнал на основе анализа.
 
-        Returns:
-            {
-                "signal": "BUY" | "SELL" | "HOLD",
-                "score": int,
-                "max_score": int,
-                "reasons": list[str],
-                "filters_passed": bool,
-                "details": dict
-            }
+        Features:
+        - ATR volatility filter
+        - MACD crossover scoring
+        - Bollinger Bands touch
+        - Non-overlapping RSI zones
         """
-        score = 0
-        max_score = 0
-        reasons = []
-        details = {}
-
-        # Извлекаем данные из анализа
+        # === EXTRACT DATA ===
         global_trend = analysis.get("global_trend", "N/A")
         local_trend = analysis.get("local_trend", "N/A")
         rsi = analysis.get("rsi", 50)
@@ -55,104 +46,147 @@ class SignalGenerator:
         ema9 = analysis.get("ema9", 0)
         ema21 = analysis.get("ema21", 0)
 
-        # Веса из конфига
+        # New indicators
+        atr_ratio = analysis.get("atr_ratio", 1.0)
+        macd_line = analysis.get("macd_line", 0)
+        macd_signal = analysis.get("macd_signal", 0)
+        macd_hist = analysis.get("macd_hist", 0)
+        bb_upper = analysis.get("bb_upper", 0)
+        bb_lower = analysis.get("bb_lower", 0)
+
+        # === WEIGHTS ===
         ema_weight = self.rules.get("ema_cross_weight", 2)
-        rsi_weight = self.rules.get("rsi_zone_weight", 1)
+        rsi_weight = self.rules.get("rsi_zone_weight", 2)
         volume_weight = self.rules.get("volume_weight", 1)
         sr_weight = self.rules.get("sr_weight", 2)
+        momentum_weight = self.rules.get("momentum_weight", 1)
+        macd_weight = self.rules.get("macd_weight", 2)
+        bb_weight = self.rules.get("bb_weight", 1)
 
-        max_score = ema_weight + rsi_weight + volume_weight + sr_weight
+        max_score = ema_weight + rsi_weight + sr_weight + momentum_weight + macd_weight + bb_weight + volume_weight
 
-        # Пороги
-        min_volume = self.rules.get("min_volume_ratio", 0.7)
-        rsi_long_max = self.rules.get("rsi_long_max", 65)
-        rsi_long_min = self.rules.get("rsi_long_min", 35)
-        rsi_short_max = self.rules.get("rsi_short_max", 65)
-        rsi_short_min = self.rules.get("rsi_short_min", 35)
-        sr_proximity_pct = self.rules.get("sr_proximity_pct", 1.0)
+        # === THRESHOLDS ===
+        min_volume = self.rules.get("min_volume_ratio", 0.5)
+        rsi_long_max = self.rules.get("rsi_long_max", 55)
+        rsi_long_min = self.rules.get("rsi_long_min", 20)
+        rsi_short_max = self.rules.get("rsi_short_max", 80)
+        rsi_short_min = self.rules.get("rsi_short_min", 45)
+        sr_proximity_pct = self.rules.get("sr_proximity_pct", 4.0)
         min_score = self.rules.get("min_score_for_signal", 4)
+        min_atr_ratio = self.rules.get("min_atr_ratio", 0.5)
 
-        # === ОПРЕДЕЛЯЕМ НАПРАВЛЕНИЕ ===
+        # === VOLATILITY FILTER ===
+        if atr_ratio < min_atr_ratio:
+            info(f"📊 [SIGNAL] HOLD | Low volatility (ATR: {atr_ratio:.2f})")
+            return {
+                "signal": "HOLD",
+                "score": 0,
+                "max_score": max_score,
+                "reasons": [f"Low volatility (ATR {atr_ratio:.2f})"],
+                "filters_passed": False,
+                "details": {"atr_ratio": atr_ratio, "filter": "volatility"}
+            }
 
+        # === SCORING ===
         long_score = 0
         short_score = 0
         long_reasons = []
         short_reasons = []
 
-        # 1. EMA Alignment
+        # 1. EMA Alignment (+2)
         if ema9 > 0 and ema21 > 0:
+            ema_diff_pct = abs(ema9 - ema21) / ema21 * 100 if ema21 > 0 else 0
             if ema9 > ema21:
                 long_score += ema_weight
-                long_reasons.append(f"EMA9 > EMA21 (+{ema_weight})")
+                long_reasons.append(f"EMA↑ ({ema_diff_pct:.1f}%) +{ema_weight}")
             elif ema9 < ema21:
                 short_score += ema_weight
-                short_reasons.append(f"EMA9 < EMA21 (+{ema_weight})")
+                short_reasons.append(f"EMA↓ ({ema_diff_pct:.1f}%) +{ema_weight}")
 
-        # 2. Trend Alignment (опционально)
-        if self.rules.get("trend_alignment_required", True):
+        # 2. Trend Alignment (optional)
+        if self.rules.get("trend_alignment_required", False):
             if global_trend == "UP" and local_trend == "BULLISH":
                 long_score += 1
-                long_reasons.append("Trend aligned UP (+1)")
+                long_reasons.append("Trend↑ +1")
             elif global_trend == "DOWN" and local_trend == "BEARISH":
                 short_score += 1
-                short_reasons.append("Trend aligned DOWN (+1)")
+                short_reasons.append("Trend↓ +1")
 
-        # 3. RSI Zone
+        # 3. RSI Zone (+2)
         if rsi_long_min <= rsi <= rsi_long_max:
             long_score += rsi_weight
-            long_reasons.append(f"RSI {rsi:.1f} in LONG zone [{rsi_long_min}-{rsi_long_max}] (+{rsi_weight})")
-
+            long_reasons.append(f"RSI {rsi:.0f} +{rsi_weight}")
         if rsi_short_min <= rsi <= rsi_short_max:
             short_score += rsi_weight
-            short_reasons.append(f"RSI {rsi:.1f} in SHORT zone [{rsi_short_min}-{rsi_short_max}] (+{rsi_weight})")
+            short_reasons.append(f"RSI {rsi:.0f} +{rsi_weight}")
 
-        # 4. Volume Confirmation
-        if volume_ratio >= min_volume:
-            # Добавляем к обоим, т.к. volume подтверждает любое движение
-            long_score += volume_weight
-            short_score += volume_weight
-            long_reasons.append(f"Volume {volume_ratio:.2f}x >= {min_volume}x (+{volume_weight})")
-            short_reasons.append(f"Volume {volume_ratio:.2f}x >= {min_volume}x (+{volume_weight})")
+        # 4. MACD Crossover (+2)
+        if macd_line > macd_signal and macd_hist > 0:
+            long_score += macd_weight
+            long_reasons.append(f"MACD↑ +{macd_weight}")
+        elif macd_line < macd_signal and macd_hist < 0:
+            short_score += macd_weight
+            short_reasons.append(f"MACD↓ +{macd_weight}")
 
-        # 5. S/R Proximity
+        # 5. Bollinger Bands (+1)
+        if bb_lower > 0 and current_price <= bb_lower * 1.005:
+            long_score += bb_weight
+            long_reasons.append(f"BB↓ +{bb_weight}")
+        elif bb_upper > 0 and current_price >= bb_upper * 0.995:
+            short_score += bb_weight
+            short_reasons.append(f"BB↑ +{bb_weight}")
+
+        # 6. S/R Proximity (+2)
         if current_price > 0 and support > 0 and resistance > 0:
             support_dist_pct = abs((current_price - support) / current_price * 100)
             resistance_dist_pct = abs((resistance - current_price) / current_price * 100)
 
-            # Близко к support = хорошо для LONG
             if support_dist_pct <= sr_proximity_pct:
                 long_score += sr_weight
-                long_reasons.append(f"Near support {support:.2f} ({support_dist_pct:.2f}%) (+{sr_weight})")
-
-            # Близко к resistance = хорошо для SHORT
+                long_reasons.append(f"S/R↓ ({support_dist_pct:.1f}%) +{sr_weight}")
             if resistance_dist_pct <= sr_proximity_pct:
                 short_score += sr_weight
-                short_reasons.append(f"Near resistance {resistance:.2f} ({resistance_dist_pct:.2f}%) (+{sr_weight})")
+                short_reasons.append(f"S/R↑ ({resistance_dist_pct:.1f}%) +{sr_weight}")
 
-        # === ВЫБИРАЕМ СИГНАЛ ===
+        # 7. Momentum (+1)
+        last_5_direction = analysis.get("last_5_direction", "MIXED")
+        if last_5_direction in ["UP", "STRONG UP"]:
+            long_score += momentum_weight
+            long_reasons.append(f"Mom↑ +{momentum_weight}")
+        elif last_5_direction in ["DOWN", "STRONG DOWN"]:
+            short_score += momentum_weight
+            short_reasons.append(f"Mom↓ +{momentum_weight}")
 
+        # 8. Volume (added to winner only)
+        volume_confirmed = volume_ratio >= min_volume
+
+        # === DETERMINE SIGNAL ===
         signal = "HOLD"
         score = 0
         reasons = []
 
-        # Выбираем направление с большим счётом
         if long_score >= min_score and long_score > short_score:
             signal = "BUY"
             score = long_score
             reasons = long_reasons
+            if volume_confirmed:
+                score += volume_weight
+                reasons.append(f"Vol {volume_ratio:.1f}x +{volume_weight}")
         elif short_score >= min_score and short_score > long_score:
             signal = "SELL"
             score = short_score
             reasons = short_reasons
+            if volume_confirmed:
+                score += volume_weight
+                reasons.append(f"Vol {volume_ratio:.1f}x +{volume_weight}")
         elif long_score >= min_score and short_score >= min_score:
-            # Оба направления имеют достаточно очков - конфликт, HOLD
             signal = "HOLD"
             score = max(long_score, short_score)
-            reasons = ["CONFLICT: Both directions have signals - staying out"]
+            reasons = [f"CONFLICT L:{long_score} S:{short_score}"]
         else:
             signal = "HOLD"
             score = max(long_score, short_score)
-            reasons = [f"Score {score}/{min_score} - not enough for signal"]
+            reasons = [f"Low score L:{long_score} S:{short_score}"]
 
         details = {
             "long_score": long_score,
@@ -160,10 +194,9 @@ class SignalGenerator:
             "long_reasons": long_reasons,
             "short_reasons": short_reasons,
             "min_score_required": min_score,
-            "ema9": ema9,
-            "ema21": ema21,
-            "rsi": rsi,
-            "volume_ratio": volume_ratio,
+            "volume_confirmed": volume_confirmed,
+            "atr_ratio": atr_ratio,
+            "macd_hist": macd_hist,
             "support": support,
             "resistance": resistance
         }
@@ -177,25 +210,16 @@ class SignalGenerator:
             "details": details
         }
 
-        # Логируем результат
+        # Log
         if signal != "HOLD":
-            info(f"📊 [SIGNAL] {signal} | Score: {score}/{max_score} | Reasons: {', '.join(reasons[:3])}")
+            info(f"📊 [SIGNAL] {signal} | {score}/{max_score} | {' '.join(reasons[:3])}")
         else:
-            info(f"📊 [SIGNAL] HOLD | Score: {score}/{min_score} required")
+            info(f"📊 [SIGNAL] HOLD | L:{long_score} S:{short_score} (need {min_score})")
 
         return result
 
     def should_close_position(self, analysis: dict, position: dict) -> dict:
-        """
-        Детерминированная проверка на закрытие позиции.
-
-        Returns:
-            {
-                "should_close": bool,
-                "reason": str,
-                "urgency": "low" | "medium" | "high"
-            }
-        """
+        """Детерминированная проверка на закрытие позиции."""
         if not position:
             return {"should_close": False, "reason": "No position", "urgency": "low"}
 
@@ -203,72 +227,51 @@ class SignalGenerator:
         entry_price = float(position.get("entry", position.get("avgPrice", 0)))
         current_price = analysis.get("current_price", 0)
         rsi = analysis.get("rsi", 50)
+        macd_hist = analysis.get("macd_hist", 0)
 
         if entry_price <= 0 or current_price <= 0:
             return {"should_close": False, "reason": "Invalid prices", "urgency": "low"}
 
-        # Рассчитываем P/L
+        # Calculate P/L
         if pos_type == "BUY":
             pnl_pct = (current_price - entry_price) / entry_price * 100
         else:
             pnl_pct = (entry_price - current_price) / entry_price * 100
 
-        # === ПРАВИЛА ЗАКРЫТИЯ ===
+        # === EXIT RULES ===
 
-        # 1. RSI экстремум против позиции
+        # 1. RSI extreme
         if pos_type == "BUY" and rsi > 80:
-            return {
-                "should_close": True,
-                "reason": f"RSI {rsi:.1f} > 80 (overbought) - LONG exit signal",
-                "urgency": "high"
-            }
-
+            return {"should_close": True, "reason": f"RSI {rsi:.0f} > 80", "urgency": "high"}
         if pos_type == "SELL" and rsi < 20:
-            return {
-                "should_close": True,
-                "reason": f"RSI {rsi:.1f} < 20 (oversold) - SHORT exit signal",
-                "urgency": "high"
-            }
+            return {"should_close": True, "reason": f"RSI {rsi:.0f} < 20", "urgency": "high"}
 
-        # 2. Хорошая прибыль + RSI начинает разворачиваться
+        # 2. Profit + RSI reversal
         if pnl_pct >= 2.0:
             if pos_type == "BUY" and rsi > 70:
-                return {
-                    "should_close": True,
-                    "reason": f"Profit {pnl_pct:.2f}% + RSI {rsi:.1f} > 70 - take profit",
-                    "urgency": "medium"
-                }
+                return {"should_close": True, "reason": f"+{pnl_pct:.1f}% RSI {rsi:.0f}", "urgency": "medium"}
             if pos_type == "SELL" and rsi < 30:
-                return {
-                    "should_close": True,
-                    "reason": f"Profit {pnl_pct:.2f}% + RSI {rsi:.1f} < 30 - take profit",
-                    "urgency": "medium"
-                }
+                return {"should_close": True, "reason": f"+{pnl_pct:.1f}% RSI {rsi:.0f}", "urgency": "medium"}
 
-        # 3. Разворот тренда против позиции
+        # 3. MACD reversal against position
+        if pos_type == "BUY" and macd_hist < 0 and pnl_pct < -0.5:
+            return {"should_close": True, "reason": f"MACD↓ + loss {pnl_pct:.1f}%", "urgency": "high"}
+        if pos_type == "SELL" and macd_hist > 0 and pnl_pct < -0.5:
+            return {"should_close": True, "reason": f"MACD↑ + loss {pnl_pct:.1f}%", "urgency": "high"}
+
+        # 4. Trend reversal + loss
         global_trend = analysis.get("global_trend", "N/A")
         local_trend = analysis.get("local_trend", "N/A")
 
-        if pos_type == "BUY" and global_trend == "DOWN" and local_trend == "BEARISH":
-            if pnl_pct < 0:  # В минусе + тренд против
-                return {
-                    "should_close": True,
-                    "reason": f"Trend reversed to DOWN + loss {pnl_pct:.2f}%",
-                    "urgency": "high"
-                }
-
-        if pos_type == "SELL" and global_trend == "UP" and local_trend == "BULLISH":
-            if pnl_pct < 0:
-                return {
-                    "should_close": True,
-                    "reason": f"Trend reversed to UP + loss {pnl_pct:.2f}%",
-                    "urgency": "high"
-                }
+        if pos_type == "BUY" and global_trend == "DOWN" and local_trend == "BEARISH" and pnl_pct < 0:
+            return {"should_close": True, "reason": f"Trend↓ + loss {pnl_pct:.1f}%", "urgency": "high"}
+        if pos_type == "SELL" and global_trend == "UP" and local_trend == "BULLISH" and pnl_pct < 0:
+            return {"should_close": True, "reason": f"Trend↑ + loss {pnl_pct:.1f}%", "urgency": "high"}
 
         return {"should_close": False, "reason": "No exit signal", "urgency": "low"}
 
 
-# Singleton instance
+# Singleton
 _generator = None
 
 def get_signal_generator() -> SignalGenerator:
@@ -277,12 +280,8 @@ def get_signal_generator() -> SignalGenerator:
         _generator = SignalGenerator()
     return _generator
 
-
 def generate_signal(analysis: dict) -> dict:
-    """Convenience function for generating signals."""
     return get_signal_generator().generate_signal(analysis)
 
-
 def should_close(analysis: dict, position: dict) -> dict:
-    """Convenience function for close check."""
     return get_signal_generator().should_close_position(analysis, position)

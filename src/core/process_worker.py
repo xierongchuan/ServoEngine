@@ -10,12 +10,25 @@ import traceback
 from datetime import datetime
 
 # Implements the pipeline for a single process
-def run_symbol_pipeline(symbol: str):
+def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
     """
     Запускает бесконечный торговый цикл для ОДНОГО символа.
     Этот код выполняется в отдельном процессе.
+
+    Args:
+        symbol: Trading pair symbol (e.g., "BTCUSDT")
+        ws_cache: Shared WebSocket cache dict (multiprocessing.Manager proxy)
+        ws_ready: Shared ready flags dict (multiprocessing.Manager proxy)
     """
     try:
+        # 0. Setup shared WebSocket cache (if available)
+        if ws_cache is not None and ws_ready is not None:
+            try:
+                from src.exchanges.ws_data_provider import set_shared_cache
+                set_shared_cache(ws_cache, ws_ready)
+            except Exception as e:
+                pass  # WS not critical, will fallback to REST
+
         # 1. Настройка логгера (один раз на старте процесса)
         from src.utils.logger import setup_symbol_logger, info, error, StageTimer
         setup_symbol_logger(symbol)
@@ -30,6 +43,24 @@ def run_symbol_pipeline(symbol: str):
 
         tracker = TradeTracker()
         journal = DecisionJournal()
+
+        # === STARTUP SYNC: Clean stale trades ===
+        try:
+            from src.exchanges.exchange_client import get_exchange_client
+            client = get_exchange_client()
+            all_positions = client.get_all_positions()  # Returns list of positions
+            # Convert to dict: {symbol: position}
+            real_positions_dict = {}
+            for pos in all_positions:
+                sym = pos.get("symbol")
+                if sym:
+                    real_positions_dict[sym] = pos
+            stale_count = tracker.force_sync_all(real_positions_dict)
+            if stale_count > 0:
+                info(f"🧹 [{symbol}] Startup sync: cleaned {stale_count} stale trades")
+        except Exception as e:
+            from src.utils.logger import warning
+            warning(f"⚠️ [{symbol}] Startup sync failed: {e}")
 
         while True:
             try:
@@ -64,8 +95,26 @@ def run_symbol_pipeline(symbol: str):
                 if STRATEGY_STYLE == "HYBRID":
                     signal_data = analysis_result.get("signal_data", {})
                     signal = signal_data.get("signal", "HOLD")
+                    close_signal = analysis_result.get("close_signal", {})
 
-                    if signal == "HOLD" and not real_position:
+                    # Check if AI filter is enabled
+                    from src.config import BOT_CONFIG
+                    hybrid_settings = BOT_CONFIG.get("HYBRID_SETTINGS", {})
+                    ai_filter_enabled = hybrid_settings.get("ai_filter", {}).get("enabled", True)
+
+                    # === PRIORITY 1: Check for deterministic CLOSE signal ===
+                    if real_position and close_signal.get("should_close"):
+                        close_reason = close_signal.get("reason", "Deterministic exit")
+                        close_urgency = close_signal.get("urgency", "medium")
+                        info(f"🚨 [{symbol}] HYBRID CLOSE: {close_reason} (urgency: {close_urgency})")
+                        prediction = {
+                            "symbol": symbol,
+                            "action": "close",
+                            "confidence": 0.9 if close_urgency == "high" else 0.75,
+                            "reason": f"[HYBRID] {close_reason}",
+                            "current_price": analysis_result.get("current_price", 0)
+                        }
+                    elif signal == "HOLD" and not real_position:
                         # No signal from deterministic system - skip AI call
                         info(f"🔧 [{symbol}] HYBRID: No signal (score: {signal_data.get('score', 0)}) - skipping AI")
                         prediction = {
@@ -75,8 +124,33 @@ def run_symbol_pipeline(symbol: str):
                             "reason": f"[HYBRID] No deterministic signal (score: {signal_data.get('score', 0)})",
                             "current_price": analysis_result.get("current_price", 0)
                         }
+                    elif not ai_filter_enabled:
+                        # AI filter disabled - use deterministic signal directly
+                        info(f"🔧 [{symbol}] HYBRID: AI filter OFF - executing {signal} directly")
+
+                        details = signal_data.get("details", {})
+                        support = details.get("support")
+                        resistance = details.get("resistance")
+
+                        # SL/TP depends on direction
+                        if signal == "BUY":
+                            sl = support   # SL below support
+                            tp = resistance  # TP at resistance
+                        else:  # SELL
+                            sl = resistance  # SL above resistance
+                            tp = support     # TP at support
+
+                        prediction = {
+                            "symbol": symbol,
+                            "action": signal.lower(),
+                            "confidence": 0.75,
+                            "reason": f"[HYBRID] {signal} (score: {signal_data.get('score', 0)}/{signal_data.get('max_score', 11)})",
+                            "current_price": analysis_result.get("current_price", 0),
+                            "stop_loss": sl,
+                            "take_profit": tp
+                        }
                     else:
-                        # Signal exists - ask AI to confirm/reject
+                        # Signal exists and AI filter enabled - ask AI to confirm/reject
                         with StageTimer("AI Filter", symbol, "🧠"):
                             info(f"🔧 [{symbol}] HYBRID: Signal {signal} - asking AI to confirm")
                             prediction = predict.process_analysis(analysis_result)
