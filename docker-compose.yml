@@ -1,0 +1,18 @@
+services:
+  panel:
+    build:
+      context: src/telegram_panel/
+      dockerfile: Dockerfile
+    ports:
+      - "${PANEL_PORT:-8080}:8080"
+    volumes:
+      - ./data:/app/data:ro,Z
+      - ./charts:/app/charts:ro,Z
+      - ./bot_config.json:/app/bot_config.json:rw,Z
+    env_file: .env
+    environment:
+      - PANEL_PORT=8080
+      - PANEL_DATA_DIR=/app/data
+      - PANEL_CHARTS_DIR=/app/charts
+      - PANEL_CONFIG_PATH=/app/bot_config.json
+    restart: unless-stopped

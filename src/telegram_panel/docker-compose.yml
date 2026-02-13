@@ -1,0 +1,20 @@
+services:
+  panel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${PANEL_PORT:-8080}:8080"
+    volumes:
+      # Mount bot data directories
+      - ../../data:/app/data:ro
+      - ../../charts:/app/charts:ro
+      # Mount config read-write for settings updates
+      - ../../bot_config.json:/app/bot_config.json:rw
+    env_file: ../../.env
+    environment:
+      - PANEL_PORT=8080
+      - PANEL_DATA_DIR=/app/data
+      - PANEL_CHARTS_DIR=/app/charts
+      - PANEL_CONFIG_PATH=/app/bot_config.json
+    restart: unless-stopped
