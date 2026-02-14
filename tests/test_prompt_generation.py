@@ -67,7 +67,8 @@ class TestPromptGeneration(unittest.TestCase):
             self.assertNotIn("НОВОСТНОЙ ФОН", prompt)
             # Основные секции должны быть на месте
             self.assertIn("РОЛЬ И ЗАДАЧА", prompt)
-            self.assertIn("СТРАТЕГИЯ", prompt)
+            # HYBRID uses "РЕЖИМ: HYBRID" instead of "СТРАТЕГИЯ"
+            self.assertTrue("СТРАТЕГИЯ" in prompt or "РЕЖИМ" in prompt)
             self.assertIn("ФОРМАТ ОТВЕТА", prompt)
             print("\n[SUCCESS] News Disabled Prompt Verified")
 
@@ -85,7 +86,8 @@ class TestPromptGeneration(unittest.TestCase):
             self.assertIn("Good News", prompt)
             # Основные секции на месте
             self.assertIn("РОЛЬ И ЗАДАЧА", prompt)
-            self.assertIn("СТРАТЕГИЯ", prompt)
+            # HYBRID uses "РЕЖИМ: HYBRID" instead of "СТРАТЕГИЯ"
+            self.assertTrue("СТРАТЕГИЯ" in prompt or "РЕЖИМ" in prompt)
             print("\n[SUCCESS] News Enabled Prompt Verified")
 
 if __name__ == '__main__':

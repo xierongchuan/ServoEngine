@@ -29,7 +29,8 @@ class HybridStrategy(BaseStrategy):
         signal_data = ctx.get("signal_data", {})
         signal = signal_data.get("signal", "HOLD")
         score = signal_data.get("score", 0)
-        max_score = signal_data.get("max_score", 6)
+        max_score = signal_data.get("max_score", 10)
+        quality = signal_data.get("quality", 0.0)
         reasons = signal_data.get("reasons", [])
         details = signal_data.get("details", {})
 
@@ -59,10 +60,14 @@ class HybridStrategy(BaseStrategy):
         long_score = details.get("long_score", 0)
         short_score = details.get("short_score", 0)
 
+        # Regime data
+        regime = signal_data.get("regime", "UNKNOWN")
+
         return f"""## 3. РЕЖИМ: HYBRID (AI-ФИЛЬТР)
 
 **ВАЖНО:** Ты НЕ генерируешь сигналы. Детерминированная система уже сгенерировала сигнал.
-Твоя задача — ПОДТВЕРДИТЬ (APPROVE) или ОТКЛОНИТЬ (REJECT) этот сигнал.
+The signal has ALREADY passed quantitative filters (RSI, volume, trend, MACD, BB, S/R).
+Your job: assess RISK the scoring system might have missed.
 
 ---
 
@@ -72,6 +77,8 @@ class HybridStrategy(BaseStrategy):
 |----------|----------|
 | **Сигнал** | **{signal}** |
 | **Score** | {score}/{max_score} |
+| **Quality** | {quality:.2f} |
+| **Regime** | {regime} |
 | **LONG Score** | {long_score} |
 | **SHORT Score** | {short_score} |
 
@@ -187,7 +194,10 @@ class HybridStrategy(BaseStrategy):
 Ты можешь подтвердить или отклонить рекомендацию на закрытие."""
 
     def get_special_situations(self, ctx: dict) -> str:
-        return """### КОГДА ТОЧНО REJECT
+        signal_data = ctx.get("signal_data", {})
+        max_score = signal_data.get("max_score", 10)
+
+        return f"""### КОГДА ТОЧНО REJECT
 
 1. **RSI экстремум против сигнала:**
    - BUY при RSI > 75 → REJECT
@@ -209,7 +219,8 @@ class HybridStrategy(BaseStrategy):
    - Тренд, RSI, Volume — все в одном направлении → APPROVE
 
 2. **Высокий score:**
-   - Score >= 5/6 обычно означает сильный сигнал → APPROVE
+   - Score >= 8/{max_score} обычно означает сильный сигнал → APPROVE
+   - Quality > 0.7 — высокая конвикция → APPROVE
 
 3. **Momentum подтверждён:**
    - Last 5 Direction совпадает с сигналом + Volume > 1.0x → APPROVE"""

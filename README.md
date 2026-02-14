@@ -39,7 +39,7 @@
 ## <a id="features"></a>🚀 Ключевые возможности
 
 ### 🧠 Интеллектуальный анализ
-*   **Multi-Model AI Core**: Поддержка **Grok**, **Claude** и других моделей через единый интерфейс **OpenRouter**. Гибкое переключение между моделями без изменения кода.
+*   **Multi-Model AI Core**: Поддержка **Gemini**, **Claude**, **DeepSeek** и других моделей через единый интерфейс **OpenRouter**. Гибкое переключение между моделями без изменения кода.
 *   **Психология рынка**: Оценивает, кто контролирует рынок (быки/медведи), ищет признаки "ловушек" и панических продаж.
 *   **Smart Sampling**: Умное сжатие исторических данных (до 1000+ свечей) в компактный контекст для ИИ, сохраняя важные экстремумы и объемы.
 *   **Smart Skip**: Пропускает очевидно нейтральные рынки (флэт), экономя API токены и снижая шум.
@@ -47,7 +47,7 @@
 ### ⚡ Высокая производительность
 *   **True Multiprocessing**: Каждый торговый актив (BTC, ETH и др.) работает в **отдельном изолированном процессе** ОС.
 *   **Smart Economy Filter**: Интеллектуальная система экономии токенов. Бот анализирует рынок локально и **пропускает** вызовы ИИ на "спящем" рынке (низкий объем) или при очевидном флэте, экономя до 30-50% бюджета API.
-*   **Dynamic Loop**: Частота анализа адаптируется под выбранный стиль торговли (от 3 секунд для Scalp до 15 минут для Swing).
+*   **Dynamic Loop**: Частота анализа адаптируется под выбранный стиль торговли (от 5 секунд для Scalp до 4 часов для Swing).
 *   **Continuous Loop**: Каждый воркер работает в собственном бесконечном цикле независимо от остальных.
 
 ### 📊 Продвинутая Визуализация
@@ -56,14 +56,22 @@
 *   **High-Res Charts**: Детальные свечные графики с наложением индикаторов и торговых уровней.
 
 ### 🛡️ Продвинутый Риск-менеджмент
-*   **Dynamic SL/TP**: ИИ автоматически рассчитывает уровни Stop Loss и Take Profit на основе локальных уровней поддержки/сопротивления.
-*   **Risk/Reward Protection**: Бот **автоматически отклоняет** любые сделки, где потенциальная прибыль меньше риска (R/R < 1.5).
+*   **Dynamic SL/TP**: Автоматический расчёт Stop Loss и Take Profit на основе ATR, уровней поддержки/сопротивления и рыночного режима.
+*   **Risk/Reward Protection**: Бот **автоматически отклоняет** любые сделки, где потенциальная прибыль меньше риска (R/R < 1.2).
+*   **Market Regime Detection**: Автоклассификация рынка (TRENDING/RANGING/VOLATILE/TRANSITIONAL) с адаптацией параметров.
+*   **Dynamic Position Sizing**: Автоматический расчёт размера позиции на основе качества сигнала, режима рынка и серии сделок.
+*   **Performance Tracking**: Отслеживание win rate, PnL, стриков с автоматическими рекомендациями по калибровке.
 
 ### 📈 Гибкие Стили Торговли (Trading Styles)
-Теперь вы можете переключать режим работы одной строкой конфигурации (`STRATEGY_STYLE`):
-1.  **SCALP**: Таймфрейм 1m, тесные стопы, максимальная частота (цикл 3 сек). Сделки длятся минуты.
-2.  **INTRADAY** (По умолчанию): Таймфрейм 5m, баланс скорости и надежности (цикл 60 сек). Сделки внутри дня.
-3.  **SWING**: Таймфрейм **1h**, контекст **14 дней**, широкие стопы. **Истинный свинг-трейдинг**: позиции держатся **дни/недели**, AI инструктируется игнорировать внутридневной шум.
+Переключение режима работы одной строкой конфигурации (`STRATEGY_STYLE`):
+
+| Стиль | Таймфрейм | Цикл | Плечо | Описание |
+|-------|-----------|------|-------|----------|
+| **SCALP** | 1m | 5 сек | 15x | Тесные стопы, максимальная частота. Сделки длятся минуты |
+| **INTRADAY** | 5m | 60 сек | 10x | Баланс скорости и надежности. Сделки внутри дня |
+| **SWING** | 1h | 4 часа | 5x | Широкие стопы, контекст 30 дней. Позиции дни/недели |
+| **GRID** | 1m | 5 сек | 5x | Сетка лимитных ордеров, заработок на волатильности |
+| **HYBRID** (default) | 5m | 60 сек | 10x | Детерминированные сигналы + AI подтверждение |
 
 ---
 
@@ -115,8 +123,8 @@ AI получает не просто список свечей, а **полну
 
 1.  **Клонируйте репозиторий:**
     ```bash
-    git clone https://github.com/xierongchuan/OpenProducer.git
-    cd OpenProducer
+    git clone https://github.com/xierongchuan/OpenProducerBot.git
+    cd OpenProducerBot
     ```
 
 2.  **Создайте виртуальное окружение (рекомендуется):**
@@ -142,7 +150,7 @@ AI получает не просто список свечей, а **полну
     BINGX_SECRET_KEY="ваш_секретный_ключ"
 
     # AI API (OpenRouter)
-    OPENROUTER_API_KEY="ваш_ключ_openrouter"      # Grok, Claude и другие модели
+    OPENROUTER_API_KEY="ваш_ключ_openrouter"      # Gemini, Claude, DeepSeek и другие модели
 
     # Режим работы
     # "demo" = VST Futures (Виртуальные деньги BingX)
@@ -174,39 +182,30 @@ AI получает не просто список свечей, а **полну
 ```json
 {
   "EXCHANGE_SYMBOLS": {
-    "bingx": ["ETHUSDT", "LTCUSDT", "XRPUSDT"]
+    "bingx": ["BTCUSDT"]
   },
-  "STRATEGY_STYLE": "INTRADAY",
+  "STRATEGY_STYLE": "HYBRID",
   "AI_SETTINGS": {
     "provider": "openrouter",
-    "model": "deepseek/deepseek-chat",
-    "base_url": "https://openrouter.ai/api/v1/chat/completions"
+    "model": "google/gemini-2.5-flash-lite",
+    "base_url": "https://openrouter.ai/api/v1/chat/completions",
+    "temperature": 0.3,
+    "max_tokens": 4096,
+    "retry_count": 3
   },
+  "POSITION_SIZE_PERCENT": 10.0,
+  "MIN_RISK_REWARD_RATIO": 1.2,
+  "MIN_CONFIDENCE_THRESHOLD": 0.65,
   "ENABLE_ADVANCED_ANALYSIS": true,
   "ENABLE_PARALLEL_MODE": true,
-  "AGGRESSIVE_MODE": true,
-  "AGGRESSIVE_SETTINGS": {
-    "RSI_BUY_COND": 70,
-    "RSI_BUY_FORBIDDEN": 85,
-    "RSI_SELL_COND": 30,
-    "RSI_SELL_FORBIDDEN": 15,
-    "MIN_RISK_REWARD_RATIO": 1.3,
-    "MIN_CONFIDENCE": 0.55
-  },
+  "AGGRESSIVE_MODE": false,
   "MOMENTUM_STRATEGY": {
     "enabled": true,
-    "atr_sl_multiplier": 1.5,
-    "atr_tp_multiplier": 2.5,
-    "min_volume_ratio": 0.7,
-    "trend_consensus_required": false,
+    "min_volume_ratio": 0.5,
     "momentum_entry_enabled": true,
     "momentum_consecutive_candles": 3
   },
-  "ENABLE_NEWS": false,
-  "MIN_RISK_REWARD_RATIO": 1.3,
-  "POSITION_SIZE_PERCENT": 1.0,
-  "LEVERAGE": 20,
-  "ENABLE_AI_SKIP_ON_RSI": true
+  "ENABLE_NEWS": false
 }
 ```
 
@@ -214,12 +213,12 @@ AI получает не просто список свечей, а **полну
 
 | Параметр | Тип | Описание | Рекомендация |
 | :--- | :--- | :--- | :--- |
-| `STRATEGY_STYLE` | Str | **ГЛАВНЫЙ ПАРАМЕТР**: Стиль торговли. Автоматически настраивает таймфреймы, графики, интервалы анализа и AI-инструкции.<br>• `"SCALP"`: 1m свечи, цикл 3 сек, график 6ч.<br>• `"INTRADAY"`: 5m свечи, цикл 60 сек, график 24ч.<br>• `"SWING"`: **1h свечи, цикл 5 мин, контекст 14 дней.** AI на многодневное удержание. | `INTRADAY` |
+| `STRATEGY_STYLE` | Str | **ГЛАВНЫЙ ПАРАМЕТР**: Стиль торговли. Автоматически настраивает таймфреймы, графики, интервалы анализа и AI-инструкции.<br>• `"SCALP"`: 1m свечи, цикл 5 сек, плечо 15x.<br>• `"INTRADAY"`: 5m свечи, цикл 60 сек, плечо 10x.<br>• `"SWING"`: 1h свечи, цикл 4 часа, плечо 5x.<br>• `"GRID"`: 1m свечи, цикл 5 сек, сетка ордеров.<br>• `"HYBRID"`: 5m свечи, цикл 60 сек, детерминированные сигналы + AI. | `HYBRID` |
 | `EXCHANGE_SYMBOLS` | Dict | Список пар для торговли. Должны соответствовать тикерам BingX. | Топ-10 ликвидных |
-| `AGGRESSIVE_MODE` | Bool | Включает агрессивную стратегию с Momentum Entry. | `true` |
-| `MOMENTUM_STRATEGY` | Dict | Настройки Momentum Breakout стратегии (ATR множители, мин. объём). | `enabled: true` |
-| `ENABLE_AI_SKIP_ON_RSI` | Bool | Умный экономайзер. Пропускает вызов AI при RSI > 70, **ЕСЛИ** нет подтверждения High Volume Momentum. | `true` (экономит $) |
-| `LEVERAGE` | Int | Кредитное плечо для позиций. | `20` |
+| `POSITION_SIZE_PERCENT` | Float | Процент баланса на одну сделку. | `10.0` |
+| `MIN_RISK_REWARD_RATIO` | Float | Минимальное соотношение прибыль/риск для открытия сделки. | `1.2` |
+| `AGGRESSIVE_MODE` | Bool | Включает агрессивную стратегию с Momentum Entry. | `false` |
+| `MOMENTUM_STRATEGY` | Dict | Настройки Momentum Breakout стратегии (мин. объём, параметры). | `enabled: true` |
 
 ### 🤖 Настройка AI Провайдера (`AI_SETTINGS`)
 
@@ -228,7 +227,7 @@ AI получает не просто список свечей, а **полну
 ```json
 "AI_SETTINGS": {
   "provider": "openrouter",
-  "model": "deepseek/deepseek-v3.2",
+  "model": "google/gemini-2.5-flash-lite",
   "base_url": "https://openrouter.ai/api/v1/chat/completions",
   "temperature": 0.3,
   "max_tokens": 4096,
@@ -248,7 +247,7 @@ AI получает не просто список свечей, а **полну
 | Параметр | Тип | Описание |
 | :--- | :--- | :--- |
 | `provider` | Str | Провайдер API: `"openrouter"` |
-| `model` | Str | ID модели. Для OpenRouter: `"deepseek/deepseek-v3.2"`, `"deepseek/deepseek-chat"` и др. |
+| `model` | Str | ID модели. Для OpenRouter: `"google/gemini-2.5-flash-lite"`, `"anthropic/claude-sonnet-4"` и др. |
 | `base_url` | Str | URL эндпоинта API. Обычно менять не нужно |
 | `temperature` | Float | Креативность ответа (0.0–1.0). Для трейдинга лучше 0.2–0.4 |
 | `max_tokens` | Int | Максимум токенов в ответе (**включая** reasoning). Для reasoning-моделей нужно 4096+, т.к. reasoning съедает часть лимита |
@@ -280,6 +279,7 @@ graph TD
     Launcher[run.py / main.py] -->|Spawns| Worker1[Worker-BTCUSDT]
     Launcher -->|Spawns| Worker2[Worker-ETHUSDT]
     Launcher -->|Spawns| Worker3[Worker-...]
+    Launcher -->|Spawns| ChartW[Chart Worker]
 
     subgraph "Main Process (Daemon Supervisor)"
         Launcher
@@ -288,10 +288,15 @@ graph TD
     subgraph "Worker Process for BTC (Isolated Loop)"
         Worker1 --> Collector1[Collector]
         Collector1 --> Analyzer1[Analyzer]
-        Analyzer1 --> Predictor1[AI Predictor]
+        Analyzer1 --> TradeTracker1[TradeTracker]
+        TradeTracker1 --> Signal1[SignalGenerator]
+        Signal1 --> Regime1[RegimeDetector]
+        Regime1 --> Risk1[RiskManager]
+        Risk1 --> Predictor1[AI Veto — conditional]
         Predictor1 --> Executor1[Executor]
         Executor1 --> Monitor1[Monitor]
-        Monitor1 -.->|Loop| Worker1
+        Monitor1 --> Perf1[PerformanceTracker]
+        Perf1 -.->|Loop| Worker1
     end
 ```
 
@@ -342,6 +347,48 @@ tail -f data/trades.log
 ### Ошибка `AI Provider Error`
 *   Закончились кредиты на балансе OpenRouter.
 *   API недоступен или модель перегружена (проверьте статус провайдера).
+
+---
+
+## 📱 Telegram Panel
+
+Панель управления ботом через Telegram Mini App. Работает в отдельном контейнере и **не влияет** на работу торгового бота.
+
+### Запуск
+```bash
+# Запуск панели
+podman-compose up --build -d
+
+# Запуск с HTTPS туннелем (для Telegram)
+./scripts/start.sh
+
+# Остановка
+./scripts/stop.sh
+```
+
+### Возможности
+*   **Telegram бот**: команды `/start`, `/status`, `/trades`, `/chart`, `/logs`, `/config`, `/help`
+*   **Web Dashboard**: React 18 + TypeScript + TailwindCSS
+*   **Страницы**: Dashboard, Charts, Trades, Logs, Journal, Settings
+*   **Real-time**: WebSocket обновления при изменении данных
+*   **Уведомления**: Автоматические алерты при открытии/закрытии сделок
+
+### Настройка
+Добавьте в `.env`:
+```ini
+TELEGRAM_BOT_TOKEN="ваш_токен_бота"
+TELEGRAM_ADMIN_ID="ваш_telegram_id"
+TELEGRAM_ALLOWED_IDS="id1,id2,id3"    # опционально, для нескольких пользователей
+TELEGRAM_PANEL_URL="https://your-domain.com"
+```
+
+---
+
+## 📚 Дополнительная документация
+
+*   [Risk Manager](docs/RISK_MANAGER.md) — динамический расчёт SL/TP, адаптивный sizing
+*   [Risk Manager Quick Reference](docs/RISK_MANAGER_QUICKREF.md) — краткая справка
+*   [Performance Tracking](docs/PERFORMANCE_TRACKING.md) — отслеживание эффективности и калибровка
 
 ---
 

@@ -151,7 +151,10 @@ class BingXClient(ExchangeClient):
         try:
             response = self.make_request("get", endpoint)
             if response and response.get("code") == 0:
-                return response.get("data", {}).get("balances", [])
+                data = response.get("data")
+                if isinstance(data, list):
+                    return data
+                return (data or {}).get("balances", [])
         except Exception as e:
             error(f"❌ Failed to get Spot balance: {e}")
         return None
@@ -162,7 +165,10 @@ class BingXClient(ExchangeClient):
         try:
             response = self.make_request("get", endpoint)
             if response and response.get("code") == 0:
-                return response.get("data", {}).get("balances", [])
+                data = response.get("data")
+                if isinstance(data, list):
+                    return data
+                return (data or {}).get("balances", [])
         except Exception as e:
             error(f"❌ Failed to get Standard Futures balance: {e}")
         return None

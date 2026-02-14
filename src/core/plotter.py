@@ -156,7 +156,11 @@ def cleanup_old_files():
 def plot_symbol(symbol, time_range=None, current_position=None):
     """Строит график для символа и сохраняет как PNG"""
     # Загружаем данные
-    with open(f"{DATA_DIR}/prices/{get_filename(symbol)}.json") as f:
+    price_file = f"{DATA_DIR}/prices/{get_filename(symbol)}.json"
+    if not os.path.exists(price_file):
+        info(f"📊 Файл данных {price_file} ещё не создан, пропускаем построение графика для {symbol}")
+        return
+    with open(price_file) as f:
         prices = json.load(f)
 
     # ... (rest of data loading logic remains, just signature changed above) ...

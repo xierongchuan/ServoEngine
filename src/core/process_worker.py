@@ -5,9 +5,7 @@ Runs the complete trading pipeline for ONE symbol in isolation.
 
 import time
 import os
-import sys
 import traceback
-from datetime import datetime
 
 # Implements the pipeline for a single process
 def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
@@ -30,7 +28,7 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                 pass  # WS not critical, will fallback to REST
 
         # 1. Настройка логгера (один раз на старте процесса)
-        from src.utils.logger import setup_symbol_logger, info, error, StageTimer
+        from src.utils.logger import setup_symbol_logger, info, error, warning, StageTimer
         setup_symbol_logger(symbol)
 
         info(f"🚀 [PROCESS START] Запущен бесконечный процесс для {symbol} (PID: {os.getpid()})")
@@ -46,21 +44,16 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
 
         # === STARTUP SYNC: Clean stale trades ===
         try:
-            from src.exchanges.exchange_client import get_exchange_client
+            from src.exchanges.exchange_factory import get_exchange_client
             client = get_exchange_client()
-            all_positions = client.get_all_positions()  # Returns list of positions
-            # Convert to dict: {symbol: position}
-            real_positions_dict = {}
-            for pos in all_positions:
-                sym = pos.get("symbol")
-                if sym:
-                    real_positions_dict[sym] = pos
+            real_positions_dict = client.get_positions()  # Returns {symbol: [positions]}
             stale_count = tracker.force_sync_all(real_positions_dict)
             if stale_count > 0:
                 info(f"🧹 [{symbol}] Startup sync: cleaned {stale_count} stale trades")
         except Exception as e:
-            from src.utils.logger import warning
             warning(f"⚠️ [{symbol}] Startup sync failed: {e}")
+
+        cycle_count = 0
 
         while True:
             try:
@@ -95,12 +88,20 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                 if STRATEGY_STYLE == "HYBRID":
                     signal_data = analysis_result.get("signal_data", {})
                     signal = signal_data.get("signal", "HOLD")
+                    signal_quality = signal_data.get("quality", 0.0)
+                    signal_confidence = signal_data.get("confidence", 0.0)
                     close_signal = analysis_result.get("close_signal", {})
+                    regime_data = analysis_result.get("regime", {})
 
                     # Check if AI filter is enabled
                     from src.config import BOT_CONFIG
                     hybrid_settings = BOT_CONFIG.get("HYBRID_SETTINGS", {})
-                    ai_filter_enabled = hybrid_settings.get("ai_filter", {}).get("enabled", True)
+                    ai_filter_cfg = hybrid_settings.get("ai_filter", {})
+                    ai_filter_enabled = ai_filter_cfg.get("enabled", False)
+                    auto_approve_quality = ai_filter_cfg.get("auto_approve_quality", 0.7)
+                    invoke_on_borderline = ai_filter_cfg.get("invoke_on_borderline", True)
+
+                    regime_label = regime_data.get("regime", "UNKNOWN") if regime_data else "UNKNOWN"
 
                     # === PRIORITY 1: Check for deterministic CLOSE signal ===
                     if real_position and close_signal.get("should_close"):
@@ -114,54 +115,149 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                             "reason": f"[HYBRID] {close_reason}",
                             "current_price": analysis_result.get("current_price", 0)
                         }
-                    elif signal == "HOLD" and not real_position:
+                    elif signal == "HOLD":
                         # No signal from deterministic system - skip AI call
-                        info(f"🔧 [{symbol}] HYBRID: No signal (score: {signal_data.get('score', 0)}) - skipping AI")
+                        info(f"🔧 [{symbol}] HYBRID: No signal (score: {signal_data.get('score', 0)}) [{regime_label}] - skipping AI")
                         prediction = {
                             "symbol": symbol,
                             "action": "hold",
                             "confidence": 0.0,
-                            "reason": f"[HYBRID] No deterministic signal (score: {signal_data.get('score', 0)})",
+                            "reason": f"[HYBRID] No signal (score: {signal_data.get('score', 0)}) [{regime_label}]",
                             "current_price": analysis_result.get("current_price", 0)
                         }
-                    elif not ai_filter_enabled:
-                        # AI filter disabled - use deterministic signal directly
-                        info(f"🔧 [{symbol}] HYBRID: AI filter OFF - executing {signal} directly")
-
-                        details = signal_data.get("details", {})
-                        support = details.get("support")
-                        resistance = details.get("resistance")
-
-                        # SL/TP depends on direction
-                        if signal == "BUY":
-                            sl = support   # SL below support
-                            tp = resistance  # TP at resistance
-                        else:  # SELL
-                            sl = resistance  # SL above resistance
-                            tp = support     # TP at support
-
-                        prediction = {
-                            "symbol": symbol,
-                            "action": signal.lower(),
-                            "confidence": 0.75,
-                            "reason": f"[HYBRID] {signal} (score: {signal_data.get('score', 0)}/{signal_data.get('max_score', 11)})",
-                            "current_price": analysis_result.get("current_price", 0),
-                            "stop_loss": sl,
-                            "take_profit": tp
-                        }
                     else:
-                        # Signal exists and AI filter enabled - ask AI to confirm/reject
-                        with StageTimer("AI Filter", symbol, "🧠"):
-                            info(f"🔧 [{symbol}] HYBRID: Signal {signal} - asking AI to confirm")
-                            prediction = predict.process_analysis(analysis_result)
+                        # Signal exists — decide whether to use AI or execute directly
+                        details = signal_data.get("details", {})
+                        support = details.get("support", 0)
+                        resistance = details.get("resistance", 0)
+                        current_price = analysis_result.get("current_price", 0)
 
-                            # HYBRID constraint: AI cannot generate opposite signal
-                            if signal in ("BUY", "SELL"):
-                                ai_action = prediction.get("action", "hold").upper()
-                                if ai_action not in (signal, "HOLD", "CLOSE", "CLOSE_PARTIAL"):
-                                    info(f"🔧 [{symbol}] HYBRID: AI tried {ai_action} but signal was {signal} - forcing HOLD")
-                                    prediction["action"] = "hold"
-                                    prediction["reason"] = f"[HYBRID] AI rejected {signal} signal"
+                        # Dynamic SL/TP calculation
+                        risk_validation_failed = False
+                        try:
+                            from src.core.risk_manager import calculate_dynamic_sl_tp
+                            sl_tp = calculate_dynamic_sl_tp(
+                                signal=signal,
+                                current_price=current_price,
+                                atr=analysis_result.get("atr", 0),
+                                support=support,
+                                resistance=resistance,
+                                regime=regime_data if regime_data else {},
+                                quality=signal_quality
+                            )
+                            sl = sl_tp["stop_loss"]
+                            tp = sl_tp["take_profit"]
+                            info(f"🎯 [{symbol}] Dynamic SL/TP: SL={sl:.2f} TP={tp:.2f} R/R={sl_tp['risk_reward']:.2f}")
+
+                            # Validate risk parameters before proceeding
+                            try:
+                                from src.core.risk_manager import validate_risk_parameters
+                                if not validate_risk_parameters(sl_tp):
+                                    warning(f"⚠️ [{symbol}] Risk validation failed (R/R={sl_tp.get('risk_reward', 0):.2f}), skipping trade")
+                                    prediction = {
+                                        "symbol": symbol,
+                                        "action": "hold",
+                                        "confidence": 0.0,
+                                        "reason": f"[HYBRID] Risk validation failed (R/R={sl_tp.get('risk_reward', 0):.2f})",
+                                        "current_price": current_price
+                                    }
+                                    risk_validation_failed = True
+                            except Exception as e:
+                                warning(f"⚠️ [{symbol}] Risk validation error: {e}")
+                        except Exception as e:
+                            warning(f"⚠️ [{symbol}] Dynamic SL/TP failed: {e}, using ATR-based fallback")
+                            atr = analysis_result.get("atr", 0)
+                            if signal == "BUY":
+                                sl = analysis_result.get("long_sl", current_price - atr * 1.5)
+                                tp = analysis_result.get("long_tp", current_price + atr * 3.0)
+                            else:
+                                sl = analysis_result.get("short_sl", current_price + atr * 1.5)
+                                tp = analysis_result.get("short_tp", current_price - atr * 3.0)
+
+                        if risk_validation_failed:
+                            pass  # prediction already set to HOLD above, skip to post-signal logic
+                        else:
+                            # Dynamic position sizing
+                            size_pct = None
+                            try:
+                                from src.core.risk_manager import calculate_position_size
+                                from src.core.performance import get_performance_tracker
+                                from src.config import POSITION_SIZE_PERCENT
+                                perf = get_performance_tracker().get_recent_performance(symbol)
+                                size_pct = calculate_position_size(
+                                    base_pct=POSITION_SIZE_PERCENT,
+                                    quality=signal_quality,
+                                    regime=regime_data if regime_data else {},
+                                    recent_performance=perf
+                                )
+                                info(f"📐 [{symbol}] Dynamic sizing: {size_pct:.1f}% (base={POSITION_SIZE_PERCENT}%, Q={signal_quality:.2f})")
+                            except Exception as e:
+                                warning(f"⚠️ [{symbol}] Dynamic sizing failed: {e}, using default")
+
+                            # Determine if AI should be invoked
+                            should_use_ai = False
+                            ai_reason = ""
+
+                            if ai_filter_enabled and signal in ("BUY", "SELL"):
+                                if signal_quality >= auto_approve_quality:
+                                    info(f"🔧 [{symbol}] HYBRID: High quality ({signal_quality:.2f}) - auto-approve, skip AI")
+                                elif invoke_on_borderline and signal_quality < 0.3:
+                                    should_use_ai = True
+                                    ai_reason = f"Borderline quality ({signal_quality:.2f})"
+                                elif regime_label == "TRANSITIONAL":
+                                    should_use_ai = True
+                                    ai_reason = "Transitional regime"
+                                elif details.get("conflicting", False):
+                                    should_use_ai = True
+                                    ai_reason = "Conflicting signals"
+
+                            if real_position and ai_filter_enabled:
+                                should_use_ai = True
+                                ai_reason = "Position management"
+
+                            if not should_use_ai:
+                                # Execute deterministic signal directly
+                                info(f"🔧 [{symbol}] HYBRID: {signal} Q:{signal_quality:.2f} [{regime_label}] - direct execution")
+                                prediction = {
+                                    "symbol": symbol,
+                                    "action": signal.lower(),
+                                    "confidence": signal_confidence,
+                                    "reason": f"[HYBRID] {signal} (score: {signal_data.get('score', 0)}/{signal_data.get('max_score', 10)}) [{regime_label}]",
+                                    "current_price": current_price,
+                                    "stop_loss": sl,
+                                    "take_profit": tp,
+                                    "size_pct": size_pct,
+                                }
+                            else:
+                                # AI veto invocation with focused HYBRID_VETO prompt
+                                with StageTimer("AI Veto", symbol, "🧠"):
+                                    info(f"🔧 [{symbol}] HYBRID: AI veto invoked ({ai_reason})")
+                                    # Rebuild prompt with HYBRID_VETO strategy for focused risk assessment
+                                    try:
+                                        from src.prompts.builder import PromptBuilder
+                                        veto_ctx = analysis_result.get("prompt_ctx", {})
+                                        if veto_ctx:
+                                            veto_prompt = PromptBuilder.build("HYBRID_VETO", veto_ctx)
+                                            analysis_result["prompt"] = veto_prompt.strip()
+                                    except Exception as e:
+                                        warning(f"⚠️ [{symbol}] HYBRID_VETO prompt failed: {e}, using default")
+                                    prediction = predict.process_analysis(analysis_result)
+
+                                    # Override SL/TP with dynamic values if AI didn't provide better ones
+                                    if not prediction.get("stop_loss"):
+                                        prediction["stop_loss"] = sl
+                                    if not prediction.get("take_profit"):
+                                        prediction["take_profit"] = tp
+                                    if size_pct:
+                                        prediction["size_pct"] = size_pct
+
+                                    # HYBRID constraint: AI cannot generate opposite signal
+                                    if signal in ("BUY", "SELL"):
+                                        ai_action = prediction.get("action", "hold").upper()
+                                        if ai_action not in (signal, "HOLD", "CLOSE", "CLOSE_PARTIAL"):
+                                            info(f"🔧 [{symbol}] HYBRID: AI tried {ai_action} but signal was {signal} - forcing HOLD")
+                                            prediction["action"] = "hold"
+                                            prediction["reason"] = f"[HYBRID] AI rejected {signal} signal"
                 else:
                     # Non-HYBRID mode - standard AI prediction
                     with StageTimer("AI Прогноз", symbol, "🧠"):
@@ -201,6 +297,22 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                 with StageTimer("Исполнение сигналов", symbol, "💰"):
                     executor.execute_prediction(prediction)
 
+                # 6b. Запись контекста входа для performance tracking (HYBRID)
+                if action in ("buy", "sell") and not real_position and STRATEGY_STYLE == "HYBRID":
+                    try:
+                        entry_ctx = {
+                            "entry_regime": regime_data.get("regime", "UNKNOWN") if regime_data else "UNKNOWN",
+                            "entry_score": signal_data.get("score", 0) if signal_data else 0,
+                            "entry_quality": signal_data.get("quality", 0.0) if signal_data else 0.0,
+                            "entry_rsi": analysis_result.get("rsi", 0),
+                            "entry_atr": analysis_result.get("atr", 0),
+                            "entry_volume_ratio": analysis_result.get("volume_ratio", 0),
+                        }
+                        tracker.set_entry_context(symbol, entry_ctx)
+                        info(f"📝 [{symbol}] Entry context saved: regime={entry_ctx['entry_regime']}, score={entry_ctx['entry_score']}, Q={entry_ctx['entry_quality']:.2f}")
+                    except Exception as e:
+                        warning(f"⚠️ [{symbol}] Failed to save entry context: {e}")
+
                 # 7. Мониторинг
                 with StageTimer("Мониторинг позиции", symbol, "👀"):
                     monitor.monitor_symbol(symbol)
@@ -228,6 +340,19 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                 import random
                 jitter = random.uniform(-0.2, 0.2) * sleep_time
                 sleep_time = max(5, sleep_time + jitter)  # Минимум 5 секунд
+
+                # Periodic calibration check
+                cycle_count += 1
+                if cycle_count % 50 == 0:
+                    try:
+                        from src.core.performance import get_performance_tracker
+                        perf_tracker = get_performance_tracker()
+                        suggestions = perf_tracker.should_adjust_thresholds()
+                        if suggestions:
+                            perf_tracker.save_calibration_suggestions(suggestions)
+                            info(f"📊 [{symbol}] Calibration check: {len(suggestions)} suggestions saved (cycle {cycle_count})")
+                    except Exception as e:
+                        warning(f"⚠️ [{symbol}] Calibration check failed: {e}")
 
             except KeyboardInterrupt:
                 info(f"🛑 [{symbol}] Остановка по запросу (KeyboardInterrupt)")

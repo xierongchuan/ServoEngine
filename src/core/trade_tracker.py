@@ -64,6 +64,24 @@ class TradeTracker:
 
         return None
 
+    def set_entry_context(self, symbol: str, context: dict):
+        """
+        Сохраняет контекст входа в сделку для анализа производительности.
+
+        Args:
+            symbol: Торговая пара
+            context: dict с ключами: entry_regime, entry_score, entry_quality,
+                     entry_rsi, entry_atr, entry_volume_ratio
+        """
+        trade = self.active_trades.get(symbol)
+        if trade:
+            for key in ("entry_regime", "entry_score", "entry_quality",
+                        "entry_rsi", "entry_atr", "entry_volume_ratio"):
+                if key in context:
+                    trade[key] = context[key]
+            self.active_trades[symbol] = trade
+            self._save_json(ACTIVE_TRADES_FILE, self.active_trades)
+
     def _handle_new_trade(self, symbol, real_position):
         """Register a new trade"""
         trade_data = {
@@ -128,9 +146,6 @@ class TradeTracker:
         self.active_trades[symbol] = stored_trade
         self._save_json(ACTIVE_TRADES_FILE, self.active_trades)
 
-    def get_active_trade_info(self, symbol):
-        return self.active_trades.get(symbol)
-
     def force_sync_all(self, real_positions_dict: dict):
         """
         Force sync all trades with actual exchange positions.
@@ -170,8 +185,4 @@ class TradeTracker:
 
         return len(stale_symbols)
 
-    def reload_from_disk(self):
-        """Reload active trades from disk (useful if file was edited externally)"""
-        self.active_trades = self._load_json(ACTIVE_TRADES_FILE)
-        return len(self.active_trades)
 

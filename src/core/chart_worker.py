@@ -41,6 +41,9 @@ def run_chart_worker():
         info(f"🚀 [ChartWorker] Parallel execution enabled (workers: {max_workers})")
 
     try:
+        # Ждём первый цикл, чтобы collector успел записать данные
+        time.sleep(UPDATE_INTERVAL)
+
         while True:
             start_time = time.time()
 

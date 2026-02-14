@@ -1,5 +1,3 @@
-import json
-import os
 import time
 from src.config import *
 from src.utils.logger import info, error, warning, log_trade
@@ -21,7 +19,7 @@ def get_open_positions():
         error(f"❌ Ошибка получения позиций: {str(e)}")
         return {}
 
-def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unknown", confidence=0.0):
+def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unknown", confidence=0.0, size_pct=None):
     """Создает ордер с TP/SL через ExchangeClient"""
     client = get_exchange_client()
 
@@ -80,8 +78,11 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
             error(f"❌ Balance is 0 or could not be retrieved. Cannot calculate position size.")
             return None
 
-        # Calculate trade amount in USDT
-        trade_amount = total_balance * (POSITION_SIZE_PERCENT / 100.0)
+        # Calculate trade amount in USDT (use dynamic size if provided)
+        effective_size_pct = size_pct if size_pct else POSITION_SIZE_PERCENT
+        trade_amount = total_balance * (effective_size_pct / 100.0)
+        if size_pct:
+            info(f"📐 Dynamic position size: {effective_size_pct:.1f}% (default: {POSITION_SIZE_PERCENT}%)")
 
         # Enforce Minimum Trade Amount
         if trade_amount < MIN_TRADE_AMOUNT_USDT:
@@ -224,7 +225,8 @@ def execute_prediction(prediction):
                     ai_sl=prediction.get("stop_loss"),
                     ai_tp=prediction.get("take_profit"),
                     reason=prediction["reason"],
-                    confidence=prediction["confidence"]
+                    confidence=prediction["confidence"],
+                    size_pct=prediction.get("size_pct")
                 )
             else:
                 info(f"📉 {symbol}: Пропуск сигнала {prediction['action']} (confidence {prediction['confidence']} < {confidence_threshold})")
@@ -311,19 +313,18 @@ def main(predictions):
 
     if total_positions >= MAX_POSITIONS:
         warning(f"⚠️ Достигнут лимит открытых позиций ({MAX_POSITIONS}). Новые позиции не открываем.")
-        return
 
     for pred in predictions:
         symbol = pred["symbol"]
         current_price = pred["current_price"]
 
-        # Проверяем общий лимит позиций (максимум 5)
-        if total_positions >= MAX_POSITIONS:
-            warning(f"⚠️ Достигнут лимит позиций ({MAX_POSITIONS}). Пропускаем {symbol}")
-            continue
-
         # Проверяем, есть ли уже открытая позиция по данному символу (максимум 1 на актив)
         has_position = symbol in positions and len(positions[symbol]) > 0
+
+        # Проверяем общий лимит позиций — пропускаем только символы БЕЗ позиции
+        if total_positions >= MAX_POSITIONS and not has_position:
+            warning(f"⚠️ Достигнут лимит позиций ({MAX_POSITIONS}). Пропускаем {symbol}")
+            continue
 
         if has_position:
             # Если позиция есть, проверяем сигналы на выход
@@ -383,7 +384,7 @@ def main(predictions):
 
             if pred["action"] == "buy":
                 info(f"📈 {symbol}: сигнал BUY (confidence={pred['confidence']}, причина: {pred['reason']})")
-                result = create_order(symbol, "BUY", current_price, ai_sl=pred.get("stop_loss"), ai_tp=pred.get("take_profit"), reason=pred['reason'], confidence=pred['confidence'])
+                result = create_order(symbol, "BUY", current_price, ai_sl=pred.get("stop_loss"), ai_tp=pred.get("take_profit"), reason=pred['reason'], confidence=pred['confidence'], size_pct=pred.get("size_pct"))
                 # Обновляем локальный список позиций и кэш после успешного создания
                 if result:
                     positions = get_open_positions()
@@ -391,7 +392,7 @@ def main(predictions):
                     total_positions = sum(len(p) for p in positions.values())
             elif pred["action"] == "sell":
                 info(f"📉 {symbol}: сигнал SELL (confidence={pred['confidence']}, причина: {pred['reason']})")
-                result = create_order(symbol, "SELL", current_price, ai_sl=pred.get("stop_loss"), ai_tp=pred.get("take_profit"), reason=pred['reason'], confidence=pred['confidence'])
+                result = create_order(symbol, "SELL", current_price, ai_sl=pred.get("stop_loss"), ai_tp=pred.get("take_profit"), reason=pred['reason'], confidence=pred['confidence'], size_pct=pred.get("size_pct"))
                 # Обновляем локальный список позиций и кэш после успешного создания
                 if result:
                     positions = get_open_positions()
@@ -401,7 +402,7 @@ def main(predictions):
                 info(f"🔄 {symbol}: действие {pred['action']} не требует открытия позиции")
 
 if __name__ == "__main__":
-    import sys, json, predict, analyzer
+    import sys, json, predict, analyzer  # noqa: E402
 
     info("🔄 Запуск исполнения ордеров...")
 

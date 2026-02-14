@@ -30,7 +30,7 @@ if [ -f .env ]; then
 fi
 
 # Создаем директории если их нет
-mkdir -p data/prices data/news charts
+mkdir -p data/prices data/news data/logs charts
 
 # Логируем начало
 log_message "Запуск торгового бота OpenProducer..."
@@ -43,10 +43,18 @@ IMAGE_NAME="openproducer-bot"
 log_message "Проверка/сборка образа $IMAGE_NAME..."
 podman build -q -t "$IMAGE_NAME" .
 
+# Исправляем права на data/ если файлы принадлежат root (от предыдущих запусков без --user)
+if [ -d data ] && [ "$(stat -c '%U' data 2>/dev/null)" = "root" ]; then
+    log_warning "Обнаружены файлы с правами root в data/, исправляю..."
+    sudo chown -R "$(id -u):$(id -g)" data/ charts/ 2>/dev/null || true
+fi
+
 # Запускаем бота в контейнере с --init для корректной обработки Ctrl+C
+# --userns=keep-id: маппинг UID хоста → тот же UID внутри контейнера (решает проблемы с правами)
 if podman run --rm -it --init \
+    --userns=keep-id \
     --env-file .env \
-    -v .:/app:Z \
+    -v .:/app:z \
     -w /app \
     "$IMAGE_NAME" \
     python3 run.py; then

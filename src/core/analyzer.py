@@ -1,7 +1,7 @@
 import json
 import os
 from src.config import DATA_DIR, AI_THRESHOLDS, SYMBOLS, ENABLE_NEWS, TECHNICAL_ANALYSIS
-from src.utils.logger import info, error
+from src.utils.logger import info, error, warning
 from src.utils.helpers import get_filename
 
 
@@ -207,9 +207,6 @@ def calculate_support_resistance(prices, window=None):
 
     # Оставляем только ближайшие к текущей цене (например, 2 снизу и 2 сверху)
     current_price = prices[-1]
-    nearest_supports = [s for s in supports if s < current_price][-2:]
-    nearest_resistances = [r for r in resistances if r > current_price][:2]
-
     return {
         "supports": sorted(list(set(supports))),
         "resistances": sorted(list(set(resistances)))
@@ -384,48 +381,6 @@ def calculate_seb(prices, length=None, mult=None):
 
     return linreg_current, upper_seb, lower_seb, r_squared
 
-def analyze_volume_profile(volumes, prices):
-    """
-    Анализирует профиль объема и волатильности.
-    :param volumes: Список объемов
-    :param prices: Список цен
-    :return: Строка с описанием ситуации
-    """
-    if len(volumes) < 20:
-        return "Недостаточно данных для анализа объема."
-
-    avg_volume = sum(volumes[-20:]) / 20
-    current_volume = volumes[-1]
-
-    vol_ratio = current_volume / avg_volume if avg_volume > 0 else 0
-
-    # Волатильность (ATR-like)
-    high_low_diffs = [abs(prices[i] - prices[i-1]) for i in range(1, len(prices))]
-    avg_volatility = sum(high_low_diffs[-20:]) / 20 if high_low_diffs else 0
-    current_volatility = abs(prices[-1] - prices[-2]) if len(prices) > 1 else 0
-
-    volatility_ratio = current_volatility / avg_volatility if avg_volatility > 0 else 0
-
-    description = []
-
-    # Анализ объема
-    if vol_ratio > 2.0:
-        description.append(f"🔥 Аномально высокий объем ({vol_ratio:.1f}x от среднего). Это признак сильного интереса.")
-    elif vol_ratio > 1.2:
-        description.append(f"📊 Повышенный объем ({vol_ratio:.1f}x).")
-    elif vol_ratio < 0.5:
-        description.append(f"💤 Низкий объем ({vol_ratio:.1f}x). Рынок спит или выжидает.")
-    else:
-        description.append("Объем в норме.")
-
-    # Анализ волатильности
-    if volatility_ratio > 2.0:
-        description.append(f"⚡ Высокая волатильность ({volatility_ratio:.1f}x). Возможна паника или эйфория.")
-    elif volatility_ratio < 0.5:
-        description.append(f"🐌 Низкая волатильность ({volatility_ratio:.1f}x). Сжатие пружины.")
-
-    return " ".join(description)
-
 from src.exchanges.exchange_factory import get_exchange_client
 
 def analyze_symbol_with_position(symbol, decision_context=""):
@@ -462,6 +417,9 @@ def analyze_symbol(symbol, position=None, decision_context=""):
 
     # Извлекаем числовые цены для расчётов
     close_prices = [get_price_value(p.get("closePrice", 0)) for p in prices]
+
+    # RSI series for divergence detection
+    rsi_values = calculate_rsi_series(close_prices)
 
     # EMA расчёты
     _ema_periods = TECHNICAL_ANALYSIS.get("ema_periods", [9, 21])
@@ -537,12 +495,8 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     # Расстояния до уровней
     resistance_dist_pct = ((resistance - current_price) / current_price * 100) if current_price > 0 else 0
     support_dist_pct = ((current_price - support) / current_price * 100) if current_price > 0 else 0
-    pivot_dist_pct = ((current_price - pivot) / current_price * 100) if current_price > 0 else 0
-
     # === STANDARD ERROR BANDS (SEB) ===
     seb_linreg, seb_upper, seb_lower, seb_r_sq = calculate_seb(close_prices)
-    seb_width_pct = ((seb_upper - seb_lower) / seb_linreg * 100) if seb_linreg > 0 else 0
-
     seb_status = "INSIDE"
     if current_price > seb_upper:
         seb_status = "ABOVE_UPPER (Strong Impulse)"
@@ -608,7 +562,7 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         rsi_interpretation = "🔴 КРИТИЧЕСКИ ПЕРЕПРОДАН"
 
     # === ПОЗИЦИЯ ===
-    from src.config import TRADING_FEE, MIN_PARTIAL_CLOSE_PNL, LEVERAGE, EXCHANGE
+    from src.config import TRADING_FEE, MIN_PARTIAL_CLOSE_PNL, LEVERAGE
 
     position_block = "**Статус:** НЕТ ОТКРЫТОЙ ПОЗИЦИИ"
     pnl_context = ""
@@ -665,7 +619,6 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         rsi_short_min = AGGRESSIVE_SETTINGS.get("RSI_SELL_COND", 35)
         rsi_short_forbidden = AGGRESSIVE_SETTINGS.get("RSI_SELL_FORBIDDEN", 20)
         min_confidence = AGGRESSIVE_SETTINGS.get("MIN_CONFIDENCE", 0.6)
-        MIN_RISK_REWARD_RATIO = AGGRESSIVE_SETTINGS.get("MIN_RISK_REWARD_RATIO", 1.3)
         strategy_mode = "AGGRESSIVE"
     else:
         rsi_long_max = AI_THRESHOLDS.get('RSI_BUY_ENTRY_MAX', 65)
@@ -673,30 +626,18 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         rsi_short_min = AI_THRESHOLDS.get('RSI_SELL_ENTRY_MIN', 35)
         rsi_short_forbidden = AI_THRESHOLDS.get('RSI_OVERSOLD', 30)
         min_confidence = 0.7
-        MIN_RISK_REWARD_RATIO = 1.5
         strategy_mode = "BALANCED"
-
-    min_profit_breakeven = max(0.2, TRADING_FEE * 2.5)
-    min_profit_partial = max(0.5, TRADING_FEE * 4.0)
 
     # === MOMENTUM STRATEGY SETTINGS ===
     from src.config import CHART_RANGES, DEFAULT_CHART_RANGE, SMART_SAMPLING, MOMENTUM_STRATEGY, STRATEGY_STYLE, STYLE_PRESETS
 
     # Get current style settings
     current_style = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS["INTRADAY"])
-    style_desc = current_style.get("description", "")
-
     current_interval = current_style.get("timeframe", "5m")
 
     # Используем настройки из конфига (с приоритетом MOMENTUM_STRATEGY если задано вручную)
     atr_sl_mult = MOMENTUM_STRATEGY.get("atr_sl_multiplier", current_style.get("atr_sl_mult", 2.0))
     atr_tp_mult = MOMENTUM_STRATEGY.get("atr_tp_multiplier", current_style.get("atr_tp_mult", 3.0))
-
-    max_candles = MOMENTUM_STRATEGY.get("max_candles_in_prompt", 50)
-    min_vol_ratio = MOMENTUM_STRATEGY.get("min_volume_ratio", 0.7)
-    trend_consensus_req = MOMENTUM_STRATEGY.get("trend_consensus_required", False)
-    momentum_entry = MOMENTUM_STRATEGY.get("momentum_entry_enabled", True)
-    momentum_candles = MOMENTUM_STRATEGY.get("momentum_consecutive_candles", 3)
 
     # === ИСТОРИЯ СВЕЧЕЙ (Smart Sampling) ===
     # === DATA PREPARATION & SAMPLING ===
@@ -839,6 +780,7 @@ def analyze_symbol(symbol, position=None, decision_context=""):
 
     signal_data = None
     close_signal = None
+    regime_data = None
 
     if STRATEGY_STYLE == "HYBRID":
         from src.core.signal_generator import generate_signal, should_close
@@ -864,11 +806,24 @@ def analyze_symbol(symbol, position=None, decision_context=""):
             "bb_upper": bb_upper,
             "bb_lower": bb_lower,
             "bb_width": bb_width,
+            # Close prices for regime detection
+            "close_prices": close_prices,
+            # RSI series for divergence detection
+            "rsi_values": rsi_values,
         }
 
-        # Генерируем детерминированный сигнал
-        signal_data = generate_signal(signal_input)
-        info(f"🔧 [HYBRID] Generated signal: {signal_data['signal']} (score: {signal_data['score']})")
+        # === Детекция рыночного режима ===
+        try:
+            from src.core.regime import detect_regime
+            regime_data = detect_regime(signal_input)
+            info(f"🌐 [HYBRID] Regime: {regime_data['regime']} (trend={regime_data.get('trend_strength', 0):.2f}, vol={regime_data.get('volatility_state', '?')}, dir={regime_data.get('directional_consistency', 0):.2f})")
+        except Exception as e:
+            warning(f"⚠️ [HYBRID] Regime detection failed: {e}")
+            regime_data = None
+
+        # Генерируем детерминированный сигнал (с учётом режима)
+        signal_data = generate_signal(signal_input, regime=regime_data)
+        info(f"🔧 [HYBRID] Generated signal: {signal_data['signal']} (score: {signal_data['score']}, quality: {signal_data.get('quality', 0):.2f})")
 
         # Проверяем условия закрытия позиции
         if position:
@@ -943,9 +898,11 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         "has_position": bool(position),
         "position": position,
         "prompt": prompt.strip(),
+        "prompt_ctx": prompt_ctx,
         # HYBRID mode specific
         "signal_data": signal_data,
         "close_signal": close_signal,
+        "regime": regime_data,
     }
 
 def main():
