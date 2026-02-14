@@ -135,8 +135,25 @@ class BingXClient(ExchangeClient):
         endpoint = "/openApi/swap/v2/user/balance"
         response = self.make_request("get", endpoint)
 
+        # DEBUG: Log full response
+        info(f"🔍 [DEBUG] Perpetual balance API response: {json.dumps(response, indent=2) if response else 'None'}")
+
         if response and response.get("code") == 0:
-            balance_data = response.get("data", {}).get("balance", {})
+            # Try different response structures
+            data = response.get("data", {})
+
+            # VST Demo might return balance directly in data, or in data.balance
+            if isinstance(data, dict):
+                # Check if balance is nested or direct
+                if "balance" in data:
+                    balance_data = data.get("balance", {})
+                else:
+                    balance_data = data  # Direct balance object
+            else:
+                balance_data = {}
+
+            info(f"🔍 [DEBUG] Parsed balance_data: {json.dumps(balance_data, indent=2) if balance_data else 'empty'}")
+
             # Update cache
             BingXClient._balance_cache = balance_data
             BingXClient._balance_cache_time = time.time()

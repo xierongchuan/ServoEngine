@@ -1,4 +1,5 @@
 import time
+import json
 from src.config import *
 from src.utils.logger import info, error, warning, log_trade
 from src.exchanges.exchange_factory import get_exchange_client
@@ -55,20 +56,45 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         info(f"🔍 [DEBUG] Raw balance_data in executor: {balance_data}")
         info(f"🔍 [DEBUG] balance_data type: {type(balance_data)}, keys: {balance_data.keys() if isinstance(balance_data, dict) else 'N/A'}")
 
+        # Debug: print all fields for balance data
+        if isinstance(balance_data, dict):
+            info(f"🔍 [DEBUG] All balance_data fields: {json.dumps(balance_data, indent=2)}")
+        elif isinstance(balance_data, list):
+            info(f"🔍 [DEBUG] balance_data is list, first item: {balance_data[0] if balance_data else 'empty'}")
+
         # Extract equity/balance based on exchange response structure
         total_balance = 0.0
 
         if isinstance(balance_data, dict):
-            # BingX Perpetual: try multiple possible field names
-            # API may return: equity, availableBalance, balance, availableMargin
-            total_balance = float(
-                balance_data.get("equity") or
-                balance_data.get("availableBalance") or
-                balance_data.get("balance") or
-                balance_data.get("availableMargin") or
-                0.0
-            )
-            info(f"🔍 [DEBUG] Parsed balance: ${total_balance:.2f} from fields: {list(balance_data.keys())}")
+            # Try ALL possible field names for different API responses
+            # VST Demo might use different field names
+            for key in ["equity", "availableBalance", "balance", "availableMargin", "marginBalance", "walletBalance", "totalBalance", "totalWalletBalance"]:
+                val = balance_data.get(key)
+                if val is not None:
+                    try:
+                        parsed = float(val)
+                        info(f"🔍 [DEBUG] Found balance field '{key}': {parsed}")
+                        if parsed > 0:
+                            total_balance = parsed
+                            break
+                    except (ValueError, TypeError):
+                        pass
+
+            # If still 0, try to get from nested data
+            if total_balance == 0:
+                nested_data = balance_data.get("data", {})
+                if isinstance(nested_data, dict):
+                    for key in ["equity", "availableBalance", "balance", "availableMargin", "marginBalance", "walletBalance"]:
+                        val = nested_data.get(key)
+                        if val is not None:
+                            try:
+                                parsed = float(val)
+                                info(f"🔍 [DEBUG] Found balance in nested 'data': '{key}': {parsed}")
+                                if parsed > 0:
+                                    total_balance = parsed
+                                    break
+                            except (ValueError, TypeError):
+                                pass
         elif isinstance(balance_data, list):
             for acc in balance_data:
                 b = float(acc.get("equity", acc.get("balance", 0.0)))
@@ -95,7 +121,9 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
              warning(f"⚠️ Trade amount ${trade_amount:.2f} exceeds balance ${total_balance:.2f}. Adjusting to {_safety*100:.0f}% of balance.")
              trade_amount = total_balance * _safety
 
-        quantity = trade_amount / price
+        # Apply leverage: trade_amount is MARGIN, quantity is the leveraged position
+        notional_value = trade_amount * LEVERAGE
+        quantity = notional_value / price
 
         # Round quantity to appropriate precision (e.g., 4 decimals for crypto)
         # In a real scenario, this should be symbol-specific
@@ -103,10 +131,9 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         quantity = round(quantity, _qty_prec)
 
         # Enhanced position size logging with leverage info
-        notional_value = quantity * price
         info(f"🧮 Position Size:")
-        info(f"   Balance: ${total_balance:.2f} | Risk: {POSITION_SIZE_PERCENT}% = ${trade_amount:.2f} margin")
-        info(f"   Leverage: {LEVERAGE}x | Exposure: ${notional_value:.2f} (market control)")
+        info(f"   Balance: ${total_balance:.2f} | Margin: {effective_size_pct:.1f}% = ${trade_amount:.2f}")
+        info(f"   Leverage: {LEVERAGE}x | Notional: ${notional_value:.2f}")
         info(f"   Quantity: {quantity} {symbol.replace('USDT', '')}")
 
         # Place order WITHOUT SL/TP first
