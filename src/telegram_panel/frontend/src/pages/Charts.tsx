@@ -74,12 +74,12 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
           {selected && (
             <>
               <ChartViewer
-                imageUrl={`${getChartUrl(selected)}?t=${refreshKey}`}
+                imageUrl={`${getChartUrl(selected)}&t=${refreshKey}`}
                 alt={selected}
               />
               {selectedChart && (
                 <div className="text-xs text-tg-hint text-center">
-                  Last updated: {new Date(selectedChart.modified).toLocaleString()}
+                  Last updated: {new Date(selectedChart.modified * 1000).toLocaleString()}
                 </div>
               )}
             </>

@@ -1,10 +1,10 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from ..config import CHARTS_DIR
-from ..services.auth import get_current_user
+from ..services.auth import get_current_user, validate_init_data_string
 from ..services.data_reader import DataReader
 
 router = APIRouter(prefix="/api/charts", tags=["charts"])
@@ -17,7 +17,14 @@ async def list_charts(_user: dict = Depends(get_current_user)) -> list[dict]:
 
 
 @router.get("/{filename}")
-async def get_chart(filename: str, _user: dict = Depends(get_current_user)):
+async def get_chart(
+    filename: str,
+    _auth: str = Query(alias="auth", default=""),
+):
+    """Serve chart image. Auth is passed via query param since <img src> cannot send headers."""
+    # Validate auth from query parameter
+    validate_init_data_string(_auth)
+
     # Sanitize: only allow simple filenames (no path traversal)
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")

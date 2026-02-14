@@ -130,12 +130,14 @@ class TradeTracker:
         stored_trade["last_pnl"] = current_pnl
         stored_trade["current_price"] = real_position.get("markPrice") or real_position.get("avgPrice")
 
-        # Repair entry price if missing/zero (from previous bug)
-        if stored_trade.get("entry_price", 0) == 0:
-             stored_trade["entry_price"] = float(real_position.get("entry", real_position.get("avgPrice", 0)))
-             # Also repair side if unknown
-             if stored_trade.get("side") in ["UNKNOWN", None]:
-                 stored_trade["side"] = "LONG" if real_position.get("type", "").upper() == "BUY" else "SHORT" if real_position.get("type", "").upper() == "SELL" else "UNKNOWN"
+        # Always sync entry_price from exchange (source of truth)
+        exchange_entry = float(real_position.get("entry", real_position.get("avgPrice", 0)))
+        if exchange_entry > 0:
+            stored_trade["entry_price"] = exchange_entry
+
+        # Repair side if unknown
+        if stored_trade.get("side") in ["UNKNOWN", None]:
+            stored_trade["side"] = "LONG" if real_position.get("type", "").upper() == "BUY" else "SHORT" if real_position.get("type", "").upper() == "SELL" else "UNKNOWN"
 
         # Track Max/Min PnL
         pnl_history = stored_trade.get("pnl_history", [])

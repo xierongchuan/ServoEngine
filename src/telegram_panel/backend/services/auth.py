@@ -67,6 +67,28 @@ def _extract_user_id(data: dict) -> int:
     return 0
 
 
+def validate_init_data_string(init_data: str) -> None:
+    """Validate Telegram initData passed as a query parameter (for <img src> etc.).
+
+    Raises HTTPException on failure.  When BOT_TOKEN is empty (dev mode),
+    any value is accepted.
+    """
+    if not init_data:
+        raise HTTPException(status_code=401, detail="Missing auth parameter")
+
+    if not BOT_TOKEN:
+        # Dev mode: no token configured, skip validation
+        return
+
+    result = validate_init_data(init_data, BOT_TOKEN)
+    if result is None:
+        raise HTTPException(status_code=401, detail="Invalid auth parameter")
+
+    user_id = _extract_user_id(result)
+    if ALLOWED_IDS and user_id not in ALLOWED_IDS:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+
 async def get_current_user(
     x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data"),
 ) -> dict:

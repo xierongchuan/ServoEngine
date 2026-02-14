@@ -48,7 +48,8 @@ export function getChartsList() {
 }
 
 export function getChartUrl(filename: string) {
-  return `${BASE_URL}/api/charts/${encodeURIComponent(filename)}`;
+  const auth = encodeURIComponent(getInitData());
+  return `${BASE_URL}/api/charts/${encodeURIComponent(filename)}?auth=${auth}`;
 }
 
 export function getSystemLogs(lines = 200) {

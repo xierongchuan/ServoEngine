@@ -5,11 +5,11 @@ services:
       dockerfile: Dockerfile
     ports:
       - "${PANEL_PORT:-8080}:8080"
+    security_opt:
+      - label:disable
     volumes:
-      # Mount bot data directories
       - ../../data:/app/data:ro
       - ../../charts:/app/charts:ro
-      # Mount config read-write for settings updates
       - ../../bot_config.json:/app/bot_config.json:rw
     env_file: ../../.env
     environment:

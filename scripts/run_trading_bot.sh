@@ -53,8 +53,9 @@ fi
 # --userns=keep-id: маппинг UID хоста → тот же UID внутри контейнера (решает проблемы с правами)
 if podman run --rm -it --init \
     --userns=keep-id \
+    --security-opt label=disable \
     --env-file .env \
-    -v .:/app:z \
+    -v .:/app \
     -w /app \
     "$IMAGE_NAME" \
     python3 run.py; then

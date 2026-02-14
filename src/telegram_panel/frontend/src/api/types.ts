@@ -30,8 +30,8 @@ export interface TradeStats {
 
 export interface ChartFile {
   filename: string;
-  symbol: string;
-  modified: string;
+  modified: number;
+  size: number;
 }
 
 export interface LogLine {
