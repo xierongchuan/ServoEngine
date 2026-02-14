@@ -42,11 +42,14 @@ class WebSocketDataProvider:
 
         self._ws: Optional[websocket.WebSocketApp] = None
         self._ws_thread: Optional[threading.Thread] = None
+        self._ping_thread: Optional[threading.Thread] = None
         self._running = False
         self._symbols: List[str] = []
         self._interval: str = "5m"
         self._reconnect_delay = 1
         self._max_reconnect_delay = 60
+        self._last_msg_time = 0.0
+        self._ping_interval = 20  # Send keepalive every 20s of silence
 
     def start(self, symbols: List[str], interval: str = "5m"):
         """
@@ -74,6 +77,8 @@ class WebSocketDataProvider:
         self._running = False
         if self._ws:
             self._ws.close()
+        if self._ping_thread and self._ping_thread.is_alive():
+            self._ping_thread.join(timeout=5)
         info("[WS] WebSocket provider stopped")
 
     def get_klines(self, symbol: str, limit: int = 288) -> List[dict]:
@@ -201,6 +206,7 @@ class WebSocketDataProvider:
         """Subscribe to kline streams for all symbols."""
         info("[WS] WebSocket connected, subscribing to klines...")
         self._reconnect_delay = 1  # Reset reconnect delay on success
+        self._last_msg_time = time.time()
 
         # Subscribe to each symbol's kline stream
         for symbol in self._symbols:
@@ -215,9 +221,27 @@ class WebSocketDataProvider:
 
         info(f"[WS] Subscribed to {len(self._symbols)} kline streams")
 
+        # Start keepalive thread (one per connection)
+        if self._ping_thread is None or not self._ping_thread.is_alive():
+            self._ping_thread = threading.Thread(target=self._keepalive_loop, daemon=True)
+            self._ping_thread.start()
+
+    def _keepalive_loop(self):
+        """Send periodic pings to prevent idle disconnects."""
+        while self._running and self._ws:
+            try:
+                elapsed = time.time() - self._last_msg_time
+                if elapsed >= self._ping_interval and self._ws and self._ws.sock:
+                    ping_msg = json.dumps({"ping": int(time.time() * 1000)})
+                    self._ws.send(ping_msg)
+                time.sleep(5)
+            except Exception:
+                break
+
     def _on_message(self, ws, message):
         """Handle incoming WebSocket message."""
         try:
+            self._last_msg_time = time.time()
             # BingX sends gzip-compressed messages
             if isinstance(message, bytes):
                 try:
