@@ -1439,3 +1439,356 @@ class TestPartialTP:
         assert engine._limit_orders_enabled is True
         assert engine._limit_offset_bps == 2.0
         assert engine._limit_timeout_sec == 8
+
+
+# =============================================================
+# Phase 5: ScalpPerformanceTracker tests
+# =============================================================
+
+class TestScalpPerformanceTracker:
+
+    @pytest.fixture
+    def tracker(self, tmp_path):
+        with patch("src.core.scalp_performance.DATA_DIR", str(tmp_path)):
+            from src.core.scalp_performance import ScalpPerformanceTracker
+            return ScalpPerformanceTracker()
+
+    def test_initial_state(self, tracker):
+        assert tracker.trade_count == 0
+        stats = tracker.get_stats()
+        assert stats["total_trades"] == 0
+
+    def test_record_entry_and_exit(self, tracker):
+        tracker.record_entry("BTCUSDT", {
+            "side": "BUY", "entry_price": 50000,
+            "regime": "TRENDING", "pattern": "momentum",
+            "score": 7, "quality": 0.7,
+            "ai_veto_used": False, "choppiness": 40.0,
+            "cvd_trend": "RISING", "entry_atr": 45.0,
+        })
+        tracker.record_exit("BTCUSDT", 0.5, "trailing_stop")
+        assert tracker.trade_count == 1
+
+    def test_exit_without_entry(self, tracker):
+        """Exit without prior entry should still record."""
+        tracker.record_exit("ETHUSDT", -0.3, "time_exit")
+        assert tracker.trade_count == 1
+        stats = tracker.get_stats()
+        assert stats["total_trades"] == 1
+        assert stats["by_regime"]["UNKNOWN"]["count"] == 1
+
+    def test_win_rate_calculation(self, tracker):
+        for pnl in [0.5, 0.3, -0.2, 0.8, -0.1]:
+            tracker.record_entry("BTCUSDT", {"regime": "TRENDING", "score": 6})
+            tracker.record_exit("BTCUSDT", pnl, "test")
+        stats = tracker.get_stats()
+        assert stats["total_trades"] == 5
+        assert stats["win_rate"] == 3 / 5  # 3 wins out of 5
+
+    def test_avg_pnl(self, tracker):
+        pnls = [0.5, -0.2, 0.3]
+        for pnl in pnls:
+            tracker.record_entry("BTCUSDT", {"regime": "RANGING", "score": 5})
+            tracker.record_exit("BTCUSDT", pnl, "test")
+        stats = tracker.get_stats()
+        assert abs(stats["avg_pnl"] - sum(pnls) / len(pnls)) < 0.001
+
+    def test_group_by_regime(self, tracker):
+        tracker.record_entry("BTCUSDT", {"regime": "TRENDING", "score": 6})
+        tracker.record_exit("BTCUSDT", 0.5, "test")
+        tracker.record_entry("BTCUSDT", {"regime": "TRENDING", "score": 7})
+        tracker.record_exit("BTCUSDT", 0.3, "test")
+        tracker.record_entry("BTCUSDT", {"regime": "RANGING", "score": 5})
+        tracker.record_exit("BTCUSDT", -0.2, "test")
+
+        stats = tracker.get_stats()
+        assert stats["by_regime"]["TRENDING"]["count"] == 2
+        assert stats["by_regime"]["TRENDING"]["win_rate"] == 1.0
+        assert stats["by_regime"]["RANGING"]["count"] == 1
+        assert stats["by_regime"]["RANGING"]["win_rate"] == 0.0
+
+    def test_group_by_pattern(self, tracker):
+        tracker.record_entry("BTCUSDT", {"pattern": "momentum", "score": 6})
+        tracker.record_exit("BTCUSDT", 0.5, "test")
+        tracker.record_entry("BTCUSDT", {"pattern": "mean_reversion", "score": 5})
+        tracker.record_exit("BTCUSDT", -0.3, "test")
+
+        stats = tracker.get_stats()
+        assert "momentum" in stats["by_pattern"]
+        assert "mean_reversion" in stats["by_pattern"]
+
+    def test_group_by_score_range(self, tracker):
+        for score, pnl in [(3, -0.2), (4, -0.1), (5, 0.3), (6, 0.5), (7, 0.8), (8, 1.0)]:
+            tracker.record_entry("BTCUSDT", {"score": score})
+            tracker.record_exit("BTCUSDT", pnl, "test")
+
+        stats = tracker.get_stats()
+        assert stats["by_score_range"]["3-4"]["count"] == 2
+        assert stats["by_score_range"]["5-6"]["count"] == 2
+        assert stats["by_score_range"]["7+"]["count"] == 2
+
+    def test_ab_comparison(self, tracker):
+        # 3 direct trades (2 wins)
+        for pnl, veto in [(0.5, False), (0.3, False), (-0.1, False)]:
+            tracker.record_entry("BTCUSDT", {"ai_veto_used": veto, "score": 6})
+            tracker.record_exit("BTCUSDT", pnl, "test")
+        # 3 AI veto trades (1 win)
+        for pnl, veto in [(0.4, True), (-0.2, True), (-0.3, True)]:
+            tracker.record_entry("BTCUSDT", {"ai_veto_used": veto, "score": 5})
+            tracker.record_exit("BTCUSDT", pnl, "test")
+
+        stats = tracker.get_stats()
+        ab = stats["ab_comparison"]
+        assert ab["direct"]["count"] == 3
+        assert ab["ai_veto"]["count"] == 3
+        assert ab["direct"]["win_rate"] == pytest.approx(2 / 3, abs=0.01)
+        assert ab["ai_veto"]["win_rate"] == pytest.approx(1 / 3, abs=0.01)
+        assert ab["delta_win_rate"] < 0  # AI is worse in this test
+
+    def test_persistence(self, tmp_path):
+        with patch("src.core.scalp_performance.DATA_DIR", str(tmp_path)):
+            from src.core.scalp_performance import ScalpPerformanceTracker
+            t1 = ScalpPerformanceTracker()
+            t1.record_entry("BTCUSDT", {"regime": "TRENDING", "score": 7})
+            t1.record_exit("BTCUSDT", 0.5, "test")
+
+            # New instance should load persisted data
+            t2 = ScalpPerformanceTracker()
+            assert t2.trade_count == 1
+
+    def test_hold_time_recorded(self, tracker):
+        tracker.record_entry("BTCUSDT", {"score": 6})
+        time.sleep(0.05)  # Small delay
+        tracker.record_exit("BTCUSDT", 0.1, "test")
+        assert tracker._trades[0]["hold_time_sec"] > 0
+
+    def test_last_n_filter(self, tracker):
+        for i in range(10):
+            tracker.record_entry("BTCUSDT", {"score": 5})
+            tracker.record_exit("BTCUSDT", 0.1 if i < 5 else -0.1, "test")
+
+        stats_all = tracker.get_stats(last_n=10)
+        stats_recent = tracker.get_stats(last_n=5)
+        assert stats_all["total_trades"] == 10
+        assert stats_recent["total_trades"] == 5
+        # Last 5 are all losses
+        assert stats_recent["win_rate"] == 0.0
+
+
+# =============================================================
+# Phase 5: ScalpCalibrator tests
+# =============================================================
+
+class TestScalpCalibrator:
+
+    def _make_tracker_with_data(self, tmp_path, trades_data):
+        """Helper to create tracker with pre-loaded trades."""
+        with patch("src.core.scalp_performance.DATA_DIR", str(tmp_path)):
+            from src.core.scalp_performance import ScalpPerformanceTracker
+            tracker = ScalpPerformanceTracker()
+            for entry, pnl, reason in trades_data:
+                tracker.record_entry("BTCUSDT", entry)
+                tracker.record_exit("BTCUSDT", pnl, reason)
+            return tracker
+
+    def test_no_suggestions_with_few_trades(self, tmp_path):
+        with patch("src.core.scalp_performance.DATA_DIR", str(tmp_path)):
+            from src.core.scalp_performance import ScalpPerformanceTracker, ScalpCalibrator
+            tracker = ScalpPerformanceTracker()
+            for i in range(5):
+                tracker.record_entry("BTCUSDT", {"score": 5})
+                tracker.record_exit("BTCUSDT", 0.1, "test")
+            calibrator = ScalpCalibrator(tracker)
+            suggestions = calibrator.check_and_suggest()
+            assert suggestions == []  # Not enough trades (< 15)
+
+    def test_low_score_suggestion(self, tmp_path):
+        """When score 3-4 trades have < 35% win rate, suggest raising min_score."""
+        trades = []
+        # 8 low-score trades, mostly losses
+        for i in range(8):
+            trades.append(
+                ({"score": 3, "regime": "TRENDING"}, -0.2 if i < 6 else 0.3, "test")
+            )
+        # 10 good trades to reach min_trades
+        for i in range(10):
+            trades.append(
+                ({"score": 7, "regime": "TRENDING"}, 0.5, "test")
+            )
+
+        with patch("src.core.scalp_performance.DATA_DIR", str(tmp_path)):
+            from src.core.scalp_performance import ScalpPerformanceTracker, ScalpCalibrator
+            tracker = self._make_tracker_with_data(tmp_path, trades)
+            calibrator = ScalpCalibrator(tracker)
+            suggestions = calibrator.check_and_suggest()
+
+            score_suggestions = [s for s in suggestions if "min_score" in s["parameter"]]
+            assert len(score_suggestions) > 0
+            assert score_suggestions[0]["suggested"] >= 5
+
+    def test_regime_suggestion(self, tmp_path):
+        """When a regime has < 35% win rate, suggest raising its min_score."""
+        trades = []
+        # 8 VOLATILE trades, mostly losses
+        for i in range(8):
+            trades.append(
+                ({"score": 6, "regime": "VOLATILE"}, -0.3 if i < 6 else 0.2, "test")
+            )
+        # 10 TRENDING trades, all wins
+        for i in range(10):
+            trades.append(
+                ({"score": 6, "regime": "TRENDING"}, 0.5, "test")
+            )
+
+        with patch("src.core.scalp_performance.DATA_DIR", str(tmp_path)):
+            from src.core.scalp_performance import ScalpPerformanceTracker, ScalpCalibrator
+            tracker = self._make_tracker_with_data(tmp_path, trades)
+            calibrator = ScalpCalibrator(tracker)
+            suggestions = calibrator.check_and_suggest()
+
+            regime_suggestions = [s for s in suggestions if "VOLATILE" in s["parameter"]]
+            assert len(regime_suggestions) > 0
+
+    def test_pattern_suggestion(self, tmp_path):
+        """When a pattern has negative avg PnL, flag it."""
+        trades = []
+        # 6 "momentum" trades with negative PnL
+        for i in range(6):
+            trades.append(
+                ({"score": 5, "pattern": "momentum"}, -0.3, "test")
+            )
+        # 10 "pullback" trades with positive PnL
+        for i in range(10):
+            trades.append(
+                ({"score": 6, "pattern": "pullback"}, 0.4, "test")
+            )
+
+        with patch("src.core.scalp_performance.DATA_DIR", str(tmp_path)):
+            from src.core.scalp_performance import ScalpPerformanceTracker, ScalpCalibrator
+            tracker = self._make_tracker_with_data(tmp_path, trades)
+            calibrator = ScalpCalibrator(tracker)
+            suggestions = calibrator.check_and_suggest()
+
+            pattern_suggestions = [s for s in suggestions if "momentum" in s["parameter"]]
+            assert len(pattern_suggestions) > 0
+            assert pattern_suggestions[0]["suggested"] == "review"
+
+    def test_ab_suggestion_ai_bad(self, tmp_path):
+        """When AI veto trades perform worse, suggest disabling."""
+        trades = []
+        # 6 direct trades (5 wins)
+        for i in range(6):
+            trades.append(
+                ({"score": 6, "ai_veto_used": False}, 0.4 if i < 5 else -0.1, "test")
+            )
+        # 10 AI veto trades (3 wins)
+        for i in range(10):
+            trades.append(
+                ({"score": 5, "ai_veto_used": True}, 0.3 if i < 3 else -0.2, "test")
+            )
+
+        with patch("src.core.scalp_performance.DATA_DIR", str(tmp_path)):
+            from src.core.scalp_performance import ScalpPerformanceTracker, ScalpCalibrator
+            tracker = self._make_tracker_with_data(tmp_path, trades)
+            calibrator = ScalpCalibrator(tracker)
+            suggestions = calibrator.check_and_suggest()
+
+            ab_suggestions = [s for s in suggestions if "veto_enabled" in s["parameter"]]
+            assert len(ab_suggestions) > 0
+            assert ab_suggestions[0]["suggested"] is False
+
+    def test_ab_suggestion_ai_good(self, tmp_path):
+        """When AI veto trades perform better, suggest keeping."""
+        trades = []
+        # 6 direct trades (2 wins)
+        for i in range(6):
+            trades.append(
+                ({"score": 5, "ai_veto_used": False}, 0.3 if i < 2 else -0.2, "test")
+            )
+        # 10 AI veto trades (8 wins)
+        for i in range(10):
+            trades.append(
+                ({"score": 6, "ai_veto_used": True}, 0.5 if i < 8 else -0.1, "test")
+            )
+
+        with patch("src.core.scalp_performance.DATA_DIR", str(tmp_path)):
+            from src.core.scalp_performance import ScalpPerformanceTracker, ScalpCalibrator
+            tracker = self._make_tracker_with_data(tmp_path, trades)
+            calibrator = ScalpCalibrator(tracker)
+            suggestions = calibrator.check_and_suggest()
+
+            ab_suggestions = [s for s in suggestions if "veto_enabled" in s["parameter"]]
+            assert len(ab_suggestions) > 0
+            assert ab_suggestions[0]["suggested"] is True
+
+    def test_calibration_output_file(self, tmp_path):
+        """Suggestions should be saved to scalp_calibration.json."""
+        trades = []
+        for i in range(8):
+            trades.append(
+                ({"score": 3, "regime": "TRENDING"}, -0.3, "test")
+            )
+        for i in range(10):
+            trades.append(
+                ({"score": 7, "regime": "TRENDING"}, 0.5, "test")
+            )
+
+        with patch("src.core.scalp_performance.DATA_DIR", str(tmp_path)):
+            from src.core.scalp_performance import ScalpPerformanceTracker, ScalpCalibrator
+            tracker = self._make_tracker_with_data(tmp_path, trades)
+            calibrator = ScalpCalibrator(tracker)
+            suggestions = calibrator.check_and_suggest()
+
+            output_file = tmp_path / "scalp_calibration.json"
+            if suggestions:
+                assert output_file.exists()
+                import json
+                data = json.loads(output_file.read_text())
+                assert "suggestions" in data
+                assert "timestamp" in data
+
+
+# =============================================================
+# Phase 5: Entry/exit context wiring in ScalpEngine
+# =============================================================
+
+class TestEntryExitContext:
+
+    def _make_engine(self):
+        settings = {
+            "loops": {"fast_interval": 1.5, "slow_interval": 45},
+            "time_exit": {"max_hold_minutes": 15},
+            "ai_integration": {},
+            "signal_rules": {"spread_max_bps": 5.0},
+            "partial_tp": {"enabled": False},
+            "limit_entries": {"enabled": False},
+            "risk_limits": {"base_position_pct": 5.0},
+            "performance": {"calibration_interval_cycles": 100},
+        }
+        with patch("src.core.scalp_engine.SCALP_SETTINGS", settings):
+            from src.core.scalp_engine import ScalpEngine
+            engine = ScalpEngine("BTCUSDT")
+        return engine
+
+    def test_calibration_interval_config(self):
+        engine = self._make_engine()
+        assert engine._calibration_interval == 100
+        assert engine._slow_cycle == 0
+
+    def test_execute_entry_has_ai_veto_param(self):
+        """_execute_entry should accept ai_veto_used parameter."""
+        engine = self._make_engine()
+        import inspect
+        sig = inspect.signature(engine._execute_entry)
+        assert "ai_veto_used" in sig.parameters
+        # Default should be False
+        assert sig.parameters["ai_veto_used"].default is False
+
+    def test_perf_tracker_init_slot(self):
+        """Engine should have _perf_tracker and _calibrator slots."""
+        engine = self._make_engine()
+        assert hasattr(engine, "_perf_tracker")
+        assert hasattr(engine, "_calibrator")
+        # Before _init_components, they are None
+        assert engine._perf_tracker is None
+        assert engine._calibrator is None

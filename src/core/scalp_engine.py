@@ -414,11 +414,18 @@ class ScalpEngine:
         self._partial_tp_done: bool = False
         self._entry_atr: float = 0.0
 
+        # Calibration interval (slow loop cycles between checks)
+        perf_cfg = cfg.get("performance", {})
+        self._calibration_interval = perf_cfg.get("calibration_interval_cycles", 100)
+        self._slow_cycle: int = 0
+
         # Lazy-loaded components
         self._analyzer = None
         self._signal_gen = None
         self._client = None
         self._tracker = None
+        self._perf_tracker = None
+        self._calibrator = None
 
     def run(self):
         """Main entry point — runs until killed."""
@@ -441,10 +448,14 @@ class ScalpEngine:
         from src.exchanges.exchange_factory import get_exchange_client
         from src.core.trade_tracker import TradeTracker
 
+        from src.core.scalp_performance import ScalpPerformanceTracker, ScalpCalibrator
+
         self._analyzer = LightweightAnalyzer(self.symbol)
         self._signal_gen = ScalpSignalGenerator()
         self._client = get_exchange_client()
         self._tracker = TradeTracker()
+        self._perf_tracker = ScalpPerformanceTracker()
+        self._calibrator = ScalpCalibrator(self._perf_tracker)
 
         # Bootstrap analyzer from WS cache or REST
         candles = self._get_candles(300)
@@ -543,6 +554,17 @@ class ScalpEngine:
                 stats = self._session.stats
                 info(f"[SCALP] {self.symbol}: Session: trades={stats['trades_today']} "
                      f"PnL={stats['daily_pnl_pct']:.2f}% W/L={stats['wins']}/{stats['losses']}")
+
+                # 9. Periodic calibration check
+                self._slow_cycle += 1
+                if (self._calibrator and self._calibration_interval > 0
+                        and self._slow_cycle % self._calibration_interval == 0):
+                    try:
+                        suggestions = self._calibrator.check_and_suggest()
+                        if suggestions:
+                            info(f"[SCALP] {self.symbol}: Calibrator generated {len(suggestions)} suggestions")
+                    except Exception as e:
+                        warning(f"[SCALP] {self.symbol}: Calibration error: {e}")
 
             except Exception as e:
                 error(f"[SCALP] {self.symbol}: Slow loop error: {e}")
@@ -649,7 +671,7 @@ class ScalpEngine:
             info(f"[SCALP] {self.symbol}: Queued for AI veto: {signal['signal']} Q:{quality:.2f}")
         # If veto disabled or quality < borderline, skip
 
-    def _execute_entry(self, signal: Dict, indicators: Dict):
+    def _execute_entry(self, signal: Dict, indicators: Dict, ai_veto_used: bool = False):
         """Place a trade based on signal."""
         direction = signal["signal"]
         current_price = indicators["current_price"]
@@ -717,6 +739,34 @@ class ScalpEngine:
             self._position_open_time = time.time()
             self._partial_tp_done = False
             self._entry_atr = atr
+
+            # Save entry context for performance tracking
+            with self._lock:
+                current_regime = self._regime
+            regime_label = current_regime.get("regime", "UNKNOWN") if current_regime else "UNKNOWN"
+            entry_ctx = {
+                "side": direction,
+                "entry_price": entry_price,
+                "regime": regime_label,
+                "pattern": signal.get("pattern", "generic"),
+                "score": signal.get("score", 0),
+                "quality": signal.get("quality", 0.0),
+                "ai_veto_used": ai_veto_used,
+                "choppiness": indicators.get("choppiness", 50.0),
+                "cvd_trend": indicators.get("cvd_trend", "FLAT"),
+                "entry_atr": atr,
+            }
+            if self._perf_tracker:
+                self._perf_tracker.record_entry(self.symbol, entry_ctx)
+            if self._tracker:
+                self._tracker.set_entry_context(self.symbol, {
+                    "entry_regime": regime_label,
+                    "entry_score": signal.get("score", 0),
+                    "entry_quality": signal.get("quality", 0.0),
+                    "entry_atr": atr,
+                    "entry_volume_ratio": indicators.get("volume_ratio", 1.0),
+                })
+
             # Sync position after entry
             time.sleep(1.0)
             self._sync_position()
@@ -746,6 +796,10 @@ class ScalpEngine:
                 self._trailing.reset()
                 self._partial_tp_done = False
                 self._entry_atr = 0.0
+
+                # Record exit in performance tracker
+                if self._perf_tracker:
+                    self._perf_tracker.record_exit(self.symbol, pnl_pct, reason)
 
                 with self._lock:
                     self._position = None
@@ -1120,7 +1174,7 @@ class ScalpEngine:
                 ai_action = ai_result.get("action", "hold").upper()
                 if ai_action == signal["signal"]:
                     info(f"[SCALP-L3] {self.symbol}: AI APPROVED {signal['signal']}")
-                    self._execute_entry(signal, indicators)
+                    self._execute_entry(signal, indicators, ai_veto_used=True)
                 else:
                     info(f"[SCALP-L3] {self.symbol}: AI REJECTED {signal['signal']} "
                          f"(AI said {ai_action}: {ai_result.get('reason', '?')})")
