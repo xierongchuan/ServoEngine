@@ -167,7 +167,30 @@ export function Settings() {
         </div>
         <div className="flex items-center justify-between">
           <span className="text-sm text-tg-text">Leverage</span>
-          <span className="text-sm text-tg-hint">{preset.leverage || 'N/A'}x</span>
+          {editing ? (
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                min={1}
+                max={125}
+                step={1}
+                value={preset.leverage ?? ''}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value) || 1;
+                  const style = config.STRATEGY_STYLE;
+                  if (!style) return;
+                  updateNestedField('STYLE_PRESETS', style, {
+                    ...config.STYLE_PRESETS?.[style],
+                    leverage: v,
+                  });
+                }}
+                className="bg-tg-bg text-tg-text text-sm rounded px-2 py-1 w-20 text-right border border-white/10"
+              />
+              <span className="text-sm text-tg-hint">x</span>
+            </div>
+          ) : (
+            <span className="text-sm text-tg-hint">{preset.leverage || 'N/A'}x</span>
+          )}
         </div>
       </Section>
 

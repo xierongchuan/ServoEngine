@@ -68,6 +68,15 @@ def validate_config_values(config: dict) -> list[str]:
         if "values" in rules and value not in rules["values"]:
             errors.append(f"{key}: '{value}' not in {rules['values']}")
 
+    # Validate leverage in STYLE_PRESETS
+    presets = config.get("STYLE_PRESETS")
+    if isinstance(presets, dict):
+        for style, preset in presets.items():
+            if isinstance(preset, dict) and "leverage" in preset:
+                lev = preset["leverage"]
+                if not isinstance(lev, (int, float)) or lev < 1 or lev > 125:
+                    errors.append(f"STYLE_PRESETS.{style}.leverage: must be between 1 and 125")
+
     # Validate AI_SETTINGS sub-fields
     ai = config.get("AI_SETTINGS")
     if isinstance(ai, dict):
