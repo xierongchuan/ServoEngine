@@ -1,9 +1,13 @@
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from ..services.auth import get_current_user
 from ..services.data_reader import DataReader
+
+logger = logging.getLogger("panel.config")
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 reader = DataReader()
@@ -142,14 +146,20 @@ async def update_config(request: Request, _user: dict = Depends(get_current_user
     # Validate before saving
     errors = validate_config_values(new_config)
     if errors:
-        raise HTTPException(status_code=422, detail={"validation_errors": errors})
+        logger.warning("Config validation failed: %s", errors)
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "Validation failed", "validation_errors": errors},
+        )
 
     current_config = reader.read_config()
     changes = classify_changes(current_config, new_config)
 
     try:
         reader.write_config(new_config)
+        logger.info("Config saved successfully. Changes: %s", changes)
     except OSError as e:
+        logger.error("Failed to write config: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
 
     return {

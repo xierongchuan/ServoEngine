@@ -41,16 +41,32 @@ class DataReader:
         return self._read_json(self.config_path, default={})
 
     def write_config(self, data: dict) -> None:
-        # Atomic write: write to temp file, then rename
+        """Write config to file. For bind-mounted files, we can't use atomic rename,
+        so we truncate and rewrite in place."""
         import tempfile
-        dir_path = self.config_path.parent
-        fd, tmp_path = tempfile.mkstemp(dir=str(dir_path), suffix=".tmp")
+        # First write to a temp file to ensure we have valid JSON
+        fd, tmp_path = tempfile.mkstemp(dir=str(self.config_path.parent), suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            os.replace(tmp_path, self.config_path)
         except Exception:
             # Clean up temp file on failure
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+        # For bind-mounted files, we need to write in place instead of rename
+        # Read the temp file content and write directly to config
+        try:
+            with open(tmp_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            os.unlink(tmp_path)
+        except Exception as e:
+            # Clean up temp file
             try:
                 os.unlink(tmp_path)
             except OSError:
