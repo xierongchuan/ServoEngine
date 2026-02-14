@@ -323,9 +323,14 @@ class ScalpEngine:
         self._be_timeout_minutes = time_exit_cfg.get("breakeven_timeout_minutes", 8)
 
         ai_cfg = cfg.get("ai_integration", {})
-        self._regime_enabled = ai_cfg.get("regime_enabled", True)
+        self._regime_ai_enabled = ai_cfg.get("regime_enabled", True)
+        self._regime_interval_sec = ai_cfg.get("regime_interval_seconds", 300)
+        self._regime_model = ai_cfg.get("regime_model", None)  # None = use default AI_MODEL
         self._veto_enabled = ai_cfg.get("veto_enabled", True)
+        self._veto_model = ai_cfg.get("veto_model", None)  # e.g. "google/gemini-2.0-flash-lite"
         self._veto_staleness_sec = ai_cfg.get("veto_staleness_seconds", 10)
+        self._veto_max_cycles = ai_cfg.get("veto_max_stale_cycles", 2)
+        self._borderline_quality = ai_cfg.get("borderline_quality_threshold", 0.3)
 
         # Components
         self._trailing = TrailingStopManager()
@@ -340,11 +345,18 @@ class ScalpEngine:
         self._position: Optional[Dict] = None
         self._position_open_time: float = 0.0
         self._pending_veto: Optional[Dict] = None
-        self._veto_result: Optional[Dict] = None
-        self._veto_time: float = 0.0
+        self._pending_veto_cycle: int = 0  # Fast loop cycle when veto was queued
         self._ob_imbalance: float = 0.0
         self._ob_spread_bps: float = 0.0
         self._running = True
+
+        # AI regime advisor state
+        self._last_ai_regime_time: float = 0.0
+        self._ai_regime_duration: int = 0  # How many cycles in current AI regime
+        self._ai_regime_label: str = "UNKNOWN"
+
+        # Fast loop cycle counter (for veto staleness)
+        self._fast_cycle: int = 0
 
         # Lazy-loaded components
         self._analyzer = None
@@ -423,6 +435,7 @@ class ScalpEngine:
                     # 4. Signal detection (if no position)
                     self._check_entry(indicators, regime)
 
+                self._fast_cycle += 1
                 elapsed = time.time() - start
                 sleep_time = max(0.1, self._fast_interval - elapsed)
                 time.sleep(sleep_time)
@@ -450,24 +463,27 @@ class ScalpEngine:
                 # 2. Sync position from exchange
                 self._sync_position()
 
-                # 3. Regime detection
-                if self._regime_enabled:
-                    self._update_regime()
+                # 3. Deterministic regime detection (every cycle)
+                self._update_regime_deterministic()
 
-                # 4. Update order book cache (OB imbalance + spread)
+                # 4. AI regime advisor (L2, every regime_interval seconds)
+                if self._regime_ai_enabled:
+                    self._update_regime_ai()
+
+                # 5. Update order book cache (OB imbalance + spread)
                 self._update_order_book()
 
-                # 5. Process pending AI veto
+                # 6. Process pending AI veto (L3)
                 if self._veto_enabled and self._pending_veto:
                     self._process_veto()
 
-                # 6. Re-bootstrap analyzer if needed
+                # 7. Re-bootstrap analyzer if needed
                 if self._analyzer and not self._analyzer._bootstrapped:
                     candles = self._get_candles(300)
                     if candles:
                         self._analyzer.bootstrap(candles)
 
-                # 7. Log session stats
+                # 8. Log session stats
                 stats = self._session.stats
                 info(f"[SCALP] {self.symbol}: Session: trades={stats['trades_today']} "
                      f"PnL={stats['daily_pnl_pct']:.2f}% W/L={stats['wins']}/{stats['losses']}")
@@ -555,16 +571,17 @@ class ScalpEngine:
             info(f"[SCALP] {self.symbol}: AUTO-EXECUTE {signal['signal']} "
                  f"Q:{quality:.2f} score:{signal['score']}")
             self._execute_entry(signal, indicators)
-        elif self._veto_enabled:
-            # Borderline → queue for AI veto
+        elif self._veto_enabled and quality >= self._borderline_quality:
+            # Borderline → queue for AI veto (only if above borderline threshold)
             with self._lock:
                 self._pending_veto = {
                     "signal": signal,
                     "indicators": indicators.copy(),
                     "time": time.time(),
+                    "cycle": self._fast_cycle,
                 }
             info(f"[SCALP] {self.symbol}: Queued for AI veto: {signal['signal']} Q:{quality:.2f}")
-        # If veto disabled and quality < threshold, skip
+        # If veto disabled or quality < borderline, skip
 
     def _execute_entry(self, signal: Dict, indicators: Dict):
         """Place a trade based on signal."""
@@ -721,8 +738,8 @@ class ScalpEngine:
         except Exception as e:
             warning(f"[SCALP] {self.symbol}: Position sync error: {e}")
 
-    def _update_regime(self):
-        """Run regime detection from current indicators."""
+    def _update_regime_deterministic(self):
+        """Run deterministic regime detection from current indicators (every slow loop cycle)."""
         try:
             if not self._analyzer or not self._analyzer._bootstrapped:
                 return
@@ -746,19 +763,177 @@ class ScalpEngine:
         except Exception as e:
             warning(f"[SCALP] {self.symbol}: Regime detection error: {e}")
 
+    def _update_regime_ai(self):
+        """Run AI regime advisor (L2) if interval has elapsed."""
+        now = time.time()
+        if now - self._last_ai_regime_time < self._regime_interval_sec:
+            return  # Not time yet
+
+        if not self._analyzer or not self._analyzer._bootstrapped:
+            return
+
+        try:
+            from src.prompts.strategies.scalp_regime import ScalpRegimeStrategy
+            from src.core.predict import get_prediction, parse_response
+
+            snapshot = self._analyzer.get_snapshot()
+
+            # Build context for L2 prompt
+            ema_spread = 0.0
+            if snapshot["ema_med"] > 0:
+                ema_spread = (snapshot["ema_fast"] - snapshot["ema_med"]) / snapshot["ema_med"] * 100
+
+            # Count up/down candles from recent closes
+            closes = list(self._analyzer._recent_closes)
+            up_candles = sum(1 for i in range(1, len(closes)) if closes[i] > closes[i - 1])
+            down_candles = max(0, len(closes) - 1 - up_candles)
+
+            # BB width percentile (approximate from current width)
+            bb_percentile = 50  # Default — no history tracking for percentile in lightweight analyzer
+
+            regime_ctx = {
+                "symbol": self.symbol,
+                "ema_spread": ema_spread,
+                "rsi": snapshot.get("rsi", 50),
+                "macd_hist": snapshot.get("macd_hist", 0.0),
+                "bb_width": snapshot.get("bb_width", 0.0),
+                "bb_percentile": bb_percentile,
+                "atr_ratio": snapshot.get("atr_ratio", 1.0),
+                "volume_ratio": snapshot.get("volume_ratio", 1.0),
+                "support": snapshot.get("vwap_lower", 0),
+                "resistance": snapshot.get("vwap_upper", 0),
+                "up_candles": up_candles,
+                "down_candles": down_candles,
+                "prev_regime": self._ai_regime_label,
+                "duration": self._ai_regime_duration,
+            }
+
+            prompt = ScalpRegimeStrategy().get_strategy_section(regime_ctx)
+            raw_response = get_prediction(
+                prompt,
+                model=self._regime_model,
+                max_tokens=150,
+                temperature=0.2,
+            )
+
+            # Parse AI regime response
+            ai_result = self._parse_regime_response(raw_response)
+
+            if ai_result:
+                new_regime = ai_result.get("regime", "UNKNOWN")
+                confidence = ai_result.get("confidence", 0.0)
+
+                # Track duration
+                if new_regime == self._ai_regime_label:
+                    self._ai_regime_duration += 1
+                else:
+                    self._ai_regime_duration = 1
+                self._ai_regime_label = new_regime
+
+                # Merge AI params into current regime if confidence is high enough
+                if confidence >= 0.6:
+                    ai_params = ai_result.get("params", {})
+                    with self._lock:
+                        if self._regime:
+                            # Override regime label with AI classification
+                            self._regime["regime"] = new_regime
+                            self._regime["ai_confidence"] = confidence
+                            self._regime["ai_bias"] = ai_result.get("bias", "neutral")
+                            self._regime["ai_scalp_mode"] = ai_result.get("scalp_mode", "")
+                            # Merge params (min_score, size_factor, sl_mult, tp_mult)
+                            if ai_params:
+                                for key in ("min_score", "size_factor", "sl_mult", "tp_mult"):
+                                    if key in ai_params:
+                                        self._regime[f"recommended_{key}"] = ai_params[key]
+
+                    info(f"[SCALP-L2] {self.symbol}: AI regime={new_regime} conf={confidence:.2f} "
+                         f"bias={ai_result.get('bias', '?')} mode={ai_result.get('scalp_mode', '?')} "
+                         f"note={ai_result.get('note', '')}")
+                else:
+                    info(f"[SCALP-L2] {self.symbol}: AI regime={new_regime} LOW conf={confidence:.2f}, "
+                         f"keeping deterministic regime")
+
+            self._last_ai_regime_time = now
+
+        except Exception as e:
+            warning(f"[SCALP] {self.symbol}: AI regime advisor error: {e}")
+            self._last_ai_regime_time = now  # Don't retry immediately on error
+
+    def _parse_regime_response(self, raw_response) -> Optional[Dict]:
+        """Parse L2 regime advisor JSON response."""
+        import json
+        import re
+
+        try:
+            if isinstance(raw_response, dict):
+                return raw_response
+
+            cleaned = re.sub(r'```json\s*', '', raw_response)
+            cleaned = re.sub(r'```', '', cleaned)
+
+            start = cleaned.find('{')
+            if start == -1:
+                return None
+
+            brace_count = 0
+            end = -1
+            for i in range(start, len(cleaned)):
+                if cleaned[i] == '{':
+                    brace_count += 1
+                elif cleaned[i] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end = i + 1
+                        break
+
+            if end == -1:
+                return None
+
+            data = json.loads(cleaned[start:end])
+
+            # Validate required fields
+            if "regime" not in data:
+                return None
+
+            # Normalize
+            data["regime"] = data["regime"].upper()
+            if data["regime"] not in ("TRENDING", "RANGING", "VOLATILE", "TRANSITIONAL"):
+                data["regime"] = "UNKNOWN"
+
+            data["confidence"] = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
+
+            return data
+
+        except Exception as e:
+            warning(f"[SCALP-L2] {self.symbol}: Regime parse error: {e}")
+            return None
+
     def _process_veto(self):
-        """Process pending AI veto request (slow loop)."""
+        """Process pending AI veto request (slow loop).
+
+        Staleness checks:
+        1. Time-based: discard if age > veto_staleness_sec
+        2. Cycle-based: discard if fast_cycle advanced > veto_max_cycles
+        3. Signal-changed: discard if current signal direction differs from queued
+        """
         with self._lock:
             pending = self._pending_veto
             self._pending_veto = None
+            current_cycle = self._fast_cycle
 
         if not pending:
             return
 
-        # Check staleness
+        # --- Staleness check 1: time-based ---
         age = time.time() - pending["time"]
         if age > self._veto_staleness_sec:
-            info(f"[SCALP] {self.symbol}: Veto request stale ({age:.1f}s > {self._veto_staleness_sec}s), discarding")
+            info(f"[SCALP] {self.symbol}: Veto stale (time: {age:.1f}s > {self._veto_staleness_sec}s)")
+            return
+
+        # --- Staleness check 2: cycle-based ---
+        cycles_elapsed = current_cycle - pending.get("cycle", current_cycle)
+        if cycles_elapsed > self._veto_max_cycles:
+            info(f"[SCALP] {self.symbol}: Veto stale (cycles: {cycles_elapsed} > {self._veto_max_cycles})")
             return
 
         # Don't veto if we now have a position
@@ -768,6 +943,23 @@ class ScalpEngine:
 
         signal = pending["signal"]
         indicators = pending["indicators"]
+
+        # --- Staleness check 3: signal direction changed ---
+        try:
+            current_snap = self._analyzer.get_snapshot() if self._analyzer else None
+            if current_snap:
+                with self._lock:
+                    current_regime = self._regime
+                current_signal = self._signal_gen.generate(
+                    current_snap, regime=current_regime,
+                    ob_imbalance=self._ob_imbalance,
+                )
+                if current_signal["signal"] != signal["signal"]:
+                    info(f"[SCALP] {self.symbol}: Veto stale (signal changed: "
+                         f"{signal['signal']} → {current_signal['signal']})")
+                    return
+        except Exception:
+            pass  # If re-check fails, proceed with original signal
 
         try:
             from src.prompts.strategies.scalp_veto import ScalpVetoStrategy
@@ -786,24 +978,28 @@ class ScalpEngine:
                 "pattern": signal.get("pattern", "generic"),
             }
 
-            # Build minimal veto prompt directly (bypass PromptBuilder which needs full context)
             prompt = ScalpVetoStrategy().get_strategy_section(veto_ctx)
-            raw_response = get_prediction(prompt)
+            raw_response = get_prediction(
+                prompt,
+                model=self._veto_model,
+                max_tokens=100,
+                temperature=0.1,
+            )
             ai_result = parse_response(raw_response)
 
             if ai_result and ai_result.get("action"):
                 ai_action = ai_result.get("action", "hold").upper()
                 if ai_action == signal["signal"]:
-                    info(f"[SCALP] {self.symbol}: AI APPROVED {signal['signal']}")
+                    info(f"[SCALP-L3] {self.symbol}: AI APPROVED {signal['signal']}")
                     self._execute_entry(signal, indicators)
                 else:
-                    info(f"[SCALP] {self.symbol}: AI REJECTED {signal['signal']} "
+                    info(f"[SCALP-L3] {self.symbol}: AI REJECTED {signal['signal']} "
                          f"(AI said {ai_action}: {ai_result.get('reason', '?')})")
             else:
-                warning(f"[SCALP] {self.symbol}: AI veto parse failed, discarding signal")
+                warning(f"[SCALP-L3] {self.symbol}: Veto parse failed, discarding signal")
 
         except Exception as e:
-            warning(f"[SCALP] {self.symbol}: Veto processing error: {e}")
+            warning(f"[SCALP-L3] {self.symbol}: Veto error: {e}")
 
     def _get_candles(self, limit: int = 5) -> list:
         """Get candles from WS cache, fallback to REST."""

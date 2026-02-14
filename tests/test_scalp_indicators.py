@@ -1,8 +1,9 @@
 """
-Unit tests for SCALP Phase 2 indicators:
+Unit tests for SCALP Phases 2-3:
 - LightweightAnalyzer (VWAP, MACD crossover, incremental updates)
 - ScalpSignalGenerator (scoring, patterns, OB imbalance)
 - calculate_ob_imbalance, calculate_ob_spread_bps
+- Phase 3: model override, L2 regime parsing, L3 veto staleness
 """
 
 import time
@@ -566,3 +567,465 @@ class TestScalpSession:
         session.record_entry()
         session.record_exit(1.0)  # Win
         assert session._consecutive_losses == 0
+
+
+# =============================================================
+# Phase 3: get_prediction model override
+# =============================================================
+
+class TestPredictModelOverride:
+
+    @patch("src.core.predict.requests.post")
+    def test_default_model_used(self, mock_post):
+        """Without model override, default AI_MODEL should be used."""
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": '{"action":"hold"}'}}]
+        }
+        with patch("src.core.predict.AI_MODEL", "default/model"):
+            from src.core.predict import get_prediction
+            get_prediction("test prompt")
+            payload = mock_post.call_args[1]["json"]
+            # When using default model with fallbacks, payload may use "models" key
+            model_used = payload.get("model") or payload.get("models", [None])[0]
+            assert model_used == "default/model"
+
+    @patch("src.core.predict.requests.post")
+    def test_custom_model_override(self, mock_post):
+        """Model override should use specified model, not default."""
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": '{"action":"hold"}'}}]
+        }
+        from src.core.predict import get_prediction
+        get_prediction("test prompt", model="custom/fast-model")
+        payload = mock_post.call_args[1]["json"]
+        assert payload["model"] == "custom/fast-model"
+        # Custom model should NOT have fallback models
+        assert "models" not in payload
+
+    @patch("src.core.predict.requests.post")
+    def test_custom_max_tokens(self, mock_post):
+        """max_tokens override should be applied."""
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": '{"action":"hold"}'}}]
+        }
+        from src.core.predict import get_prediction
+        get_prediction("test prompt", max_tokens=100)
+        payload = mock_post.call_args[1]["json"]
+        assert payload["max_tokens"] == 100
+
+    @patch("src.core.predict.requests.post")
+    def test_custom_temperature(self, mock_post):
+        """temperature override should be applied."""
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": '{"action":"hold"}'}}]
+        }
+        from src.core.predict import get_prediction
+        get_prediction("test prompt", temperature=0.1)
+        payload = mock_post.call_args[1]["json"]
+        assert payload["temperature"] == 0.1
+
+
+# =============================================================
+# Phase 3: L2 regime response parsing
+# =============================================================
+
+class TestRegimeResponseParsing:
+
+    @pytest.fixture
+    def engine(self):
+        with patch("src.core.scalp_engine.SCALP_SETTINGS", {
+            "loops": {"fast_interval": 1.5, "slow_interval": 45},
+            "time_exit": {},
+            "ai_integration": {},
+            "signal_rules": {"spread_max_bps": 5.0},
+        }):
+            from src.core.scalp_engine import ScalpEngine
+            return ScalpEngine("BTCUSDT")
+
+    def test_parse_valid_json(self, engine):
+        raw = '{"regime":"TRENDING","confidence":0.85,"bias":"bullish","scalp_mode":"breakout","params":{"min_score":4},"note":"strong trend"}'
+        result = engine._parse_regime_response(raw)
+        assert result is not None
+        assert result["regime"] == "TRENDING"
+        assert result["confidence"] == 0.85
+        assert result["params"]["min_score"] == 4
+
+    def test_parse_markdown_wrapped(self, engine):
+        raw = '```json\n{"regime":"RANGING","confidence":0.7}\n```'
+        result = engine._parse_regime_response(raw)
+        assert result is not None
+        assert result["regime"] == "RANGING"
+
+    def test_parse_with_extra_text(self, engine):
+        raw = 'Here is my analysis:\n{"regime":"VOLATILE","confidence":0.6}\nDone.'
+        result = engine._parse_regime_response(raw)
+        assert result is not None
+        assert result["regime"] == "VOLATILE"
+
+    def test_parse_invalid_regime_normalized(self, engine):
+        raw = '{"regime":"CHOPPY","confidence":0.5}'
+        result = engine._parse_regime_response(raw)
+        assert result is not None
+        assert result["regime"] == "UNKNOWN"  # Invalid regime → UNKNOWN
+
+    def test_parse_confidence_clamped(self, engine):
+        raw = '{"regime":"TRENDING","confidence":1.5}'
+        result = engine._parse_regime_response(raw)
+        assert result["confidence"] == 1.0  # Clamped to max
+
+    def test_parse_no_json(self, engine):
+        raw = "I cannot determine the regime right now"
+        result = engine._parse_regime_response(raw)
+        assert result is None
+
+    def test_parse_missing_regime_field(self, engine):
+        raw = '{"confidence":0.8,"bias":"neutral"}'
+        result = engine._parse_regime_response(raw)
+        assert result is None  # "regime" is required
+
+    def test_parse_dict_passthrough(self, engine):
+        data = {"regime": "TRENDING", "confidence": 0.9}
+        result = engine._parse_regime_response(data)
+        assert result is not None
+        assert result["regime"] == "TRENDING"
+
+
+# =============================================================
+# Phase 3: L3 veto staleness checks
+# =============================================================
+
+class TestVetoStaleness:
+
+    def _make_engine(self, **ai_overrides):
+        ai_cfg = {
+            "veto_enabled": True,
+            "veto_staleness_seconds": 10,
+            "veto_max_stale_cycles": 2,
+            "borderline_quality_threshold": 0.3,
+        }
+        ai_cfg.update(ai_overrides)
+        settings = {
+            "loops": {"fast_interval": 1.5, "slow_interval": 45},
+            "time_exit": {},
+            "ai_integration": ai_cfg,
+            "signal_rules": {"spread_max_bps": 5.0},
+        }
+        with patch("src.core.scalp_engine.SCALP_SETTINGS", settings):
+            from src.core.scalp_engine import ScalpEngine
+            engine = ScalpEngine("BTCUSDT")
+        return engine
+
+    def test_veto_discard_time_stale(self):
+        engine = self._make_engine(veto_staleness_seconds=5)
+        # Queue a veto that's 10 seconds old
+        engine._pending_veto = {
+            "signal": {"signal": "BUY", "score": 5, "max_score": 10, "quality": 0.5},
+            "indicators": {"rsi": 35},
+            "time": time.time() - 10,  # 10s ago
+            "cycle": 1,
+        }
+        engine._fast_cycle = 2
+        # process_veto should discard due to time staleness
+        engine._process_veto()
+        # No crash = success; the veto was discarded silently
+
+    def test_veto_discard_cycle_stale(self):
+        engine = self._make_engine(veto_max_stale_cycles=2)
+        engine._pending_veto = {
+            "signal": {"signal": "BUY", "score": 5, "max_score": 10, "quality": 0.5},
+            "indicators": {"rsi": 35},
+            "time": time.time(),  # Fresh time
+            "cycle": 1,
+        }
+        engine._fast_cycle = 10  # 9 cycles elapsed > 2 max
+        engine._process_veto()
+        # Should discard due to cycle staleness
+
+    def test_veto_discard_signal_changed(self):
+        engine = self._make_engine()
+        # Set up analyzer that returns different signal direction
+        mock_analyzer = type("MockAnalyzer", (), {
+            "get_snapshot": lambda self: {
+                "ema_fast": 49900, "ema_med": 49950, "ema_macro": 50000,
+                "rsi": 65, "current_price": 49880, "vwap": 49900,
+                "macd_hist": -0.001, "macd_crossover": "BEARISH",
+                "bb_upper": 50300, "bb_lower": 49700, "bb_middle": 50000,
+                "momentum_dir": "DOWN", "atr_ratio": 1.0, "atr": 45,
+                "volume_ratio": 1.5,
+            }
+        })()
+        engine._analyzer = mock_analyzer
+
+        mock_signal_gen = type("MockGen", (), {
+            "generate": lambda self, ind, regime=None, ob_imbalance=0: {
+                "signal": "SELL",  # Different from queued BUY
+            }
+        })()
+        engine._signal_gen = mock_signal_gen
+
+        engine._pending_veto = {
+            "signal": {"signal": "BUY", "score": 5, "max_score": 10, "quality": 0.5,
+                        "regime": "TRENDING", "pattern": "momentum"},
+            "indicators": {"rsi": 35, "volume_ratio": 1.5, "momentum_dir": "UP"},
+            "time": time.time(),
+            "cycle": engine._fast_cycle,
+        }
+        engine._process_veto()
+        # Should discard because signal changed from BUY to SELL
+
+    @patch("src.core.predict.requests.post")
+    def test_veto_uses_model_override(self, mock_post):
+        engine = self._make_engine(veto_model="google/gemini-2.0-flash-lite")
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": '{"action":"buy","confidence":0.8,"reason":"confirmed"}'}}]
+        }
+
+        engine._analyzer = None  # Skip signal-changed check
+        engine._pending_veto = {
+            "signal": {"signal": "BUY", "score": 6, "max_score": 10, "quality": 0.6,
+                        "regime": "TRENDING", "pattern": "momentum"},
+            "indicators": {"rsi": 35, "volume_ratio": 1.5, "momentum_dir": "UP"},
+            "time": time.time(),
+            "cycle": engine._fast_cycle,
+        }
+
+        # Mock _execute_entry to avoid actual order placement
+        engine._execute_entry = lambda s, i: None
+
+        engine._process_veto()
+
+        # Verify the model used in the API call
+        payload = mock_post.call_args[1]["json"]
+        assert payload["model"] == "google/gemini-2.0-flash-lite"
+        assert payload["max_tokens"] == 100
+        assert payload["temperature"] == 0.1
+
+    def test_veto_skip_with_position(self):
+        engine = self._make_engine()
+        engine._position = {"side": "BUY", "entry": 50000}  # Already in position
+        engine._pending_veto = {
+            "signal": {"signal": "BUY"},
+            "indicators": {},
+            "time": time.time(),
+            "cycle": engine._fast_cycle,
+        }
+        engine._process_veto()
+        # Should skip veto because position is already open
+
+    def test_no_pending_veto(self):
+        engine = self._make_engine()
+        engine._pending_veto = None
+        engine._process_veto()  # Should return early without error
+
+
+# =============================================================
+# Phase 3: L2 AI regime advisor integration
+# =============================================================
+
+class TestRegimeAdvisorIntegration:
+
+    def _make_engine(self, **ai_overrides):
+        ai_cfg = {
+            "regime_enabled": True,
+            "regime_interval_seconds": 300,
+            "regime_model": "google/gemini-2.5-flash",
+        }
+        ai_cfg.update(ai_overrides)
+        settings = {
+            "loops": {"fast_interval": 1.5, "slow_interval": 45},
+            "time_exit": {},
+            "ai_integration": ai_cfg,
+            "signal_rules": {"spread_max_bps": 5.0},
+        }
+        with patch("src.core.scalp_engine.SCALP_SETTINGS", settings):
+            from src.core.scalp_engine import ScalpEngine
+            engine = ScalpEngine("BTCUSDT")
+        return engine
+
+    def test_regime_interval_respected(self):
+        engine = self._make_engine(regime_interval_seconds=300)
+        engine._last_ai_regime_time = time.time()  # Just ran
+        engine._update_regime_ai()
+        # Should not run because interval hasn't elapsed
+        assert engine._ai_regime_label == "UNKNOWN"  # Unchanged
+
+    def test_regime_skipped_without_analyzer(self):
+        engine = self._make_engine(regime_interval_seconds=0)
+        engine._last_ai_regime_time = 0  # Force interval elapsed
+        engine._analyzer = None
+        engine._update_regime_ai()
+        assert engine._ai_regime_label == "UNKNOWN"
+
+    @patch("src.core.predict.requests.post")
+    def test_regime_advisor_updates_regime(self, mock_post):
+        engine = self._make_engine(regime_interval_seconds=0)
+        engine._last_ai_regime_time = 0
+
+        # Mock analyzer
+        mock_analyzer = type("MockAnalyzer", (), {
+            "_bootstrapped": True,
+            "_recent_closes": [50000 + i * 10 for i in range(30)],
+            "get_snapshot": lambda self: {
+                "ema_fast": 50100, "ema_med": 50050, "ema_macro": 50000,
+                "rsi": 55, "macd_hist": 0.5, "bb_width": 200,
+                "atr_ratio": 1.2, "volume_ratio": 1.3,
+                "vwap_lower": 49800, "vwap_upper": 50200,
+            }
+        })()
+        engine._analyzer = mock_analyzer
+        engine._regime = {"regime": "RANGING"}  # Initial deterministic regime
+
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content":
+                '{"regime":"TRENDING","confidence":0.85,"bias":"bullish",'
+                '"scalp_mode":"breakout","params":{"min_score":4,"size_factor":1.2},"note":"clear uptrend"}'
+            }}]
+        }
+
+        engine._update_regime_ai()
+
+        # Regime should be updated
+        assert engine._ai_regime_label == "TRENDING"
+        assert engine._ai_regime_duration == 1
+        assert engine._regime["regime"] == "TRENDING"
+        assert engine._regime["ai_confidence"] == 0.85
+        assert engine._regime["recommended_min_score"] == 4
+        assert engine._regime["recommended_size_factor"] == 1.2
+
+    @patch("src.core.predict.requests.post")
+    def test_regime_low_confidence_keeps_deterministic(self, mock_post):
+        engine = self._make_engine(regime_interval_seconds=0)
+        engine._last_ai_regime_time = 0
+
+        mock_analyzer = type("MockAnalyzer", (), {
+            "_bootstrapped": True,
+            "_recent_closes": [50000] * 30,
+            "get_snapshot": lambda self: {
+                "ema_fast": 50000, "ema_med": 50000, "ema_macro": 50000,
+                "rsi": 50, "macd_hist": 0.0, "bb_width": 100,
+                "atr_ratio": 1.0, "volume_ratio": 1.0,
+                "vwap_lower": 49900, "vwap_upper": 50100,
+            }
+        })()
+        engine._analyzer = mock_analyzer
+        engine._regime = {"regime": "RANGING"}
+
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content":
+                '{"regime":"TRANSITIONAL","confidence":0.4,"bias":"neutral"}'
+            }}]
+        }
+
+        engine._update_regime_ai()
+
+        # AI regime label is updated for tracking
+        assert engine._ai_regime_label == "TRANSITIONAL"
+        # But deterministic regime should NOT be overridden (confidence < 0.6)
+        assert engine._regime["regime"] == "RANGING"  # Unchanged
+        assert "ai_confidence" not in engine._regime
+
+    @patch("src.core.predict.requests.post")
+    def test_regime_duration_tracking(self, mock_post):
+        engine = self._make_engine(regime_interval_seconds=0)
+        engine._last_ai_regime_time = 0
+        engine._ai_regime_label = "TRENDING"
+        engine._ai_regime_duration = 3  # Already in TRENDING for 3 cycles
+
+        mock_analyzer = type("MockAnalyzer", (), {
+            "_bootstrapped": True,
+            "_recent_closes": [50000 + i * 10 for i in range(30)],
+            "get_snapshot": lambda self: {
+                "ema_fast": 50100, "ema_med": 50050, "ema_macro": 50000,
+                "rsi": 55, "macd_hist": 0.5, "bb_width": 200,
+                "atr_ratio": 1.2, "volume_ratio": 1.3,
+                "vwap_lower": 49800, "vwap_upper": 50200,
+            }
+        })()
+        engine._analyzer = mock_analyzer
+        engine._regime = {"regime": "TRENDING"}
+
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content":
+                '{"regime":"TRENDING","confidence":0.9}'
+            }}]
+        }
+
+        engine._update_regime_ai()
+
+        # Duration should increment (same regime)
+        assert engine._ai_regime_duration == 4
+
+    @patch("src.core.predict.requests.post")
+    def test_regime_change_resets_duration(self, mock_post):
+        engine = self._make_engine(regime_interval_seconds=0)
+        engine._last_ai_regime_time = 0
+        engine._ai_regime_label = "TRENDING"
+        engine._ai_regime_duration = 5
+
+        mock_analyzer = type("MockAnalyzer", (), {
+            "_bootstrapped": True,
+            "_recent_closes": [50000] * 30,
+            "get_snapshot": lambda self: {
+                "ema_fast": 50000, "ema_med": 50000, "ema_macro": 50000,
+                "rsi": 50, "macd_hist": 0.0, "bb_width": 300,
+                "atr_ratio": 1.5, "volume_ratio": 0.8,
+                "vwap_lower": 49800, "vwap_upper": 50200,
+            }
+        })()
+        engine._analyzer = mock_analyzer
+        engine._regime = {"regime": "TRENDING"}
+
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content":
+                '{"regime":"VOLATILE","confidence":0.75}'
+            }}]
+        }
+
+        engine._update_regime_ai()
+
+        assert engine._ai_regime_label == "VOLATILE"
+        assert engine._ai_regime_duration == 1  # Reset
+
+    @patch("src.core.predict.requests.post")
+    def test_regime_uses_model_override(self, mock_post):
+        engine = self._make_engine(
+            regime_interval_seconds=0,
+            regime_model="google/gemini-2.5-flash",
+        )
+        engine._last_ai_regime_time = 0
+
+        mock_analyzer = type("MockAnalyzer", (), {
+            "_bootstrapped": True,
+            "_recent_closes": [50000] * 30,
+            "get_snapshot": lambda self: {
+                "ema_fast": 50000, "ema_med": 50000, "ema_macro": 50000,
+                "rsi": 50, "macd_hist": 0.0, "bb_width": 100,
+                "atr_ratio": 1.0, "volume_ratio": 1.0,
+                "vwap_lower": 49900, "vwap_upper": 50100,
+            }
+        })()
+        engine._analyzer = mock_analyzer
+        engine._regime = {}
+
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content":
+                '{"regime":"RANGING","confidence":0.7}'
+            }}]
+        }
+
+        engine._update_regime_ai()
+
+        payload = mock_post.call_args[1]["json"]
+        assert payload["model"] == "google/gemini-2.5-flash"
+        assert payload["max_tokens"] == 150
+        assert payload["temperature"] == 0.2

@@ -7,22 +7,33 @@ from src.utils.logger import info, error, warning
 # HTTP status codes worth retrying
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
-def get_prediction(prompt):
-    """Отправляет промпт в AI (OpenRouter) и получает ответ"""
+def get_prediction(prompt, model=None, max_tokens=None, temperature=None):
+    """Отправляет промпт в AI (OpenRouter) и получает ответ.
+
+    Args:
+        prompt: Текст промпта
+        model: Опциональная модель (по умолчанию AI_MODEL из конфига)
+        max_tokens: Опциональный лимит токенов (по умолчанию AI_MAX_TOKENS)
+        temperature: Опциональная температура (по умолчанию AI_TEMPERATURE)
+    """
     url = AI_BASE_URL
     headers = {
         "Authorization": f"Bearer {AI_API_KEY}",
         "Content-Type": "application/json"
     }
 
+    use_model = model or AI_MODEL
+    use_max_tokens = max_tokens if max_tokens is not None else AI_MAX_TOKENS
+    use_temperature = temperature if temperature is not None else AI_TEMPERATURE
+
     if AI_PROVIDER == "openrouter":
         headers["HTTP-Referer"] = "https://github.com/xierongchuan/OpenProducer" # Replace with actual site if exists
         headers["X-Title"] = "OpenProducerBot"
     payload = {
-        "model": AI_MODEL,
+        "model": use_model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": AI_MAX_TOKENS,
-        "temperature": AI_TEMPERATURE,
+        "max_tokens": use_max_tokens,
+        "temperature": use_temperature,
     }
 
     if AI_REASONING.get("enabled", False):
@@ -35,12 +46,12 @@ def get_prediction(prompt):
             reasoning["exclude"] = AI_REASONING["exclude"]
         payload["reasoning"] = reasoning
 
-    # OpenRouter: provider routing and model fallbacks
-    if AI_PROVIDER == "openrouter":
+    # OpenRouter: provider routing and model fallbacks (only for default model)
+    if AI_PROVIDER == "openrouter" and not model:
         if AI_PROVIDER_ROUTING:
             payload["provider"] = AI_PROVIDER_ROUTING
         if AI_FALLBACK_MODELS:
-            payload["models"] = [AI_MODEL] + AI_FALLBACK_MODELS
+            payload["models"] = [use_model] + AI_FALLBACK_MODELS
             del payload["model"]
 
     last_error = None
