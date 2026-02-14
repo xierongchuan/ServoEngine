@@ -331,6 +331,9 @@ class ScalpEngine:
         self._trailing = TrailingStopManager()
         self._session = ScalpSession(symbol)
 
+        # Spread filter
+        self._spread_max_bps = SCALP_SETTINGS.get("signal_rules", {}).get("spread_max_bps", 5.0)
+
         # Shared state between fast/slow loops (protected by lock)
         self._lock = threading.Lock()
         self._regime: Optional[Dict] = None
@@ -339,6 +342,8 @@ class ScalpEngine:
         self._pending_veto: Optional[Dict] = None
         self._veto_result: Optional[Dict] = None
         self._veto_time: float = 0.0
+        self._ob_imbalance: float = 0.0
+        self._ob_spread_bps: float = 0.0
         self._running = True
 
         # Lazy-loaded components
@@ -449,17 +454,20 @@ class ScalpEngine:
                 if self._regime_enabled:
                     self._update_regime()
 
-                # 4. Process pending AI veto
+                # 4. Update order book cache (OB imbalance + spread)
+                self._update_order_book()
+
+                # 5. Process pending AI veto
                 if self._veto_enabled and self._pending_veto:
                     self._process_veto()
 
-                # 5. Re-bootstrap analyzer if needed
+                # 6. Re-bootstrap analyzer if needed
                 if self._analyzer and not self._analyzer._bootstrapped:
                     candles = self._get_candles(300)
                     if candles:
                         self._analyzer.bootstrap(candles)
 
-                # 6. Log session stats
+                # 7. Log session stats
                 stats = self._session.stats
                 info(f"[SCALP] {self.symbol}: Session: trades={stats['trades_today']} "
                      f"PnL={stats['daily_pnl_pct']:.2f}% W/L={stats['wins']}/{stats['losses']}")
@@ -525,17 +533,15 @@ class ScalpEngine:
         if not can_trade:
             return
 
-        # Get order book imbalance
-        ob_imbalance = 0.0
-        try:
-            ob = self._client.get_order_book(self.symbol, limit=10)
-            if ob:
-                from src.core.scalp_signal import calculate_ob_imbalance
-                ob_imbalance = calculate_ob_imbalance(ob)
-        except Exception:
-            pass  # OB fetch failure is non-critical
+        # Spread filter — reject signals when spread is too wide
+        with self._lock:
+            ob_imbalance = self._ob_imbalance
+            spread_bps = self._ob_spread_bps
 
-        # Generate signal
+        if spread_bps > self._spread_max_bps > 0:
+            return  # Spread too wide, skip this cycle
+
+        # Generate signal (uses cached OB imbalance from slow loop)
         signal = self._signal_gen.generate(indicators, regime=regime, ob_imbalance=ob_imbalance)
 
         if signal["signal"] == "HOLD":
@@ -651,6 +657,34 @@ class ScalpEngine:
                      f"(trailing={'YES' if self._trailing.is_trailing else 'NO'})")
         except Exception as e:
             warning(f"[SCALP] {self.symbol}: SL update failed: {e}")
+
+    def _update_order_book(self):
+        """Update cached order book imbalance and spread (slow loop)."""
+        try:
+            ob = self._client.get_order_book(self.symbol, limit=10)
+            if not ob:
+                return
+
+            from src.core.scalp_signal import calculate_ob_imbalance
+            imbalance = calculate_ob_imbalance(ob)
+
+            # Calculate bid-ask spread in basis points
+            bids = ob.get("bids", [])
+            asks = ob.get("asks", [])
+            spread_bps = 0.0
+            if bids and asks:
+                best_bid = float(bids[0][0])
+                best_ask = float(asks[0][0])
+                mid = (best_bid + best_ask) / 2
+                if mid > 0:
+                    spread_bps = (best_ask - best_bid) / mid * 10000
+
+            with self._lock:
+                self._ob_imbalance = imbalance
+                self._ob_spread_bps = spread_bps
+
+        except Exception as e:
+            warning(f"[SCALP] {self.symbol}: OB update error: {e}")
 
     def _sync_position(self):
         """Sync position state from exchange."""

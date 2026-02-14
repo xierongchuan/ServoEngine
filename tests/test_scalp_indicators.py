@@ -1,0 +1,568 @@
+"""
+Unit tests for SCALP Phase 2 indicators:
+- LightweightAnalyzer (VWAP, MACD crossover, incremental updates)
+- ScalpSignalGenerator (scoring, patterns, OB imbalance)
+- calculate_ob_imbalance, calculate_ob_spread_bps
+"""
+
+import time
+import math
+import pytest
+from unittest.mock import patch
+
+# Test config to avoid importing real SCALP_SETTINGS
+TEST_SCALP_SETTINGS = {
+    "signal_rules": {
+        "ema_periods": [5, 13],
+        "ema_macro": 21,
+        "rsi_period": 7,
+        "macd_params": [6, 13, 5],
+        "atr_period": 10,
+        "atr_fast_period": 5,
+        "bb_period": 20,
+        "bb_std": 2.0,
+        "ema_weight": 2,
+        "momentum_weight": 1,
+        "rsi_weight": 2,
+        "vwap_weight": 1,
+        "volume_weight": 1,
+        "ob_imbalance_weight": 1,
+        "macd_weight": 1,
+        "bb_weight": 1,
+        "rsi_long_zone": [25, 40],
+        "rsi_short_zone": [60, 75],
+        "ob_imbalance_threshold": 0.3,
+        "spread_max_bps": 5.0,
+        "min_score_for_signal": 4,
+        "auto_execute_quality": 0.6,
+        "tier1_required": True,
+        "conflict_friction_threshold": 2,
+    },
+    "interaction_rules": {
+        "momentum_burst_bonus": 2,
+        "vwap_bounce_bonus": 1,
+        "ob_confluence_bonus": 1,
+        "counter_momentum_penalty": -2,
+        "spike_penalty": -1,
+    },
+    "regime_overrides": {
+        "TRENDING": {"ema_weight": 3, "rsi_weight": 1, "bb_weight": 0, "min_score": 3},
+        "RANGING": {"ema_weight": 1, "rsi_weight": 3, "bb_weight": 2, "min_score": 6},
+        "VOLATILE": {"ema_weight": 2, "volume_weight": 2, "min_score": 5},
+        "TRANSITIONAL": {"min_score": 7},
+    },
+}
+
+
+def _make_candles(count, base_price=50000.0, spread=100.0, base_volume=1000.0,
+                  start_ts=None, interval_ms=60000):
+    """Generate synthetic candle data for testing."""
+    if start_ts is None:
+        # Start from midnight UTC today
+        now = time.time()
+        midnight = now - (now % 86400)
+        start_ts = int(midnight * 1000)
+
+    candles = []
+    price = base_price
+    for i in range(count):
+        # Zigzag pattern
+        direction = 1 if i % 6 < 3 else -1
+        price += direction * spread * 0.1
+        high = price + spread * 0.3
+        low = price - spread * 0.3
+        open_p = price - direction * spread * 0.05
+        vol = base_volume + (i % 5) * 200
+
+        candles.append({
+            "openPrice": open_p,
+            "highPrice": high,
+            "lowPrice": low,
+            "closePrice": price,
+            "volume": vol,
+            "timestamp": start_ts + i * interval_ms,
+        })
+    return candles
+
+
+# =============================================================
+# LightweightAnalyzer tests
+# =============================================================
+
+class TestLightweightAnalyzer:
+
+    @pytest.fixture
+    def analyzer(self):
+        with patch("src.core.lightweight_analyzer.SCALP_SETTINGS", TEST_SCALP_SETTINGS):
+            from src.core.lightweight_analyzer import LightweightAnalyzer
+            return LightweightAnalyzer("BTCUSDT", config=TEST_SCALP_SETTINGS["signal_rules"])
+
+    def test_bootstrap_requires_min_candles(self, analyzer):
+        candles = _make_candles(10)
+        assert analyzer.bootstrap(candles) is False
+
+    def test_bootstrap_success(self, analyzer):
+        candles = _make_candles(50)
+        assert analyzer.bootstrap(candles) is True
+        assert analyzer._bootstrapped is True
+
+    def test_bootstrap_ema_ordering(self, analyzer):
+        # Trending up candles — EMA fast should be above EMA med
+        candles = []
+        price = 50000.0
+        ts = int((time.time() - time.time() % 86400) * 1000)
+        for i in range(60):
+            price += 10  # Steady uptrend
+            candles.append({
+                "openPrice": price - 5,
+                "highPrice": price + 5,
+                "lowPrice": price - 10,
+                "closePrice": price,
+                "volume": 1000,
+                "timestamp": ts + i * 60000,
+            })
+        analyzer.bootstrap(candles)
+        snap = analyzer.get_snapshot()
+        assert snap["ema_fast"] > snap["ema_med"]
+        assert snap["ema_med"] > snap["ema_macro"]
+
+    def test_snapshot_has_vwap_fields(self, analyzer):
+        candles = _make_candles(50)
+        analyzer.bootstrap(candles)
+        snap = analyzer.get_snapshot()
+        assert "vwap" in snap
+        assert "vwap_dist_pct" in snap
+        assert "vwap_upper" in snap
+        assert "vwap_lower" in snap
+        assert snap["vwap"] > 0
+
+    def test_vwap_deviation(self, analyzer):
+        candles = _make_candles(50)
+        analyzer.bootstrap(candles)
+        snap = analyzer.get_snapshot()
+        # VWAP dist should be small for zigzag around same price
+        assert abs(snap["vwap_dist_pct"]) < 5.0
+        # VWAP bands should be around VWAP
+        assert snap["vwap_lower"] <= snap["vwap"] <= snap["vwap_upper"]
+
+    def test_vwap_session_reset(self, analyzer):
+        # Create candles spanning two days
+        now = time.time()
+        yesterday_midnight = now - (now % 86400) - 86400
+        ts_start = int(yesterday_midnight * 1000)
+
+        # 30 candles from yesterday + 30 from today
+        candles = _make_candles(30, start_ts=ts_start, base_price=49000)
+        today_start = ts_start + 30 * 60000 + int(86400 * 1000)  # Jump to today
+        candles += _make_candles(30, start_ts=today_start, base_price=51000)
+
+        analyzer.bootstrap(candles)
+        # VWAP should be based on today's candles only (~51000 area)
+        snap = analyzer.get_snapshot()
+        assert snap["vwap"] > 50500  # Should be around 51000, not 50000
+
+    def test_vwap_uses_all_session_candles(self, analyzer):
+        """VWAP bootstrap should use ALL candles from current session, not just last 60."""
+        ts = int((time.time() - time.time() % 86400) * 1000)
+        # Create 200 candles all in same session
+        candles = _make_candles(200, start_ts=ts)
+        analyzer.bootstrap(candles)
+
+        # Manually calculate VWAP from all 200 candles
+        cum_tp_vol = 0.0
+        cum_vol = 0.0
+        for c in candles:
+            tp = (c["highPrice"] + c["lowPrice"] + c["closePrice"]) / 3.0
+            vol = c["volume"]
+            cum_tp_vol += tp * vol
+            cum_vol += vol
+        expected_vwap = cum_tp_vol / cum_vol
+
+        snap = analyzer.get_snapshot()
+        assert abs(snap["vwap"] - expected_vwap) < 0.1
+
+    def test_macd_crossover_detection(self, analyzer):
+        snap = analyzer.get_snapshot()
+        assert "macd_crossover" in snap
+        assert snap["macd_crossover"] in ("BULLISH", "BEARISH", "NONE")
+
+    def test_macd_crossover_bullish(self, analyzer):
+        """Force MACD histogram from negative to positive."""
+        # Create downtrend then uptrend
+        ts = int((time.time() - time.time() % 86400) * 1000)
+        price = 50000.0
+        candles = []
+        # 40 candles downtrend
+        for i in range(40):
+            price -= 20
+            candles.append({
+                "openPrice": price + 10, "highPrice": price + 20,
+                "lowPrice": price - 5, "closePrice": price,
+                "volume": 1000, "timestamp": ts + i * 60000,
+            })
+        # 20 candles uptrend (to cause crossover)
+        for i in range(20):
+            price += 50
+            candles.append({
+                "openPrice": price - 20, "highPrice": price + 10,
+                "lowPrice": price - 25, "closePrice": price,
+                "volume": 1500, "timestamp": ts + (40 + i) * 60000,
+            })
+
+        analyzer.bootstrap(candles)
+        snap = analyzer.get_snapshot()
+        # After strong uptrend, MACD should be positive
+        assert snap["macd_hist"] > 0
+
+    def test_incremental_update(self, analyzer):
+        candles = _make_candles(50)
+        analyzer.bootstrap(candles)
+        snap1 = analyzer.get_snapshot()
+
+        # Add a new candle with higher price
+        new_candle = {
+            "openPrice": 50200, "highPrice": 50300,
+            "lowPrice": 50100, "closePrice": 50250,
+            "volume": 2000,
+            "timestamp": candles[-1]["timestamp"] + 60000,
+        }
+        snap2 = analyzer.update(new_candle)
+
+        assert snap2["candle_count"] == snap1["candle_count"] + 1
+        assert snap2["current_price"] == 50250
+
+    def test_same_candle_no_increment(self, analyzer):
+        candles = _make_candles(50)
+        analyzer.bootstrap(candles)
+        snap1 = analyzer.get_snapshot()
+
+        # Update with same timestamp (live tick)
+        tick = {
+            "openPrice": candles[-1]["openPrice"],
+            "highPrice": candles[-1]["highPrice"],
+            "lowPrice": candles[-1]["lowPrice"],
+            "closePrice": candles[-1]["closePrice"] + 10,
+            "volume": candles[-1]["volume"],
+            "timestamp": candles[-1]["timestamp"],  # Same timestamp
+        }
+        snap2 = analyzer.update(tick)
+        assert snap2["candle_count"] == snap1["candle_count"]  # No increment
+
+
+# =============================================================
+# ScalpSignalGenerator tests
+# =============================================================
+
+class TestScalpSignalGenerator:
+
+    @pytest.fixture
+    def generator(self):
+        with patch("src.core.scalp_signal.SCALP_SETTINGS", TEST_SCALP_SETTINGS):
+            from src.core.scalp_signal import ScalpSignalGenerator
+            return ScalpSignalGenerator(config=TEST_SCALP_SETTINGS)
+
+    def _bullish_indicators(self):
+        return {
+            "ema_fast": 50100, "ema_med": 50050, "ema_macro": 50000,
+            "rsi": 35, "volume_ratio": 1.5,
+            "current_price": 50120, "vwap": 50100,
+            "macd_hist": 0.001, "macd_crossover": "BULLISH",
+            "bb_upper": 50300, "bb_lower": 49700,
+            "momentum_dir": "UP", "atr_ratio": 1.0,
+            "atr": 45, "bb_middle": 50000,
+        }
+
+    def _bearish_indicators(self):
+        return {
+            "ema_fast": 49900, "ema_med": 49950, "ema_macro": 50000,
+            "rsi": 65, "volume_ratio": 1.5,
+            "current_price": 49880, "vwap": 49900,
+            "macd_hist": -0.001, "macd_crossover": "BEARISH",
+            "bb_upper": 50300, "bb_lower": 49700,
+            "momentum_dir": "DOWN", "atr_ratio": 1.0,
+            "atr": 45, "bb_middle": 50000,
+        }
+
+    def _neutral_indicators(self):
+        return {
+            "ema_fast": 50000, "ema_med": 50000, "ema_macro": 50000,
+            "rsi": 50, "volume_ratio": 0.8,
+            "current_price": 50000, "vwap": 50000,
+            "macd_hist": 0.0, "macd_crossover": "NONE",
+            "bb_upper": 50200, "bb_lower": 49800,
+            "momentum_dir": "MIXED", "atr_ratio": 1.0,
+            "atr": 45, "bb_middle": 50000,
+        }
+
+    def test_bullish_signal(self, generator):
+        result = generator.generate(self._bullish_indicators())
+        assert result["signal"] == "BUY"
+        assert result["score"] >= 4
+        assert result["quality"] > 0.0
+
+    def test_bearish_signal(self, generator):
+        result = generator.generate(self._bearish_indicators())
+        assert result["signal"] == "SELL"
+        assert result["score"] >= 4
+
+    def test_neutral_hold(self, generator):
+        result = generator.generate(self._neutral_indicators())
+        assert result["signal"] == "HOLD"
+
+    def test_tier1_required(self, generator):
+        """Signal should be HOLD if tier1 indicators don't confirm."""
+        ind = self._neutral_indicators()
+        # Give high RSI weight but no EMA/momentum direction
+        ind["rsi"] = 35  # In long zone
+        ind["volume_ratio"] = 1.5
+        ind["macd_hist"] = 0.001
+        ind["bb_lower"] = 50010  # Near BB lower
+        ind["current_price"] = 50005
+        # EMA neutral (no tier1)
+        ind["ema_fast"] = 50000
+        ind["ema_med"] = 50000
+        ind["momentum_dir"] = "MIXED"
+        result = generator.generate(ind)
+        # Without tier1 confirmation, even high score should HOLD
+        assert result["signal"] == "HOLD"
+
+    def test_regime_overrides_min_score(self, generator):
+        """RANGING regime should require higher min_score."""
+        ind = self._bullish_indicators()
+        ind["volume_ratio"] = 0.8  # Lower volume to reduce score
+        regime = {"regime": "RANGING"}
+        result = generator.generate(ind, regime=regime)
+        # RANGING requires min_score=6, harder to reach
+        # Check that the min_score is applied
+        details = result["details"]
+        assert details["min_score_required"] == 6
+
+    def test_ob_imbalance_scoring(self, generator):
+        """Positive OB imbalance should boost long score."""
+        ind = self._bullish_indicators()
+        result_no_ob = generator.generate(ind, ob_imbalance=0.0)
+        result_with_ob = generator.generate(ind, ob_imbalance=0.5)
+        assert result_with_ob["score"] >= result_no_ob["score"]
+
+    def test_momentum_burst_bonus(self, generator):
+        """EMA aligned + Volume > 1.5x + momentum UP should give bonus."""
+        ind = self._bullish_indicators()
+        ind["volume_ratio"] = 2.0
+        ind["momentum_dir"] = "UP"
+        result = generator.generate(ind)
+        assert any("MomBurst" in r for r in result["reasons"])
+
+    def test_counter_momentum_penalty(self, generator):
+        """EMA long + RSI > 70 should apply penalty."""
+        ind = self._bullish_indicators()
+        ind["rsi"] = 75  # Overbought against long
+        result = generator.generate(ind)
+        assert any("CounterMom" in r for r in result["reasons"])
+
+    def test_exit_rsi_extreme(self, generator):
+        position = {"type": "BUY", "entry": 50000, "avgPrice": 50000}
+        indicators = self._bullish_indicators()
+        indicators["rsi"] = 85  # > 80
+        exit_signal = generator.check_exit(indicators, position)
+        assert exit_signal["should_close"] is True
+        assert "RSI" in exit_signal["reason"]
+
+    def test_exit_volume_capitulation(self, generator):
+        position = {"type": "BUY", "entry": 50000, "avgPrice": 50000}
+        indicators = self._bullish_indicators()
+        indicators["current_price"] = 49900  # At loss
+        indicators["volume_ratio"] = 2.5  # Volume spike
+        exit_signal = generator.check_exit(indicators, position)
+        assert exit_signal["should_close"] is True
+        assert "Capitulation" in exit_signal["reason"]
+
+    def test_pattern_momentum(self, generator):
+        ind = self._bullish_indicators()
+        ind["volume_ratio"] = 1.5
+        ind["rsi"] = 55
+        result = generator.generate(ind)
+        assert result["pattern"] in ("momentum", "pullback", "generic")
+
+    def test_pattern_mean_reversion(self, generator):
+        ind = self._bullish_indicators()
+        ind["current_price"] = 49700
+        ind["bb_lower"] = 49710  # Price at BB lower
+        ind["rsi"] = 25  # Oversold
+        ind["ema_fast"] = 49750  # EMA still confirms direction
+        regime = {"regime": "RANGING"}
+        result = generator.generate(ind, regime=regime)
+        if result["signal"] == "BUY":
+            assert result["pattern"] == "mean_reversion"
+
+    def test_macd_crossover_annotation(self, generator):
+        """MACD crossover should appear in reasons."""
+        ind = self._bullish_indicators()
+        ind["macd_crossover"] = "BULLISH"
+        result = generator.generate(ind)
+        assert any("MACDx" in r for r in result["reasons"])
+
+
+# =============================================================
+# OB imbalance & spread tests
+# =============================================================
+
+class TestOrderBookUtils:
+
+    def test_ob_imbalance_bullish(self):
+        from src.core.scalp_signal import calculate_ob_imbalance
+        ob = {
+            "bids": [[50000, 10], [49999, 8], [49998, 5]],
+            "asks": [[50001, 3], [50002, 2], [50003, 1]],
+        }
+        imbalance = calculate_ob_imbalance(ob, levels=3)
+        assert imbalance > 0  # More bids = bullish
+        assert imbalance <= 1.0
+
+    def test_ob_imbalance_bearish(self):
+        from src.core.scalp_signal import calculate_ob_imbalance
+        ob = {
+            "bids": [[50000, 1], [49999, 1], [49998, 1]],
+            "asks": [[50001, 10], [50002, 8], [50003, 5]],
+        }
+        imbalance = calculate_ob_imbalance(ob, levels=3)
+        assert imbalance < 0  # More asks = bearish
+
+    def test_ob_imbalance_balanced(self):
+        from src.core.scalp_signal import calculate_ob_imbalance
+        ob = {
+            "bids": [[50000, 5], [49999, 5]],
+            "asks": [[50001, 5], [50002, 5]],
+        }
+        imbalance = calculate_ob_imbalance(ob, levels=2)
+        assert abs(imbalance) < 0.01  # Balanced
+
+    def test_ob_imbalance_empty(self):
+        from src.core.scalp_signal import calculate_ob_imbalance
+        assert calculate_ob_imbalance({}) == 0.0
+        assert calculate_ob_imbalance({"bids": [], "asks": []}) == 0.0
+
+    def test_ob_spread_bps(self):
+        from src.core.scalp_signal import calculate_ob_spread_bps
+        ob = {
+            "bids": [[50000, 10]],
+            "asks": [[50005, 10]],
+        }
+        spread = calculate_ob_spread_bps(ob)
+        # Spread = 5, mid = 50002.5, spread_bps = 5/50002.5 * 10000 ≈ 1.0
+        assert 0.9 < spread < 1.1
+
+    def test_ob_spread_bps_wide(self):
+        from src.core.scalp_signal import calculate_ob_spread_bps
+        ob = {
+            "bids": [[49950, 10]],
+            "asks": [[50050, 10]],
+        }
+        spread = calculate_ob_spread_bps(ob)
+        # Spread = 100, mid = 50000, spread_bps = 100/50000 * 10000 = 20
+        assert 19.5 < spread < 20.5
+
+    def test_ob_spread_bps_empty(self):
+        from src.core.scalp_signal import calculate_ob_spread_bps
+        assert calculate_ob_spread_bps({}) == 0.0
+
+
+# =============================================================
+# TrailingStopManager tests
+# =============================================================
+
+class TestTrailingStopManager:
+
+    @pytest.fixture
+    def trailing(self):
+        with patch("src.core.scalp_engine.SCALP_SETTINGS", TEST_SCALP_SETTINGS):
+            from src.core.scalp_engine import TrailingStopManager
+            sl_tp_cfg = {"sl_atr_mult": 1.0, "tp_atr_mult": 3.0,
+                         "trailing_activation_mult": 1.5, "trailing_distance_mult": 0.5}
+            return TrailingStopManager(config=sl_tp_cfg)
+
+    def test_init_long_position(self, trailing):
+        trailing.init_position("BUY", 50000, atr=50)
+        assert trailing.current_sl == 50000 - 50  # entry - ATR*1.0
+        assert trailing.initial_tp == 50000 + 150  # entry + ATR*3.0
+
+    def test_init_short_position(self, trailing):
+        trailing.init_position("SELL", 50000, atr=50)
+        assert trailing.current_sl == 50000 + 50
+        assert trailing.initial_tp == 50000 - 150
+
+    def test_trailing_activation_long(self, trailing):
+        trailing.init_position("BUY", 50000, atr=50)
+        # Price moves up by 1.5x ATR (activation threshold)
+        trailing._last_sl_update_time = 0  # Reset throttle
+        new_sl = trailing.update(50075, atr=50)  # 1.5x ATR profit
+        assert trailing.is_trailing is True
+
+    def test_reset(self, trailing):
+        trailing.init_position("BUY", 50000, atr=50)
+        trailing.reset()
+        assert trailing.current_sl == 0.0
+        assert trailing.is_trailing is False
+
+
+# =============================================================
+# ScalpSession tests
+# =============================================================
+
+class TestScalpSession:
+
+    @pytest.fixture
+    def session(self):
+        with patch("src.core.scalp_engine.SCALP_SETTINGS", TEST_SCALP_SETTINGS):
+            from src.core.scalp_engine import ScalpSession
+            risk_cfg = {
+                "max_consecutive_losses": 3,
+                "consecutive_loss_cooldown_minutes": 5,
+                "daily_loss_limit_pct": 3.0,
+                "hourly_loss_limit_pct": 1.0,
+                "max_trades_per_hour": 6,
+                "max_trades_per_day": 50,
+                "min_cooldown_seconds": 2,
+            }
+            return ScalpSession("BTCUSDT", config=risk_cfg)
+
+    def test_can_trade_initial(self, session):
+        allowed, reason = session.can_trade()
+        assert allowed is True
+
+    def test_cooldown_between_trades(self, session):
+        session.record_entry()
+        allowed, reason = session.can_trade()
+        assert allowed is False
+        assert "Cooldown" in reason
+
+    def test_consecutive_loss_pause(self, session):
+        session._min_cooldown_sec = 0  # Disable cooldown for test
+        for _ in range(3):
+            session.record_entry()
+            session.record_exit(-0.5)
+        allowed, reason = session.can_trade()
+        assert allowed is False
+        assert "Paused" in reason
+
+    def test_daily_loss_limit(self, session):
+        session._min_cooldown_sec = 0
+        # Initialize session date so _check_reset doesn't zero counters
+        session._session_date = time.strftime('%Y-%m-%d', time.gmtime())
+        session._session_hour = time.gmtime().tm_hour
+        session.record_entry()
+        session.record_exit(-3.5)  # Exceeds 3% daily limit
+        allowed, reason = session.can_trade()
+        assert allowed is False
+        assert "Daily" in reason
+
+    def test_win_resets_consecutive(self, session):
+        session._min_cooldown_sec = 0
+        session.record_entry()
+        session.record_exit(-0.5)
+        session.record_entry()
+        session.record_exit(-0.5)
+        # 2 consecutive losses
+        assert session._consecutive_losses == 2
+        session.record_entry()
+        session.record_exit(1.0)  # Win
+        assert session._consecutive_losses == 0

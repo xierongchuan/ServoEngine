@@ -153,13 +153,18 @@ class ScalpSignalGenerator:
                 short_score += ob_w
                 short_reasons.append(f"OB↓ {ob_imbalance:.2f} +{ob_w}")
 
-        # 3c. MACD histogram
+        # 3c. MACD histogram + crossover boost
+        macd_crossover = indicators.get("macd_crossover", "NONE")
         if macd_hist > 0:
             long_score += macd_w
             long_reasons.append(f"MACD↑ +{macd_w}")
+            if macd_crossover == "BULLISH":
+                long_reasons.append("MACDx↑")
         elif macd_hist < 0:
             short_score += macd_w
             short_reasons.append(f"MACD↓ +{macd_w}")
+            if macd_crossover == "BEARISH":
+                short_reasons.append("MACDx↓")
 
         # 3d. Bollinger Bands
         if bb_lower > 0 and current_price <= bb_lower * 1.005:
@@ -456,3 +461,29 @@ def calculate_ob_imbalance(order_book: Dict, levels: int = 10) -> float:
         return 0.0
 
     return (bid_vol - ask_vol) / total
+
+
+def calculate_ob_spread_bps(order_book: Dict) -> float:
+    """
+    Calculate bid-ask spread in basis points from order book data.
+
+    Args:
+        order_book: Dict with "bids": [[price, qty], ...] and "asks": [[price, qty], ...]
+
+    Returns:
+        float: spread in basis points (1 bp = 0.01%)
+    """
+    bids = order_book.get("bids", [])
+    asks = order_book.get("asks", [])
+
+    if not bids or not asks:
+        return 0.0
+
+    best_bid = float(bids[0][0])
+    best_ask = float(asks[0][0])
+    mid = (best_bid + best_ask) / 2
+
+    if mid <= 0:
+        return 0.0
+
+    return (best_ask - best_bid) / mid * 10000

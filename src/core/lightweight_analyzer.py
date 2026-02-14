@@ -71,6 +71,7 @@ class LightweightAnalyzer:
         self._vwap_cum_tp_vol: float = 0.0
         self._vwap: float = 0.0
         self._vwap_date: str = ""  # Current session date for reset
+        self._vwap_cum_sq_vol: float = 0.0  # For VWAP standard deviation
 
         # Volume state
         self._vol_window: deque = deque(maxlen=self._vol_avg_window)
@@ -82,6 +83,9 @@ class LightweightAnalyzer:
 
         # Momentum tracking (last N closes)
         self._recent_closes: deque = deque(maxlen=5)
+
+        # MACD crossover tracking
+        self._prev_macd_hist: float = 0.0
 
         # State flags
         self._bootstrapped = False
@@ -153,6 +157,11 @@ class LightweightAnalyzer:
 
         self._macd_line = self._ema_macd_fast - self._ema_macd_slow
         self._macd_hist = self._macd_line - self._ema_macd_signal
+        # Save previous histogram for crossover detection (second-to-last)
+        if len(macd_history) >= 2:
+            self._prev_macd_hist = macd_history[-2] - self._ema_macd_signal
+        else:
+            self._prev_macd_hist = self._macd_hist
 
         # RSI bootstrap: first avg gain/loss over rsi_period, then smooth
         deltas = [closes[i] - closes[i - 1] for i in range(1, self._rsi_period + 1)]
@@ -184,9 +193,12 @@ class LightweightAnalyzer:
             self._bb_window.append(c)
         self._update_bb()
 
-        # VWAP bootstrap (simplified — use last available candles as session approx)
+        # VWAP bootstrap — use all candles from current UTC session
         self._vwap_date = self._get_session_date(candles[-1])
-        for c in candles[-60:]:  # Last 60 candles for session approximation
+        self._vwap_cum_vol = 0.0
+        self._vwap_cum_tp_vol = 0.0
+        self._vwap_cum_sq_vol = 0.0
+        for c in candles:
             cd = self._get_session_date(c)
             if cd != self._vwap_date:
                 continue
@@ -194,6 +206,7 @@ class LightweightAnalyzer:
             vol = float(c.get("volume", 0))
             self._vwap_cum_tp_vol += tp * vol
             self._vwap_cum_vol += vol
+            self._vwap_cum_sq_vol += tp * tp * vol
         self._vwap = self._vwap_cum_tp_vol / self._vwap_cum_vol if self._vwap_cum_vol > 0 else closes[-1]
 
         # Volume
@@ -280,6 +293,24 @@ class LightweightAnalyzer:
         # ATR ratio (spike detection)
         atr_ratio = self._atr_fast / self._atr if self._atr > 0 else 1.0
 
+        # VWAP deviation (distance from VWAP in %)
+        vwap_dist_pct = ((self._prev_close - self._vwap) / self._vwap * 100) if self._vwap > 0 else 0.0
+
+        # VWAP standard deviation band
+        if self._vwap_cum_vol > 0:
+            vwap_var = (self._vwap_cum_sq_vol / self._vwap_cum_vol) - self._vwap ** 2
+            vwap_std = max(0.0, vwap_var) ** 0.5
+        else:
+            vwap_std = 0.0
+
+        # MACD crossover detection
+        if self._prev_macd_hist <= 0 < self._macd_hist:
+            macd_crossover = "BULLISH"
+        elif self._prev_macd_hist >= 0 > self._macd_hist:
+            macd_crossover = "BEARISH"
+        else:
+            macd_crossover = "NONE"
+
         return {
             "ema_fast": self._ema_fast,
             "ema_med": self._ema_med,
@@ -288,6 +319,7 @@ class LightweightAnalyzer:
             "macd_line": self._macd_line,
             "macd_hist": self._macd_hist,
             "macd_signal_line": self._ema_macd_signal,
+            "macd_crossover": macd_crossover,
             "atr": self._atr,
             "atr_fast": self._atr_fast,
             "atr_ratio": atr_ratio,
@@ -296,6 +328,9 @@ class LightweightAnalyzer:
             "bb_lower": self._bb_lower,
             "bb_width": self._bb_width,
             "vwap": self._vwap,
+            "vwap_dist_pct": vwap_dist_pct,
+            "vwap_upper": self._vwap + vwap_std if vwap_std > 0 else self._vwap,
+            "vwap_lower": self._vwap - vwap_std if vwap_std > 0 else self._vwap,
             "volume_ratio": self._volume_ratio,
             "current_price": self._prev_close,
             "momentum_dir": momentum_dir,
@@ -335,6 +370,7 @@ class LightweightAnalyzer:
         self._ema_macd_slow = close * k_s + self._ema_macd_slow * (1 - k_s)
         self._macd_line = self._ema_macd_fast - self._ema_macd_slow
         self._ema_macd_signal = self._macd_line * k_sig + self._ema_macd_signal * (1 - k_sig)
+        self._prev_macd_hist = self._macd_hist
         self._macd_hist = self._macd_line - self._ema_macd_signal
 
     def _update_atr(self, high: float, low: float, prev_close: float):
@@ -362,6 +398,7 @@ class LightweightAnalyzer:
             # New session — reset VWAP
             self._vwap_cum_vol = 0.0
             self._vwap_cum_tp_vol = 0.0
+            self._vwap_cum_sq_vol = 0.0
             self._vwap_date = session_date
 
         high = float(candle.get("highPrice", 0))
@@ -372,6 +409,7 @@ class LightweightAnalyzer:
         tp = (high + low + close) / 3.0
         self._vwap_cum_tp_vol += tp * vol
         self._vwap_cum_vol += vol
+        self._vwap_cum_sq_vol += tp * tp * vol
         self._vwap = self._vwap_cum_tp_vol / self._vwap_cum_vol if self._vwap_cum_vol > 0 else close
 
     @staticmethod
