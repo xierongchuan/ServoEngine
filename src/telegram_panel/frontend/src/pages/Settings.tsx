@@ -1,15 +1,21 @@
 import { useEffect, useState, useCallback } from 'react';
-import { getConfig, updateConfig } from '../api/client';
+import { getConfig, updateConfig, validateConfig } from '../api/client';
 import { Spinner } from '../components/Spinner';
 
 const STRATEGY_OPTIONS = ['SCALP', 'INTRADAY', 'SWING', 'GRID', 'HYBRID'];
+
+type SaveResult = {
+  changes?: { hot_reloadable: string[]; restart_required: string[] };
+  needs_restart?: boolean;
+};
 
 export function Settings() {
   const [config, setConfig] = useState<Record<string, any> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
   const [editing, setEditing] = useState(false);
 
   const fetchConfig = useCallback(async () => {
@@ -33,9 +39,34 @@ export function Settings() {
     if (!config) return;
     setSaving(true);
     setMessage(null);
+    setValidationErrors([]);
     try {
-      await updateConfig(config);
-      setMessage({ type: 'success', text: 'Configuration saved' });
+      // Validate first
+      const validation = await validateConfig(config);
+      if (!validation.valid) {
+        setValidationErrors(validation.errors);
+        setSaving(false);
+        try { window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('error'); } catch {}
+        return;
+      }
+
+      const result = await updateConfig(config) as SaveResult;
+      const restartNeeded = result.needs_restart;
+      const hotChanges = result.changes?.hot_reloadable?.length || 0;
+
+      if (restartNeeded) {
+        setMessage({
+          type: 'warning',
+          text: `Saved. ${hotChanges} settings will hot-reload. Restart required for: ${result.changes?.restart_required?.join(', ')}`,
+        });
+      } else {
+        setMessage({
+          type: 'success',
+          text: hotChanges > 0
+            ? `Saved. ${hotChanges} settings will be applied within 30s.`
+            : 'Configuration saved.',
+        });
+      }
       setEditing(false);
       try { window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('success'); } catch {}
     } catch (err) {
@@ -43,13 +74,21 @@ export function Settings() {
       try { window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('error'); } catch {}
     } finally {
       setSaving(false);
-      setTimeout(() => setMessage(null), 3000);
+      setTimeout(() => setMessage(null), 5000);
     }
   };
 
   const updateField = (key: string, value: any) => {
     if (!config) return;
     setConfig({ ...config, [key]: value });
+  };
+
+  const updateNestedField = (parent: string, key: string, value: any) => {
+    if (!config) return;
+    setConfig({
+      ...config,
+      [parent]: { ...config[parent], [key]: value },
+    });
   };
 
   if (loading) {
@@ -78,7 +117,7 @@ export function Settings() {
       <div className="flex items-center justify-between">
         <span className="text-lg font-semibold text-tg-text">Settings</span>
         <button
-          onClick={() => setEditing(!editing)}
+          onClick={() => { setEditing(!editing); setValidationErrors([]); }}
           className={`text-xs px-3 py-1.5 rounded-lg ${
             editing ? 'bg-amber-500/20 text-amber-400' : 'bg-tg-section-bg text-tg-hint'
           }`}
@@ -89,82 +128,123 @@ export function Settings() {
 
       {message && (
         <div className={`text-sm px-3 py-2 rounded-lg ${
-          message.type === 'success' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+          message.type === 'success' ? 'bg-green-500/20 text-green-400' :
+          message.type === 'warning' ? 'bg-amber-500/20 text-amber-400' :
+          'bg-red-500/20 text-red-400'
         }`}>
           {message.text}
         </div>
       )}
 
+      {validationErrors.length > 0 && (
+        <div className="text-sm px-3 py-2 rounded-lg bg-red-500/20 text-red-400">
+          <div className="font-medium mb-1">Validation errors:</div>
+          {validationErrors.map((e, i) => (
+            <div key={i}>- {e}</div>
+          ))}
+        </div>
+      )}
+
       {/* Strategy */}
-      <section className="flex flex-col gap-2">
-        <h3 className="text-sm font-medium text-tg-hint">Strategy</h3>
-        <div className="bg-tg-section-bg rounded-xl p-3 flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-tg-text">Style</span>
-            {editing ? (
-              <select
-                value={config.STRATEGY_STYLE || ''}
-                onChange={(e) => updateField('STRATEGY_STYLE', e.target.value)}
-                className="bg-tg-bg text-tg-text text-sm rounded px-2 py-1 border border-white/10"
-              >
-                {STRATEGY_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            ) : (
-              <span className="text-sm text-tg-button font-medium">{config.STRATEGY_STYLE}</span>
-            )}
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-tg-text">Timeframe</span>
-            <span className="text-sm text-tg-hint">{preset.timeframe || 'N/A'}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-tg-text">Leverage</span>
-            <span className="text-sm text-tg-hint">{preset.leverage || 'N/A'}x</span>
-          </div>
+      <Section title="Strategy" badge="hot-reload">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-tg-text">Style</span>
+          {editing ? (
+            <select
+              value={config.STRATEGY_STYLE || ''}
+              onChange={(e) => updateField('STRATEGY_STYLE', e.target.value)}
+              className="bg-tg-bg text-tg-text text-sm rounded px-2 py-1 border border-white/10"
+            >
+              {STRATEGY_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          ) : (
+            <span className="text-sm text-tg-button font-medium">{config.STRATEGY_STYLE}</span>
+          )}
         </div>
-      </section>
-
-      {/* Position */}
-      <section className="flex flex-col gap-2">
-        <h3 className="text-sm font-medium text-tg-hint">Position</h3>
-        <div className="bg-tg-section-bg rounded-xl p-3 flex flex-col gap-3">
-          <SettingRow label="Position Size %" value={config.POSITION_SIZE_PERCENT} editing={editing} onChange={(v) => updateField('POSITION_SIZE_PERCENT', Number(v))} />
-          <SettingRow label="Min Trade (USDT)" value={config.MIN_TRADE_AMOUNT_USDT} editing={editing} onChange={(v) => updateField('MIN_TRADE_AMOUNT_USDT', Number(v))} />
-          <SettingRow label="Min Confidence" value={config.MIN_CONFIDENCE_THRESHOLD} editing={editing} onChange={(v) => updateField('MIN_CONFIDENCE_THRESHOLD', Number(v))} />
-          <SettingRow label="Min R/R Ratio" value={config.MIN_RISK_REWARD_RATIO} editing={editing} onChange={(v) => updateField('MIN_RISK_REWARD_RATIO', Number(v))} />
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-tg-text">Timeframe</span>
+          <span className="text-sm text-tg-hint">{preset.timeframe || 'N/A'}</span>
         </div>
-      </section>
-
-      {/* AI */}
-      <section className="flex flex-col gap-2">
-        <h3 className="text-sm font-medium text-tg-hint">AI Settings</h3>
-        <div className="bg-tg-section-bg rounded-xl p-3 flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-tg-text">Model</span>
-            <span className="text-sm text-tg-hint">{config.AI_SETTINGS?.model || 'N/A'}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-tg-text">Temperature</span>
-            <span className="text-sm text-tg-hint">{config.AI_SETTINGS?.temperature ?? 'N/A'}</span>
-          </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-tg-text">Leverage</span>
+          <span className="text-sm text-tg-hint">{preset.leverage || 'N/A'}x</span>
         </div>
-      </section>
+      </Section>
 
-      {/* Symbols */}
-      <section className="flex flex-col gap-2">
-        <h3 className="text-sm font-medium text-tg-hint">Symbols</h3>
-        <div className="bg-tg-section-bg rounded-xl p-3">
+      {/* Position & Risk */}
+      <Section title="Position & Risk" badge="hot-reload">
+        <SettingRow label="Position Size %" value={config.POSITION_SIZE_PERCENT} editing={editing} onChange={(v) => updateField('POSITION_SIZE_PERCENT', Number(v))} />
+        <SettingRow label="Min Trade (USDT)" value={config.MIN_TRADE_AMOUNT_USDT} editing={editing} onChange={(v) => updateField('MIN_TRADE_AMOUNT_USDT', Number(v))} />
+        <SettingRow label="Min Confidence" value={config.MIN_CONFIDENCE_THRESHOLD} editing={editing} step="0.05" onChange={(v) => updateField('MIN_CONFIDENCE_THRESHOLD', Number(v))} />
+        <SettingRow label="Min R/R Ratio" value={config.MIN_RISK_REWARD_RATIO} editing={editing} step="0.1" onChange={(v) => updateField('MIN_RISK_REWARD_RATIO', Number(v))} />
+        <SettingRow label="Take Profit %" value={config.TAKE_PROFIT_PERCENT} editing={editing} step="0.1" onChange={(v) => updateField('TAKE_PROFIT_PERCENT', Number(v))} />
+        <SettingRow label="Stop Loss %" value={config.STOP_LOSS_PERCENT} editing={editing} step="0.1" onChange={(v) => updateField('STOP_LOSS_PERCENT', Number(v))} />
+      </Section>
+
+      {/* AI Settings */}
+      <Section title="AI Settings" badge="hot-reload">
+        <SettingRow
+          label="Model"
+          value={config.AI_SETTINGS?.model}
+          editing={editing}
+          type="text"
+          onChange={(v) => updateNestedField('AI_SETTINGS', 'model', v)}
+        />
+        <SettingRow
+          label="Temperature"
+          value={config.AI_SETTINGS?.temperature}
+          editing={editing}
+          step="0.1"
+          onChange={(v) => updateNestedField('AI_SETTINGS', 'temperature', Number(v))}
+        />
+        <SettingRow
+          label="Max Tokens"
+          value={config.AI_SETTINGS?.max_tokens}
+          editing={editing}
+          step="1"
+          onChange={(v) => updateNestedField('AI_SETTINGS', 'max_tokens', parseInt(v) || 0)}
+        />
+        <SettingRow
+          label="Timeout (s)"
+          value={config.AI_SETTINGS?.request_timeout}
+          editing={editing}
+          step="1"
+          onChange={(v) => updateNestedField('AI_SETTINGS', 'request_timeout', parseInt(v) || 60)}
+        />
+      </Section>
+
+      {/* Toggles */}
+      <Section title="Features" badge="hot-reload">
+        <ToggleRow label="Aggressive Mode" value={!!config.AGGRESSIVE_MODE} editing={editing} onChange={(v) => updateField('AGGRESSIVE_MODE', v)} />
+        <ToggleRow label="News Enabled" value={config.ENABLE_NEWS !== false} editing={editing} onChange={(v) => updateField('ENABLE_NEWS', v)} />
+        <ToggleRow label="AI Skip on RSI" value={config.ENABLE_AI_SKIP_ON_RSI !== false} editing={editing} onChange={(v) => updateField('ENABLE_AI_SKIP_ON_RSI', v)} />
+      </Section>
+
+      {/* Symbols (restart required) */}
+      <Section title="Symbols" badge="restart">
+        <div className="flex flex-wrap gap-1.5">
+          {Object.entries(config.EXCHANGE_SYMBOLS || {}).map(([exchange, syms]) =>
+            (syms as string[]).map((s) => (
+              <span key={`${exchange}-${s}`} className="text-xs bg-tg-bg px-2 py-1 rounded text-tg-text">
+                {s}
+              </span>
+            ))
+          )}
+        </div>
+      </Section>
+
+      {/* Disabled Symbols */}
+      {(config.DISABLED_SYMBOLS?.length > 0) && (
+        <Section title="Disabled Symbols" badge="hot-reload">
           <div className="flex flex-wrap gap-1.5">
-            {Object.entries(config.EXCHANGE_SYMBOLS || {}).map(([exchange, syms]) =>
-              (syms as string[]).map((s) => (
-                <span key={`${exchange}-${s}`} className="text-xs bg-tg-bg px-2 py-1 rounded text-tg-text">
-                  {s}
-                </span>
-              ))
-            )}
+            {(config.DISABLED_SYMBOLS as string[]).map((s) => (
+              <span key={s} className="text-xs bg-red-500/20 text-red-400 px-2 py-1 rounded">
+                {s}
+              </span>
+            ))}
           </div>
-        </div>
-      </section>
+        </Section>
+      )}
 
       {/* Save button */}
       {editing && (
@@ -180,25 +260,77 @@ export function Settings() {
   );
 }
 
-function SettingRow({ label, value, editing, onChange }: {
+function Section({ title, badge, children }: {
+  title: string;
+  badge?: 'hot-reload' | 'restart';
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-medium text-tg-hint">{title}</h3>
+        {badge === 'hot-reload' && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/20 text-green-400">live</span>
+        )}
+        {badge === 'restart' && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">restart</span>
+        )}
+      </div>
+      <div className="bg-tg-section-bg rounded-xl p-3 flex flex-col gap-3">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function SettingRow({ label, value, editing, onChange, type = 'number', step }: {
   label: string;
   value: any;
   editing: boolean;
   onChange: (v: string) => void;
+  type?: 'number' | 'text';
+  step?: string;
 }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-sm text-tg-text">{label}</span>
       {editing ? (
         <input
-          type="number"
-          step="any"
+          type={type}
+          step={type === 'number' ? (step || 'any') : undefined}
           value={value ?? ''}
           onChange={(e) => onChange(e.target.value)}
-          className="bg-tg-bg text-tg-text text-sm rounded px-2 py-1 w-24 text-right border border-white/10"
+          className="bg-tg-bg text-tg-text text-sm rounded px-2 py-1 w-32 text-right border border-white/10"
         />
       ) : (
         <span className="text-sm text-tg-hint">{value ?? 'N/A'}</span>
+      )}
+    </div>
+  );
+}
+
+function ToggleRow({ label, value, editing, onChange }: {
+  label: string;
+  value: boolean;
+  editing: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-sm text-tg-text">{label}</span>
+      {editing ? (
+        <button
+          onClick={() => onChange(!value)}
+          className={`text-xs px-3 py-1 rounded-lg transition-colors ${
+            value ? 'bg-green-500/20 text-green-400' : 'bg-tg-bg text-tg-hint'
+          }`}
+        >
+          {value ? 'ON' : 'OFF'}
+        </button>
+      ) : (
+        <span className={`text-sm ${value ? 'text-green-400' : 'text-tg-hint'}`}>
+          {value ? 'ON' : 'OFF'}
+        </span>
       )}
     </div>
   );

@@ -1,4 +1,5 @@
 import os
+import json
 
 # Загружаем переменные из .env файла если он существует
 # (небезопасно загружать .env в продакшене, используйте переменные окружения)
@@ -27,7 +28,10 @@ except Exception as e:
 # Настройки системы
 MODE = os.getenv("MODE", "demo")  # "demo" для тестов, "real" для реальных денег
 
-import json
+# --- Hot-Reload State ---
+_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bot_config.json')
+_config_mtime: float = 0.0
+_config_callbacks: list = []
 
 # Функция для загрузки конфигурации
 def load_bot_config():
@@ -95,8 +99,127 @@ def load_bot_config():
 
     return default_config
 
+
+def get_config_mtime() -> float:
+    """Get modification time of bot_config.json."""
+    try:
+        return os.path.getmtime(_CONFIG_PATH)
+    except OSError:
+        return 0.0
+
+
+def should_reload_config() -> bool:
+    """Check if config file has been modified since last load."""
+    current_mtime = get_config_mtime()
+    return current_mtime > _config_mtime
+
+
+def register_config_callback(callback):
+    """Register a function to be called when config is reloaded.
+
+    Callback signature: callback(old_config: dict, new_config: dict)
+    """
+    _config_callbacks.append(callback)
+
+
+def reload_bot_config() -> dict:
+    """Reload configuration from file and update all module-level variables.
+
+    Returns the new BOT_CONFIG dict.
+    """
+    global BOT_CONFIG, _config_mtime
+    global DISABLED_SYMBOLS, POSITION_SIZE_PERCENT, MIN_TRADE_AMOUNT_USDT
+    global LEVERAGE, TAKE_PROFIT_PERCENT, STOP_LOSS_PERCENT
+    global MIN_CONFIDENCE_THRESHOLD, MIN_RISK_REWARD_RATIO, MIN_PARTIAL_CLOSE_PNL
+    global TRADING_SETTINGS, AI_THRESHOLDS
+    global ENABLE_NEWS, ENABLE_ADVANCED_ANALYSIS
+    global AGGRESSIVE_MODE, AGGRESSIVE_SETTINGS, NEWS_SETTINGS
+    global SMART_SAMPLING, ENABLE_AI_SKIP_ON_RSI
+    global DECISION_JOURNAL, POSITION_LIMITS, VALIDATION
+    global TECHNICAL_ANALYSIS, CHART_SETTINGS, ERROR_HANDLING, MOMENTUM_STRATEGY
+    global STRATEGY_STYLE, STYLE_PRESETS
+    global AI_SETTINGS, AI_MODEL, AI_TEMPERATURE, AI_MAX_TOKENS
+    global AI_REASONING, AI_RETRY_COUNT, AI_PROVIDER_ROUTING
+    global AI_FALLBACK_MODELS, AI_REQUEST_TIMEOUT, AI_RETRY_BACKOFF_BASE, AI_BASE_URL
+
+    old_config = BOT_CONFIG.copy()
+
+    try:
+        BOT_CONFIG = load_bot_config()
+    except Exception as e:
+        print(f"⚠️ Config reload failed: {e}. Keeping previous config.")
+        return BOT_CONFIG
+
+    _config_mtime = get_config_mtime()
+
+    # Update all derived variables
+    DISABLED_SYMBOLS = BOT_CONFIG.get("DISABLED_SYMBOLS", [])
+    TRADING_SETTINGS = BOT_CONFIG.get("TRADING_SETTINGS", {})
+    POSITION_SIZE_PERCENT = BOT_CONFIG.get("POSITION_SIZE_PERCENT", 5.0)
+    MIN_TRADE_AMOUNT_USDT = BOT_CONFIG.get("MIN_TRADE_AMOUNT_USDT", 10.0)
+    TAKE_PROFIT_PERCENT = BOT_CONFIG.get("TAKE_PROFIT_PERCENT", 1.5)
+    STOP_LOSS_PERCENT = BOT_CONFIG.get("STOP_LOSS_PERCENT", 1.5)
+    MIN_CONFIDENCE_THRESHOLD = BOT_CONFIG.get("MIN_CONFIDENCE_THRESHOLD", 0.7)
+    MIN_RISK_REWARD_RATIO = BOT_CONFIG.get("MIN_RISK_REWARD_RATIO", 1.5)
+    MIN_PARTIAL_CLOSE_PNL = BOT_CONFIG.get("MIN_PARTIAL_CLOSE_PNL", 0.5)
+    AI_THRESHOLDS = BOT_CONFIG.get("AI_THRESHOLDS", {})
+    ENABLE_NEWS = BOT_CONFIG.get("ENABLE_NEWS", True)
+    ENABLE_ADVANCED_ANALYSIS = BOT_CONFIG.get("ENABLE_ADVANCED_ANALYSIS", True)
+    AGGRESSIVE_MODE = BOT_CONFIG.get("AGGRESSIVE_MODE", False)
+    AGGRESSIVE_SETTINGS = BOT_CONFIG.get("AGGRESSIVE_SETTINGS", {})
+    NEWS_SETTINGS = BOT_CONFIG.get("NEWS_SETTINGS", {})
+    SMART_SAMPLING = BOT_CONFIG.get("SMART_SAMPLING", {"enabled": True, "recent_candles": 30, "history_step": 10})
+    ENABLE_AI_SKIP_ON_RSI = BOT_CONFIG.get("ENABLE_AI_SKIP_ON_RSI", True)
+    DECISION_JOURNAL = BOT_CONFIG.get("DECISION_JOURNAL", {"enabled": True, "max_entries": {"SCALP": 5, "INTRADAY": 10, "SWING": 10}})
+    POSITION_LIMITS = BOT_CONFIG.get("POSITION_LIMITS", {"max_positions": 5, "price_precision": 4, "quantity_precision": 4, "balance_safety_margin": 0.95, "position_sync_wait": 1.0})
+    VALIDATION = BOT_CONFIG.get("VALIDATION", {"rr_soft_limit": 0.5})
+    TECHNICAL_ANALYSIS = BOT_CONFIG.get("TECHNICAL_ANALYSIS", {"sr_window": 20, "ema_periods": [9, 21], "trend_candle_count": 5, "volume_avg_window": 20, "volume_thresholds": {"anomaly": 2.0, "elevated": 1.2, "low": 0.5}, "seb_length": 20, "seb_multiplier": 2.0, "momentum_volume_threshold": 1.2, "momentum_trend_volume_threshold": 1.0, "news_items_in_prompt": 5})
+    CHART_SETTINGS = BOT_CONFIG.get("CHART_SETTINGS", {"update_interval": 10, "min_sleep": 0.5, "sma_periods": [10, 20, 50, 100, 200], "chart_height": 13.5, "dpi": 200})
+    ERROR_HANDLING = BOT_CONFIG.get("ERROR_HANDLING", {"cycle_error_fallback_sleep": 5})
+    MOMENTUM_STRATEGY = BOT_CONFIG.get("MOMENTUM_STRATEGY", {
+        "enabled": True, "atr_sl_multiplier": 1.5, "atr_tp_multiplier": 2.5,
+        "min_volume_ratio": 0.7, "max_candles_in_prompt": 50,
+        "trend_consensus_required": False, "momentum_entry_enabled": True,
+        "momentum_consecutive_candles": 3
+    })
+
+    STRATEGY_STYLE = BOT_CONFIG.get("STRATEGY_STYLE", "INTRADAY")
+    STYLE_PRESETS = BOT_CONFIG.get("STYLE_PRESETS", DEFAULT_STYLE_PRESETS)
+
+    # Reapply style preset
+    current_preset = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS.get("INTRADAY", {}))
+    if "atr_sl_multiplier" not in MOMENTUM_STRATEGY:
+        MOMENTUM_STRATEGY["atr_sl_multiplier"] = current_preset.get("atr_sl_mult", 2.0)
+    if "atr_tp_multiplier" not in MOMENTUM_STRATEGY:
+        MOMENTUM_STRATEGY["atr_tp_multiplier"] = current_preset.get("atr_tp_mult", 3.0)
+    LEVERAGE = current_preset.get("leverage", 10)
+
+    # AI Settings
+    AI_SETTINGS = BOT_CONFIG.get("AI_SETTINGS", {})
+    AI_MODEL = AI_SETTINGS.get("model", "x-ai/grok-4.1-fast")
+    AI_TEMPERATURE = AI_SETTINGS.get("temperature", 0.3)
+    AI_MAX_TOKENS = AI_SETTINGS.get("max_tokens", 512)
+    AI_REASONING = AI_SETTINGS.get("reasoning", {})
+    AI_RETRY_COUNT = AI_SETTINGS.get("retry_count", 3)
+    AI_PROVIDER_ROUTING = AI_SETTINGS.get("provider_routing", {})
+    AI_FALLBACK_MODELS = AI_SETTINGS.get("fallback_models", [])
+    AI_REQUEST_TIMEOUT = AI_SETTINGS.get("request_timeout", 60)
+    AI_RETRY_BACKOFF_BASE = AI_SETTINGS.get("retry_backoff_base", 2)
+    AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://openrouter.ai/api/v1/chat/completions"
+
+    # Notify callbacks
+    for callback in _config_callbacks:
+        try:
+            callback(old_config, BOT_CONFIG)
+        except Exception as e:
+            print(f"⚠️ Config callback error: {e}")
+
+    return BOT_CONFIG
+
+
 # Загружаем конфиг
 BOT_CONFIG = load_bot_config()
+_config_mtime = get_config_mtime()
 
 # Выбор биржи (нужен для определения списка символов)
 EXCHANGE = os.getenv("EXCHANGE", "bingx")
@@ -107,6 +230,9 @@ EXCHANGE_SYMBOLS = BOT_CONFIG.get("EXCHANGE_SYMBOLS", {})
 SYMBOLS = EXCHANGE_SYMBOLS.get(EXCHANGE, ["BTC/USD"])
 EXCHANGE_FEES = BOT_CONFIG.get("EXCHANGE_FEES", {"bingx": 0.05})
 TRADING_FEE = EXCHANGE_FEES.get(EXCHANGE, 0.05)
+
+# Отключённые символы (не торговля)
+DISABLED_SYMBOLS = BOT_CONFIG.get("DISABLED_SYMBOLS", [])
 
 POSITION_SIZE_PERCENT = BOT_CONFIG.get("POSITION_SIZE_PERCENT", 5.0)
 MIN_TRADE_AMOUNT_USDT = BOT_CONFIG.get("MIN_TRADE_AMOUNT_USDT", 10.0)

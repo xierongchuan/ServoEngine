@@ -252,6 +252,19 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 @allowed_users_only
+async def cmd_reload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Force config reload by touching bot_config.json."""
+    try:
+        CONFIG_PATH.touch()
+        await update.message.reply_text(  # type: ignore[union-attr]
+            "🔄 Config reload triggered.\n"
+            "Workers will pick up changes within 30 seconds."
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to trigger reload: {e}")  # type: ignore[union-attr]
+
+
+@allowed_users_only
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List all available commands."""
     text = (
@@ -261,9 +274,111 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/chart  - Send latest chart (optional: /chart ETHUSDT)\n"
         "/logs   - Last 20 lines of system log\n"
         "/config - Configuration summary\n"
+        "/stop   - Stop trading for symbol (e.g., /stop BTCUSDT)\n"
+        "/resume - Resume trading for symbol (e.g., /resume BTCUSDT)\n"
+        "/close  - Close position by symbol (e.g., /close BTCUSDT)\n"
+        "/reload - Force config reload for all workers\n"
         "/help   - Show this help message"
     )
     await update.message.reply_text(text)  # type: ignore[union-attr]
+
+
+@allowed_users_only
+async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Disable trading for a symbol."""
+    if not context.args:
+        await update.message.reply_text("Usage: /stop <SYMBOL>\nExample: /stop BTCUSDT")  # type: ignore[union-attr]
+        return
+
+    symbol = context.args[0].upper().replace(" ", "")
+
+    # Read current config
+    config = read_json(CONFIG_PATH) or {}
+    disabled = config.get("DISABLED_SYMBOLS", [])
+
+    if symbol in disabled:
+        await update.message.reply_text(f"⚠️ {symbol} is already disabled")  # type: ignore[union-attr]
+        return
+
+    disabled.append(symbol)
+    config["DISABLED_SYMBOLS"] = disabled
+
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        await update.message.reply_text(f"⏹️ Trading disabled for {symbol}\nNew positions will not be opened.")  # type: ignore[union-attr]
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")  # type: ignore[union-attr]
+
+
+@allowed_users_only
+async def cmd_start_trading(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Enable trading for a symbol."""
+    if not context.args:
+        await update.message.reply_text("Usage: /start <SYMBOL>\nExample: /start BTCUSDT")  # type: ignore[union-attr]
+        return
+
+    symbol = context.args[0].upper().replace(" ", "")
+
+    # Read current config
+    config = read_json(CONFIG_PATH) or {}
+    disabled = config.get("DISABLED_SYMBOLS", [])
+
+    if symbol not in disabled:
+        await update.message.reply_text(f"⚠️ {symbol} is already enabled")  # type: ignore[union-attr]
+        return
+
+    disabled.remove(symbol)
+    config["DISABLED_SYMBOLS"] = disabled
+
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        await update.message.reply_text(f"▶️ Trading enabled for {symbol}")  # type: ignore[union-attr]
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")  # type: ignore[union-attr]
+
+
+@allowed_users_only
+async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Close position for a symbol at market price."""
+    if not context.args:
+        await update.message.reply_text("Usage: /close <SYMBOL>\nExample: /close BTCUSDT")  # type: ignore[union-attr]
+        return
+
+    symbol = context.args[0].upper().replace(" ", "")
+
+    # Read active trades
+    active = read_json(ACTIVE_TRADES_PATH)
+    if not isinstance(active, dict):
+        active = {}
+
+    if symbol not in active:
+        await update.message.reply_text(f"ℹ️ No active position for {symbol}")  # type: ignore[union-attr]
+        return
+
+    trade = active[symbol]
+    deal_id = trade.get("deal_id") or trade.get("dealId")
+
+    if not deal_id:
+        await update.message.reply_text(f"❌ Cannot find deal ID for {symbol}")  # type: ignore[union-attr]
+        return
+
+    # Try to close the position
+    try:
+        from src.exchanges.exchange_factory import get_exchange_client
+        client = get_exchange_client()
+
+        if hasattr(client, "close_position"):
+            success = client.close_position(symbol, deal_id, 1.0)
+            if success:
+                await update.message.reply_text(f"✅ Position {symbol} closed successfully")  # type: ignore[union-attr]
+            else:
+                await update.message.reply_text(f"❌ Failed to close position {symbol}")  # type: ignore[union-attr]
+        else:
+            await update.message.reply_text(f"❌ Exchange client does not support close_position")  # type: ignore[union-attr]
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error closing position: {str(e)}")  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +492,10 @@ class TelegramPanelBot:
         self.app.add_handler(CommandHandler("chart", cmd_chart))
         self.app.add_handler(CommandHandler("logs", cmd_logs))
         self.app.add_handler(CommandHandler("config", cmd_config))
+        self.app.add_handler(CommandHandler("stop", cmd_stop))
+        self.app.add_handler(CommandHandler("resume", cmd_start_trading))
+        self.app.add_handler(CommandHandler("close", cmd_close))
+        self.app.add_handler(CommandHandler("reload", cmd_reload))
         self.app.add_handler(CommandHandler("help", cmd_help))
 
     def run(self) -> None:

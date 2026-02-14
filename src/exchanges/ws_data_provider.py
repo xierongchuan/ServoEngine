@@ -192,7 +192,10 @@ class WebSocketDataProvider:
             on_error=self._on_error,
             on_close=self._on_close
         )
-        self._ws.run_forever(ping_interval=20, ping_timeout=10)
+        # NOTE: BingX uses custom JSON ping/pong, not WebSocket protocol pings.
+        # Do NOT use ping_interval/ping_timeout - they cause disconnects.
+        # BingX sends {"ping": ...} messages that we handle in _on_message.
+        self._ws.run_forever()
 
     def _on_open(self, ws):
         """Subscribe to kline streams for all symbols."""

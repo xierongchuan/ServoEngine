@@ -1,9 +1,23 @@
 {
   "EXCHANGE_SYMBOLS": {
     "bingx": [
-      "BTCUSDT"
+      "BTCUSDT",
+      "ETHUSDT",
+      "BNBUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "DOGEUSDT",
+      "DOTUSDT",
+      "MATICUSDT",
+      "LTCUSDT",
+      "AVAXUSDT",
+      "LINKUSDT",
+      "UNIUSDT",
+      "ALGOUSDT",
+      "TRXUSDT"
     ]
   },
+  "DISABLED_SYMBOLS": [],
   "EXCHANGE_FEES": {
     "bingx": 0.05
   },
@@ -311,7 +325,7 @@
       "conflict_friction_threshold": 3
     },
     "ai_filter": {
-      "enabled": false,
+      "enabled": true,
       "can_generate_signals": false,
       "min_confidence_to_approve": 0.55,
       "auto_approve_quality": 0.7,

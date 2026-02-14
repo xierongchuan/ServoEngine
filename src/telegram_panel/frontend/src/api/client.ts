@@ -65,13 +65,46 @@ export function getConfig() {
 }
 
 export function updateConfig(data: Record<string, unknown>) {
-  return fetchAPI<{ status: string }>('/api/config', {
+  return fetchAPI<{ status: string; changes?: { hot_reloadable: string[]; restart_required: string[] }; needs_restart?: boolean }>('/api/config', {
     method: 'PUT',
     body: JSON.stringify(data),
   });
 }
 
+export function validateConfig(data: Record<string, unknown>) {
+  return fetchAPI<{ valid: boolean; errors: string[]; changes: { hot_reloadable: string[]; restart_required: string[] } }>('/api/config/validate', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function getConfigMeta() {
+  return fetchAPI<{ hot_reloadable: string[]; restart_required: string[] }>('/api/config/meta');
+}
+
 export function getJournal(symbol?: string) {
   const path = symbol ? `/api/journal/${encodeURIComponent(symbol)}` : '/api/journal';
   return fetchAPI<JournalEntry[]>(path);
+}
+
+export function disableSymbol(symbol: string) {
+  return fetchAPI<{ status: string }>(`/api/trades/disable/${encodeURIComponent(symbol)}`, {
+    method: 'POST',
+  });
+}
+
+export function enableSymbol(symbol: string) {
+  return fetchAPI<{ status: string }>(`/api/trades/enable/${encodeURIComponent(symbol)}`, {
+    method: 'POST',
+  });
+}
+
+export function closePosition(symbol: string) {
+  return fetchAPI<{ status: string }>(`/api/trades/close/${encodeURIComponent(symbol)}`, {
+    method: 'POST',
+  });
+}
+
+export function getDisabledSymbols() {
+  return fetchAPI<{ disabled_symbols: string[] }>('/api/trades/disabled');
 }

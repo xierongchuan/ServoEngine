@@ -41,8 +41,21 @@ class DataReader:
         return self._read_json(self.config_path, default={})
 
     def write_config(self, data: dict) -> None:
-        with open(self.config_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        # Atomic write: write to temp file, then rename
+        import tempfile
+        dir_path = self.config_path.parent
+        fd, tmp_path = tempfile.mkstemp(dir=str(dir_path), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, self.config_path)
+        except Exception:
+            # Clean up temp file on failure
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def read_journal(self) -> dict:
         return self._read_json(self.data_dir / "decision_journal.json", default={})

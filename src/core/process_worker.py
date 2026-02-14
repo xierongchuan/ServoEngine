@@ -38,6 +38,7 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
         from src.core.trade_tracker import TradeTracker
         from src.core.decision_journal import DecisionJournal
         from src.config import STRATEGY_STYLE, ERROR_HANDLING
+        from src.config import should_reload_config, reload_bot_config
 
         tracker = TradeTracker()
         journal = DecisionJournal()
@@ -54,10 +55,27 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
             warning(f"⚠️ [{symbol}] Startup sync failed: {e}")
 
         cycle_count = 0
+        config_check_interval = 30  # Check config every 30 seconds
+        last_config_check = time.time()
 
         while True:
             try:
                 start_time = time.time()
+
+                # 0. Periodic config hot-reload check
+                current_time = time.time()
+                if current_time - last_config_check >= config_check_interval:
+                    if should_reload_config():
+                        info(f"🔄 [{symbol}] Config file changed, reloading...")
+                        reload_bot_config()
+                        # Re-import updated module-level variables
+                        from src.config import STRATEGY_STYLE as _new_style
+                        from src.config import ERROR_HANDLING as _new_err
+                        STRATEGY_STYLE = _new_style
+                        ERROR_HANDLING = _new_err
+                        info(f"✅ [{symbol}] Config reloaded (strategy={STRATEGY_STYLE})")
+                    last_config_check = current_time
+
                 info(f"▶️ [{symbol}] Начало торгового цикла")
 
                 # 2. Сбор данных
@@ -271,6 +289,17 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                         info(f"❄️ [{symbol}] Cooldown active: {hours_left:.1f}h remaining. Skipping entry signal.")
                         prediction["action"] = "hold"
                         prediction["reason"] = f"Cooldown period: {hours_left:.1f}h left"
+
+                # Проверка отключённых символов (не открываем новые позиции)
+                from src.config import DISABLED_SYMBOLS
+                if not real_position and prediction.get("action") in ("buy", "sell"):
+                    # Нормализуем символ (убираем дефисы для сравнения)
+                    normalized_symbol = symbol.replace("-", "").upper()
+                    normalized_disabled = [s.replace("-", "").upper() for s in DISABLED_SYMBOLS]
+                    if normalized_symbol in normalized_disabled:
+                        info(f"⏹️ [{symbol}] Symbol is disabled. Changing action from {prediction['action']} to HOLD.")
+                        prediction["action"] = "hold"
+                        prediction["reason"] = f"Symbol {symbol} is disabled for trading"
 
                 # 5. Запись решения в журнал
                 current_price = analysis_result.get("current_price", 0)

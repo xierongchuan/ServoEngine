@@ -1,12 +1,23 @@
 from datetime import datetime
+import json
+import os
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 
 from ..services.auth import get_current_user
 from ..services.data_reader import DataReader
 
 router = APIRouter(prefix="/api/trades", tags=["trades"])
 reader = DataReader()
+
+
+def get_project_root() -> Path:
+    """Resolve project root relative to this file."""
+    return Path(__file__).resolve().parent.parent.parent.parent
+
+
+CONFIG_PATH = Path(os.environ.get("PANEL_CONFIG_PATH", str(get_project_root() / "bot_config.json")))
 
 
 @router.get("/active")
@@ -70,3 +81,118 @@ async def get_trade_stats(_user: dict = Depends(get_current_user)) -> dict:
         "wins": wins,
         "losses": total - wins,
     }
+
+
+def read_json(path: Path) -> dict | list | None:
+    """Safely read and parse a JSON file."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def write_json(path: Path, data: dict | list) -> bool:
+    """Safely write data to a JSON file."""
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
+
+
+@router.post("/disable/{symbol}")
+async def disable_symbol(
+    symbol: str,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """Disable trading for a symbol."""
+    symbol = symbol.upper().replace(" ", "")
+
+    config = read_json(CONFIG_PATH) or {}
+    disabled = config.get("DISABLED_SYMBOLS", [])
+
+    if symbol in disabled:
+        return {"status": "already_disabled", "symbol": symbol}
+
+    disabled.append(symbol)
+    config["DISABLED_SYMBOLS"] = disabled
+
+    if write_json(CONFIG_PATH, config):
+        return {"status": "success", "symbol": symbol, "action": "disabled"}
+    return {"status": "error", "message": "Failed to write config"}
+
+
+@router.post("/enable/{symbol}")
+async def enable_symbol(
+    symbol: str,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """Enable trading for a symbol."""
+    symbol = symbol.upper().replace(" ", "")
+
+    config = read_json(CONFIG_PATH) or {}
+    disabled = config.get("DISABLED_SYMBOLS", [])
+
+    if symbol not in disabled:
+        return {"status": "already_enabled", "symbol": symbol}
+
+    disabled.remove(symbol)
+    config["DISABLED_SYMBOLS"] = disabled
+
+    if write_json(CONFIG_PATH, config):
+        return {"status": "success", "symbol": symbol, "action": "enabled"}
+    return {"status": "error", "message": "Failed to write config"}
+
+
+@router.get("/disabled")
+async def get_disabled_symbols(
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """Get list of disabled symbols."""
+    config = read_json(CONFIG_PATH) or {}
+    return {"disabled_symbols": config.get("DISABLED_SYMBOLS", [])}
+
+
+@router.post("/close/{symbol}")
+async def close_position_by_symbol(
+    symbol: str,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """Close position for a symbol at market price."""
+    symbol = symbol.upper().replace(" ", "")
+
+    # Read active trades
+    project_root = get_project_root()
+    active_path = project_root / "data" / "active_trades.json"
+    active = read_json(active_path)
+
+    if not isinstance(active, dict) or symbol not in active:
+        raise HTTPException(status_code=404, detail=f"No active position for {symbol}")
+
+    trade = active[symbol]
+    deal_id = trade.get("deal_id") or trade.get("dealId")
+
+    if not deal_id:
+        raise HTTPException(status_code=400, detail=f"Cannot find deal ID for {symbol}")
+
+    # Try to close the position
+    try:
+        # Import here to avoid circular imports
+        import sys
+        sys.path.insert(0, str(project_root))
+        from src.exchanges.exchange_factory import get_exchange_client
+
+        client = get_exchange_client()
+
+        if hasattr(client, "close_position"):
+            success = client.close_position(symbol, deal_id, 1.0)
+            if success:
+                return {"status": "success", "symbol": symbol, "message": "Position closed"}
+            return {"status": "error", "message": "Failed to close position on exchange"}
+        raise HTTPException(status_code=400, detail="Exchange client does not support close_position")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
