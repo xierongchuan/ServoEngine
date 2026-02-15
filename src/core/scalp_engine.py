@@ -422,6 +422,23 @@ class ScalpEngine:
         self._calibration_interval = perf_cfg.get("calibration_interval_cycles", 100)
         self._slow_cycle: int = 0
 
+        # === Logging state (Task 1: Fast loop status) ===
+        self._last_status_cycle: int = 0
+        self._status_interval_cycles: int = 45  # ~67.5s at 1.5s/cycle
+        self._last_score: int = 0
+        self._last_max_score: int = 0
+
+        # === Signal rejection tracking (Task 4) ===
+        self._rejection_counts: Dict[str, int] = {}
+        self._rejection_window_cycles: int = 60  # Summary every ~90s
+        self._last_rejection_log_cycle: int = 0
+
+        # === Veto skip tracking (Task 3) ===
+        self._veto_skip_counter: int = 0
+        self._veto_skip_reasons: Dict[str, int] = {}
+        self._last_veto_skip_log_cycle: int = 0
+        self._veto_skip_log_interval: int = 40  # ~60s
+
         # Lazy-loaded components
         self._analyzer = None
         self._signal_gen = None
@@ -506,6 +523,12 @@ class ScalpEngine:
                     self._check_entry(indicators, regime)
 
                 self._fast_cycle += 1
+
+                # 5. Periodic status log (Task 1: every ~45 cycles = ~67.5s)
+                if self._fast_cycle - self._last_status_cycle >= self._status_interval_cycles:
+                    self._log_fast_loop_status(indicators, regime)
+                    self._last_status_cycle = self._fast_cycle
+
                 elapsed = time.time() - start
                 sleep_time = max(0.1, self._fast_interval - elapsed)
                 time.sleep(sleep_time)
@@ -641,6 +664,7 @@ class ScalpEngine:
         # Session check
         can_trade, reason = self._session.can_trade()
         if not can_trade:
+            self._track_rejection(f"session:{reason}")
             return
 
         # Spread filter — reject signals when spread is too wide
@@ -649,12 +673,20 @@ class ScalpEngine:
             spread_bps = self._ob_spread_bps
 
         if spread_bps > self._spread_max_bps > 0:
+            self._track_rejection("spread")
             return  # Spread too wide, skip this cycle
 
         # Generate signal (uses cached OB imbalance from slow loop)
         signal = self._signal_gen.generate(indicators, regime=regime, ob_imbalance=ob_imbalance)
 
+        # Track last score for status logging (Task 1)
+        self._last_score = signal.get("score", 0)
+        self._last_max_score = signal.get("max_score", 0)
+
         if signal["signal"] == "HOLD":
+            # Track why HOLD (low score)
+            min_required = signal.get("details", {}).get("min_score_required", "?")
+            self._track_rejection(f"score<{min_required}")
             return
 
         quality = signal["quality"]
@@ -675,7 +707,12 @@ class ScalpEngine:
                     "cycle": self._fast_cycle,
                 }
             info(f"[SCALP] {self.symbol}: Queued for AI veto: {signal['signal']} Q:{quality:.2f}")
-        # If veto disabled or quality < borderline, skip
+        else:
+            # Veto not used - track why (Task 3)
+            if not self._veto_enabled:
+                self._track_veto_skip("veto_disabled")
+            else:
+                self._track_veto_skip("quality_below_borderline")
 
     def _execute_entry(self, signal: Dict, indicators: Dict, ai_veto_used: bool = False):
         """Place a trade based on signal."""
@@ -1020,6 +1057,11 @@ class ScalpEngine:
                 self._ai_regime_label = new_regime
 
                 # Merge AI params into current regime if confidence is high enough
+                # Always log AI regime result with full details (Task 2)
+                ai_log = (f"[SCALP-L2] {self.symbol}: AI regime={new_regime} conf={confidence:.2f} "
+                          f"bias={ai_result.get('bias', '?')} mode={ai_result.get('scalp_mode', '?')} "
+                          f"note={ai_result.get('note', '')}")
+
                 if confidence >= 0.6:
                     ai_params = ai_result.get("params", {})
                     with self._lock:
@@ -1035,12 +1077,9 @@ class ScalpEngine:
                                     if key in ai_params:
                                         self._regime[f"recommended_{key}"] = ai_params[key]
 
-                    info(f"[SCALP-L2] {self.symbol}: AI regime={new_regime} conf={confidence:.2f} "
-                         f"bias={ai_result.get('bias', '?')} mode={ai_result.get('scalp_mode', '?')} "
-                         f"note={ai_result.get('note', '')}")
+                    info(f"{ai_log} [APPLIED]")
                 else:
-                    info(f"[SCALP-L2] {self.symbol}: AI regime={new_regime} LOW conf={confidence:.2f}, "
-                         f"keeping deterministic regime")
+                    info(f"{ai_log} [LOW_CONF-IGNORED]")
 
             self._last_ai_regime_time = now
 
@@ -1220,3 +1259,91 @@ class ScalpEngine:
         except Exception as e:
             warning(f"[SCALP] {self.symbol}: Candle fetch failed: {e}")
             return []
+
+    # =========================================================================
+    # Logging Methods (Tasks 1, 3, 4)
+    # =========================================================================
+
+    def _log_fast_loop_status(self, indicators: Dict, regime: Optional[Dict]):
+        """
+        Periodic status log for fast loop monitoring (Task 1).
+        Format: [SCALP] BTC-USDT: 70140.00 RSI=55 EMA↑ score=2/6 spread=1.2bps [RANGING]
+        """
+        price = indicators.get("current_price", 0)
+        rsi = indicators.get("rsi", 50)
+        ema_fast = indicators.get("ema_fast", 0)
+        ema_med = indicators.get("ema_med", 0)
+
+        # EMA trend direction
+        if ema_fast > ema_med and ema_med > 0:
+            ema_trend = "EMA↑"
+        elif ema_fast < ema_med and ema_med > 0:
+            ema_trend = "EMA↓"
+        else:
+            ema_trend = "EMA→"
+
+        # Last signal score
+        if self._last_max_score > 0:
+            score_str = f"{self._last_score}/{self._last_max_score}"
+        else:
+            score_str = "-"
+
+        # Spread
+        with self._lock:
+            spread_bps = self._ob_spread_bps
+        spread_str = f"{spread_bps:.1f}bps"
+
+        # Regime
+        regime_label = regime.get("regime", "?") if regime else "?"
+
+        info(f"[SCALP] {self.symbol}: {price:.2f} RSI={rsi:.0f} {ema_trend} "
+             f"score={score_str} spread={spread_str} [{regime_label}]")
+
+    def _track_rejection(self, reason: str):
+        """Track signal rejection reason for periodic summary (Task 4)."""
+        self._rejection_counts[reason] = self._rejection_counts.get(reason, 0) + 1
+
+        # Log periodically
+        if self._fast_cycle - self._last_rejection_log_cycle >= self._rejection_window_cycles:
+            self._log_rejection_summary()
+            self._last_rejection_log_cycle = self._fast_cycle
+
+    def _log_rejection_summary(self):
+        """Log summary of signal rejections (Task 4)."""
+        if not self._rejection_counts:
+            info(f"[SCALP] {self.symbol}: Last {self._rejection_window_cycles} cycles: all HOLD (no signals)")
+            return
+
+        total = sum(self._rejection_counts.values())
+        hold_count = max(0, self._rejection_window_cycles - total)
+        parts = [f"HOLD:{hold_count}"]
+
+        for reason, count in sorted(self._rejection_counts.items(), key=lambda x: -x[1]):
+            parts.append(f"{reason}:{count}")
+
+        info(f"[SCALP] {self.symbol}: Last {self._rejection_window_cycles} cycles: {', '.join(parts)}")
+
+        # Reset counts
+        self._rejection_counts = {}
+
+    def _track_veto_skip(self, reason: str):
+        """Track why veto wasn't used for periodic summary (Task 3)."""
+        self._veto_skip_counter += 1
+        self._veto_skip_reasons[reason] = self._veto_skip_reasons.get(reason, 0) + 1
+
+        # Log periodically
+        if self._fast_cycle - self._last_veto_skip_log_cycle >= self._veto_skip_log_interval:
+            self._log_veto_skip_summary()
+            self._last_veto_skip_log_cycle = self._fast_cycle
+
+    def _log_veto_skip_summary(self):
+        """Log summary of veto skips (Task 3)."""
+        if not self._veto_skip_reasons:
+            return
+
+        reasons_str = ", ".join(f"{k}:{v}" for k, v in self._veto_skip_reasons.items())
+        info(f"[SCALP-L3] {self.symbol}: Veto skip summary ({self._veto_skip_counter} cycles): {reasons_str}")
+
+        # Reset counters
+        self._veto_skip_counter = 0
+        self._veto_skip_reasons = {}
