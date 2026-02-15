@@ -187,7 +187,7 @@ AI получает не просто список свечей, а **полну
   "STRATEGY_STYLE": "HYBRID",
   "AI_SETTINGS": {
     "provider": "openrouter",
-    "model": "google/gemini-2.5-flash-lite",
+    "model": "google/gemini-2.5-flash",
     "base_url": "https://openrouter.ai/api/v1/chat/completions",
     "temperature": 0.3,
     "max_tokens": 4096,
@@ -227,7 +227,7 @@ AI получает не просто список свечей, а **полну
 ```json
 "AI_SETTINGS": {
   "provider": "openrouter",
-  "model": "google/gemini-2.5-flash-lite",
+  "model": "google/gemini-2.5-flash",
   "base_url": "https://openrouter.ai/api/v1/chat/completions",
   "temperature": 0.3,
   "max_tokens": 4096,
@@ -247,7 +247,7 @@ AI получает не просто список свечей, а **полну
 | Параметр | Тип | Описание |
 | :--- | :--- | :--- |
 | `provider` | Str | Провайдер API: `"openrouter"` |
-| `model` | Str | ID модели. Для OpenRouter: `"google/gemini-2.5-flash-lite"`, `"anthropic/claude-sonnet-4"` и др. |
+| `model` | Str | ID модели. Для OpenRouter: `"google/gemini-2.5-flash"`, `"anthropic/claude-sonnet-4"` и др. |
 | `base_url` | Str | URL эндпоинта API. Обычно менять не нужно |
 | `temperature` | Float | Креативность ответа (0.0–1.0). Для трейдинга лучше 0.2–0.4 |
 | `max_tokens` | Int | Максимум токенов в ответе (**включая** reasoning). Для reasoning-моделей нужно 4096+, т.к. reasoning съедает часть лимита |

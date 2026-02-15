@@ -51,6 +51,8 @@ class _Handler(FileSystemEventHandler):
         if p.suffix.lower() == ".png":
             return "chart_update"
         if p.suffix.lower() == ".log":
+            if p.parent.name == "logs":
+                return "log_symbol"
             return "log_line"
         if name == "bot_config.json":
             return "config_changed"
@@ -71,7 +73,11 @@ class FileWatcher:
     def _on_change(self, event_type: str, path: str) -> None:
         if not self._ws_manager or not self._loop:
             return
-        data = {"path": Path(path).name}
+        p = Path(path)
+        if event_type == "log_symbol":
+            data = {"source": p.stem}
+        else:
+            data = {"path": p.name}
         asyncio.run_coroutine_threadsafe(
             self._ws_manager.broadcast(event_type, data),
             self._loop,

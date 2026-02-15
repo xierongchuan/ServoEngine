@@ -6,15 +6,7 @@
       "BNBUSDT",
       "XRPUSDT",
       "SOLUSDT",
-      "DOGEUSDT",
-      "DOTUSDT",
-      "MATICUSDT",
-      "LTCUSDT",
-      "AVAXUSDT",
-      "LINKUSDT",
-      "UNIUSDT",
-      "ALGOUSDT",
-      "TRXUSDT"
+      "LTCUSDT"
     ]
   },
   "DISABLED_SYMBOLS": [],
@@ -243,7 +235,7 @@
     "momentum_entry_enabled": true,
     "momentum_consecutive_candles": 3
   },
-  "STRATEGY_STYLE": "SCALP",
+  "STRATEGY_STYLE": "HYBRID",
   "STYLE_PRESETS": {
     "SCALP": {
       "timeframe": "1m",
