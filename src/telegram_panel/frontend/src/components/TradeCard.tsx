@@ -54,12 +54,13 @@ export function TradeCard({ trade, disabledSymbols = [], onUpdate }: {
 
   const handleClose = async () => {
     if (loading) return;
+    if (!confirm(`Close ${trade.symbol} ${trade.side} position?`)) return;
     setLoading(true);
     try {
       await closePosition(trade.symbol);
       onUpdate?.();
-    } catch (e) {
-      console.error('Failed to close position:', e);
+    } catch (e: any) {
+      alert(`Failed to close ${trade.symbol}: ${e?.message || 'Unknown error'}`);
     } finally {
       setLoading(false);
     }

@@ -285,8 +285,110 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                                             info(f"🔧 [{symbol}] HYBRID: AI tried {ai_action} but signal was {signal} - forcing HOLD")
                                             prediction["action"] = "hold"
                                             prediction["reason"] = f"[HYBRID] AI rejected {signal} signal"
+                elif STRATEGY_STYLE == "INTRADAY":
+                    # INTRADAY pipeline: pre-filter → signal scoring → regime → risk → AI (always)
+                    signal_data = analysis_result.get("signal_data", {})
+                    signal = signal_data.get("signal", "HOLD")
+                    signal_quality = signal_data.get("quality", 0.0)
+                    close_signal = analysis_result.get("close_signal", {})
+                    regime_data = analysis_result.get("regime", {})
+                    htf_data = analysis_result.get("htf_data", {})
+                    current_price = analysis_result.get("current_price", 0)
+
+                    regime_label = regime_data.get("regime", "UNKNOWN") if regime_data else "UNKNOWN"
+
+                    # Compute dynamic SL/TP and sizing when we have a directional signal
+                    sl = None
+                    tp = None
+                    size_pct = None
+
+                    if signal in ("BUY", "SELL"):
+                        details = signal_data.get("details", {})
+                        support = details.get("support", 0)
+                        resistance = details.get("resistance", 0)
+
+                        # Dynamic SL/TP
+                        try:
+                            from src.core.risk_manager import calculate_dynamic_sl_tp
+                            sl_tp = calculate_dynamic_sl_tp(
+                                signal=signal,
+                                current_price=current_price,
+                                atr=analysis_result.get("atr", 0),
+                                support=support,
+                                resistance=resistance,
+                                regime=regime_data if regime_data else {},
+                                quality=signal_quality
+                            )
+                            sl = sl_tp["stop_loss"]
+                            tp = sl_tp["take_profit"]
+                            info(f"🎯 [{symbol}] Dynamic SL/TP: SL={sl:.2f} TP={tp:.2f} R/R={sl_tp['risk_reward']:.2f}")
+
+                            try:
+                                from src.core.risk_manager import validate_risk_parameters
+                                if not validate_risk_parameters(sl_tp):
+                                    warning(f"⚠️ [{symbol}] Risk validation failed (R/R={sl_tp.get('risk_reward', 0):.2f})")
+                                    # Pass info to AI — it will see this in context
+                                    analysis_result["risk_warning"] = f"R/R={sl_tp.get('risk_reward', 0):.2f} below minimum"
+                            except Exception as e:
+                                warning(f"⚠️ [{symbol}] Risk validation error: {e}")
+                        except Exception as e:
+                            warning(f"⚠️ [{symbol}] Dynamic SL/TP failed: {e}, using ATR-based fallback")
+                            atr = analysis_result.get("atr", 0)
+                            if signal == "BUY":
+                                sl = current_price - atr * 2.0
+                                tp = current_price + atr * 3.0
+                            else:
+                                sl = current_price + atr * 2.0
+                                tp = current_price - atr * 3.0
+
+                        # Dynamic position sizing
+                        try:
+                            from src.core.risk_manager import calculate_position_size
+                            from src.core.performance import get_performance_tracker
+                            from src.config import POSITION_SIZE_PERCENT
+                            perf = get_performance_tracker().get_recent_performance(symbol)
+                            size_pct = calculate_position_size(
+                                base_pct=POSITION_SIZE_PERCENT,
+                                quality=signal_quality,
+                                regime=regime_data if regime_data else {},
+                                recent_performance=perf
+                            )
+                            info(f"📐 [{symbol}] Dynamic sizing: {size_pct:.1f}% (base={POSITION_SIZE_PERCENT}%, Q={signal_quality:.2f})")
+                        except Exception as e:
+                            warning(f"⚠️ [{symbol}] Dynamic sizing failed: {e}, using default")
+
+                    # Log deterministic close signal for AI context
+                    if real_position and close_signal and close_signal.get("should_close"):
+                        close_reason = close_signal.get("reason", "Deterministic exit")
+                        close_urgency = close_signal.get("urgency", "medium")
+                        info(f"🚨 [{symbol}] INTRADAY close signal: {close_reason} (urgency: {close_urgency})")
+                        # Pass close signal info to AI as recommendation
+                        analysis_result["deterministic_close"] = {
+                            "should_close": True,
+                            "reason": close_reason,
+                            "urgency": close_urgency,
+                        }
+
+                    # Log signal status
+                    score = signal_data.get("score", 0)
+                    max_score = signal_data.get("max_score", 13)
+                    info(f"🔧 [{symbol}] INTRADAY: signal={signal} score={score}/{max_score} Q={signal_quality:.2f} [{regime_label}]")
+
+                    # === ALWAYS invoke AI — it makes the final decision ===
+                    with StageTimer("AI Прогноз", symbol, "🧠"):
+                        info(f"🧠 [{symbol}] INTRADAY: AI invoked (signal={signal}, regime={regime_label})")
+                        prediction = predict.process_analysis(analysis_result)
+
+                        # Use dynamic SL/TP if AI didn't provide its own
+                        if sl is not None and not prediction.get("stop_loss"):
+                            prediction["stop_loss"] = sl
+                        if tp is not None and not prediction.get("take_profit"):
+                            prediction["take_profit"] = tp
+                        if size_pct is not None:
+                            prediction["size_pct"] = size_pct
+
                 else:
-                    # Non-HYBRID mode - standard AI prediction
+                    # Fallback for SWING/GRID/etc - standard AI prediction
                     with StageTimer("AI Прогноз", symbol, "🧠"):
                         prediction = predict.process_analysis(analysis_result)
 
@@ -336,7 +438,7 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                     executor.execute_prediction(prediction)
 
                 # 6b. Запись контекста входа для performance tracking (HYBRID)
-                if action in ("buy", "sell") and not real_position and STRATEGY_STYLE == "HYBRID":
+                if action in ("buy", "sell") and not real_position and STRATEGY_STYLE in ("HYBRID", "INTRADAY"):
                     try:
                         entry_ctx = {
                             "entry_regime": regime_data.get("regime", "UNKNOWN") if regime_data else "UNKNOWN",

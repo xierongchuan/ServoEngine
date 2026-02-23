@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 import time
@@ -36,6 +37,87 @@ class TradeTracker:
                 json.dump(data, f, indent=4, default=str)
         except Exception as e:
             warning(f"Failed to save {filepath}: {e}")
+
+    def _save_active_trades(self, symbol: str = None, delete: bool = False):
+        """Атомарный read-modify-write для active_trades.json."""
+        try:
+            if os.path.exists(ACTIVE_TRADES_FILE):
+                with open(ACTIVE_TRADES_FILE, "r+") as f:
+                    fcntl.flock(f, fcntl.LOCK_EX)
+                    try:
+                        f.seek(0)
+                        content = f.read()
+                        if content.strip():
+                            try:
+                                disk_data = json.loads(content)
+                            except json.JSONDecodeError:
+                                warning("[TradeTracker] Corrupt active_trades, rebuilding")
+                                disk_data = {}
+                        else:
+                            disk_data = {}
+
+                        if symbol:
+                            if delete:
+                                disk_data.pop(symbol, None)
+                            elif symbol in self.active_trades:
+                                disk_data[symbol] = self.active_trades[symbol]
+                            # Обновляем in-memory данные других символов
+                            for key, value in disk_data.items():
+                                if key != symbol:
+                                    self.active_trades[key] = value
+                        else:
+                            # Полная запись (force_sync_all при старте)
+                            disk_data = dict(self.active_trades)
+
+                        f.seek(0)
+                        f.truncate()
+                        json.dump(disk_data, f, indent=4, default=str)
+                    finally:
+                        fcntl.flock(f, fcntl.LOCK_UN)
+            else:
+                with open(ACTIVE_TRADES_FILE, "w") as f:
+                    fcntl.flock(f, fcntl.LOCK_EX)
+                    try:
+                        json.dump(self.active_trades, f, indent=4, default=str)
+                    finally:
+                        fcntl.flock(f, fcntl.LOCK_UN)
+        except Exception as e:
+            warning(f"Failed to save {ACTIVE_TRADES_FILE}: {e}")
+
+    def _append_history(self, entry: dict):
+        """Атомарный append в trade_history.json."""
+        try:
+            if os.path.exists(HISTORY_FILE):
+                with open(HISTORY_FILE, "r+") as f:
+                    fcntl.flock(f, fcntl.LOCK_EX)
+                    try:
+                        f.seek(0)
+                        content = f.read()
+                        if content.strip():
+                            try:
+                                history = json.loads(content)
+                            except json.JSONDecodeError:
+                                warning("[TradeTracker] Corrupt history, starting fresh")
+                                history = []
+                        else:
+                            history = []
+                        if not isinstance(history, list):
+                            history = []
+                        history.append(entry)
+                        f.seek(0)
+                        f.truncate()
+                        json.dump(history, f, indent=4, default=str)
+                    finally:
+                        fcntl.flock(f, fcntl.LOCK_UN)
+            else:
+                with open(HISTORY_FILE, "w") as f:
+                    fcntl.flock(f, fcntl.LOCK_EX)
+                    try:
+                        json.dump([entry], f, indent=4, default=str)
+                    finally:
+                        fcntl.flock(f, fcntl.LOCK_UN)
+        except Exception as e:
+            warning(f"Failed to append to {HISTORY_FILE}: {e}")
 
     def sync_position(self, symbol, real_position):
         """
@@ -80,12 +162,13 @@ class TradeTracker:
                 if key in context:
                     trade[key] = context[key]
             self.active_trades[symbol] = trade
-            self._save_json(ACTIVE_TRADES_FILE, self.active_trades)
+            self._save_active_trades(symbol)
 
     def _handle_new_trade(self, symbol, real_position):
         """Register a new trade"""
         trade_data = {
             "symbol": symbol,
+            "dealId": real_position.get("dealId", ""),
             "side": "LONG" if real_position.get("type", "").upper() == "BUY" else "SHORT" if real_position.get("type", "").upper() == "SELL" else real_position.get("side", "UNKNOWN"),
             "entry_price": float(real_position.get("entry", real_position.get("avgPrice", 0))),
             "amount": float(real_position.get("size", real_position.get("amount", 0))),
@@ -96,7 +179,7 @@ class TradeTracker:
         }
 
         self.active_trades[symbol] = trade_data
-        self._save_json(ACTIVE_TRADES_FILE, self.active_trades)
+        self._save_active_trades(symbol)
 
         log_trade(f"🆕 [TradeTracker] Detected NEW trade for {symbol} @ {trade_data['entry_price']}")
         info(f"🆕 [TradeTracker] New trade tracked: {symbol}")
@@ -112,14 +195,11 @@ class TradeTracker:
         stored_trade["reason"] = "MANUAL_OR_TP_SL" # We infer this because it disappeared using sync()
 
         # Move to history
-        history = self._load_json(HISTORY_FILE)
-        if isinstance(history, dict): history = [] # Safe fallback
-        history.append(stored_trade)
-        self._save_json(HISTORY_FILE, history)
+        self._append_history(stored_trade)
 
         # Remove from active
         del self.active_trades[symbol]
-        self._save_json(ACTIVE_TRADES_FILE, self.active_trades)
+        self._save_active_trades(symbol, delete=True)
 
         log_trade(f"🏁 [TradeTracker] Trade CLOSED for {symbol}. Last PnL: {stored_trade.get('last_pnl', 'N/A')}")
         info(f"🏁 [TradeTracker] Trade archived: {symbol}")
@@ -129,6 +209,10 @@ class TradeTracker:
         current_pnl = float(real_position.get("unrealizedPnl", 0) or real_position.get("pnl", 0))
         stored_trade["last_pnl"] = current_pnl
         stored_trade["current_price"] = real_position.get("markPrice") or real_position.get("avgPrice")
+
+        # Repair missing dealId for trades created before this field was stored
+        if "dealId" not in stored_trade and real_position.get("dealId"):
+            stored_trade["dealId"] = real_position.get("dealId")
 
         # Always sync entry_price from exchange (source of truth)
         exchange_entry = float(real_position.get("entry", real_position.get("avgPrice", 0)))
@@ -146,7 +230,7 @@ class TradeTracker:
         stored_trade["min_pnl"] = min(stored_trade.get("min_pnl", 999999), current_pnl)
 
         self.active_trades[symbol] = stored_trade
-        self._save_json(ACTIVE_TRADES_FILE, self.active_trades)
+        self._save_active_trades(symbol)
 
     def force_sync_all(self, real_positions_dict: dict):
         """
@@ -169,10 +253,7 @@ class TradeTracker:
             stored["status"] = "CLOSED_SYNC"
             stored["close_time"] = datetime.now().isoformat()
             stored["reason"] = "STALE_SYNC_CLEANUP"
-            history = self._load_json(HISTORY_FILE)
-            if isinstance(history, dict): history = []
-            history.append(stored)
-            self._save_json(HISTORY_FILE, history)
+            self._append_history(stored)
             del self.active_trades[symbol]
 
         # 2. Add missing trades (on exchange but not in tracker)
@@ -180,7 +261,7 @@ class TradeTracker:
             if symbol not in self.active_trades and real_pos:
                 self._handle_new_trade(symbol, real_pos)
 
-        self._save_json(ACTIVE_TRADES_FILE, self.active_trades)
+        self._save_active_trades()
 
         if stale_symbols:
             info(f"🧹 [TradeTracker] Cleaned {len(stale_symbols)} stale trades: {stale_symbols}")

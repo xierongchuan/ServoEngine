@@ -23,8 +23,8 @@ class TestRRValidation(unittest.TestCase):
 
     @patch('src.core.predict.warning')
     @patch('src.core.predict.info')
-    def test_bad_rr_buy(self, mock_info, mock_warning):
-        """Test that a bad R/R ratio for BUY is rejected"""
+    def test_bad_rr_buy_auto_corrects_tp(self, mock_info, mock_warning):
+        """Test that a bad R/R ratio for BUY auto-corrects TP instead of blocking"""
         prediction = {
             "action": "buy",
             "confidence": 0.9,
@@ -33,17 +33,19 @@ class TestRRValidation(unittest.TestCase):
             "reason": "Test"
         }
         current_price = 100.0
-        # Risk = 10.0, Reward = 5.0, R/R = 0.5 < 1.5
+        # Risk = 10.0, Reward = 5.0, R/R = 0.5 < 0.8 (soft_limit)
+        # Expected: TP adjusted to 100 + 10*0.8 = 108.0
 
         result = validate_prediction(prediction, current_price)
-        self.assertEqual(result["action"], "hold")
-        self.assertEqual(result["confidence"], 0.0)
-        self.assertIn("Low R/R", result["reason"])
+        self.assertEqual(result["action"], "buy")  # NOT blocked
+        self.assertEqual(result["confidence"], 0.9)  # confidence preserved
+        self.assertGreater(result["take_profit"], 105.0)  # TP moved further
+        self.assertIn("AUTO-FIX: TP adjusted", result["reason"])
 
     @patch('src.core.predict.warning')
     @patch('src.core.predict.info')
-    def test_bad_rr_sell(self, mock_info, mock_warning):
-        """Test that a bad R/R ratio for SELL is rejected"""
+    def test_bad_rr_sell_auto_corrects_tp(self, mock_info, mock_warning):
+        """Test that a bad R/R ratio for SELL auto-corrects TP instead of blocking"""
         prediction = {
             "action": "sell",
             "confidence": 0.9,
@@ -52,12 +54,14 @@ class TestRRValidation(unittest.TestCase):
             "reason": "Test"
         }
         current_price = 100.0
-        # Risk = 10.0, Reward = 5.0, R/R = 0.5 < 1.5
+        # Risk = 10.0, Reward = 5.0, R/R = 0.5 < 0.8 (soft_limit)
+        # Expected: TP adjusted to 100 - 10*0.8 = 92.0
 
         result = validate_prediction(prediction, current_price)
-        self.assertEqual(result["action"], "hold")
-        self.assertEqual(result["confidence"], 0.0)
-        self.assertIn("Low R/R", result["reason"])
+        self.assertEqual(result["action"], "sell")  # NOT blocked
+        self.assertEqual(result["confidence"], 0.9)  # confidence preserved
+        self.assertLess(result["take_profit"], 95.0)  # TP moved further down
+        self.assertIn("AUTO-FIX: TP adjusted", result["reason"])
 
     @patch('src.core.predict.warning')
     @patch('src.core.predict.info')

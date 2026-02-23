@@ -383,6 +383,93 @@ def calculate_seb(prices, length=None, mult=None):
 
 from src.exchanges.exchange_factory import get_exchange_client
 
+
+def analyze_htf(symbol):
+    """
+    Analyzes higher-timeframe (1H) data for INTRADAY multi-timeframe context.
+
+    Returns:
+        dict with htf_trend, htf_ema_fast, htf_ema_slow, htf_rsi, daily_bias, daily_change_pct
+        or None if HTF data is unavailable
+    """
+    from src.config import BOT_CONFIG
+
+    mtf_cfg = BOT_CONFIG.get("INTRADAY_SETTINGS", {}).get("multi_timeframe", {})
+    if not mtf_cfg.get("enabled", True):
+        return None
+
+    htf_file = f"{DATA_DIR}/prices/{get_filename(symbol)}_htf.json"
+    if not os.path.exists(htf_file):
+        warning(f"⚠️ [INTRADAY] HTF file not found: {htf_file}")
+        return None
+
+    try:
+        with open(htf_file) as f:
+            htf_prices = json.load(f)
+
+        if not htf_prices or len(htf_prices) < 10:
+            warning(f"⚠️ [INTRADAY] Not enough HTF data: {len(htf_prices) if htf_prices else 0} candles")
+            return None
+
+        htf_closes = [get_price_value(p.get("closePrice", 0)) for p in htf_prices]
+
+        # HTF EMAs
+        ema_periods = mtf_cfg.get("htf_ema_periods", [21, 50])
+        htf_ema_fast = calculate_ema(htf_closes, ema_periods[0])
+        htf_ema_slow = calculate_ema(htf_closes, ema_periods[1]) if len(ema_periods) > 1 else 0
+
+        # HTF RSI
+        if len(htf_closes) >= 15:
+            rsi_values = calculate_rsi_series(htf_closes)
+            htf_rsi = rsi_values[-1]
+        else:
+            htf_rsi = 50.0
+
+        # HTF Trend
+        if htf_ema_fast > 0 and htf_ema_slow > 0:
+            ema_diff_pct = (htf_ema_fast - htf_ema_slow) / htf_ema_slow * 100
+            if ema_diff_pct > 0.1:
+                htf_trend = "BULLISH"
+            elif ema_diff_pct < -0.1:
+                htf_trend = "BEARISH"
+            else:
+                htf_trend = "NEUTRAL"
+        else:
+            htf_trend = "NEUTRAL"
+
+        # Daily bias from recent candles
+        bias_lookback = mtf_cfg.get("daily_bias_lookback_candles", 24)
+        bias_threshold = mtf_cfg.get("daily_bias_threshold_pct", 0.5)
+        bias_candles = htf_closes[-bias_lookback:] if len(htf_closes) >= bias_lookback else htf_closes
+        if len(bias_candles) >= 2:
+            daily_change_pct = (bias_candles[-1] - bias_candles[0]) / bias_candles[0] * 100
+            if daily_change_pct > bias_threshold:
+                daily_bias = "LONG"
+            elif daily_change_pct < -bias_threshold:
+                daily_bias = "SHORT"
+            else:
+                daily_bias = "NEUTRAL"
+        else:
+            daily_change_pct = 0.0
+            daily_bias = "NEUTRAL"
+
+        result = {
+            "htf_trend": htf_trend,
+            "htf_ema_fast": round(htf_ema_fast, 5),
+            "htf_ema_slow": round(htf_ema_slow, 5),
+            "htf_rsi": round(htf_rsi, 2),
+            "daily_bias": daily_bias,
+            "daily_change_pct": round(daily_change_pct, 2),
+        }
+
+        info(f"🌐 [INTRADAY] HTF: trend={htf_trend}, RSI={htf_rsi:.1f}, bias={daily_bias} ({daily_change_pct:+.2f}%)")
+        return result
+
+    except Exception as e:
+        error(f"❌ [INTRADAY] HTF analysis error: {e}")
+        return None
+
+
 def analyze_symbol_with_position(symbol, decision_context=""):
     """
     Анализирует один символ, самостоятельно получая информацию о текущей позиции.
@@ -833,6 +920,75 @@ def analyze_symbol(symbol, position=None, decision_context=""):
             if close_signal.get("should_close"):
                 info(f"🔧 [HYBRID] Close signal: {close_signal['reason']}")
 
+    # === INTRADAY MODE: HTF + Session + Deterministic Signal ===
+    htf_data = None
+    session_data = None
+
+    if STRATEGY_STYLE == "INTRADAY":
+        from src.core.intraday_signal import generate_intraday_signal, intraday_should_close, intraday_pre_filter
+        from src.core.session import get_session_info
+
+        # 1. HTF analysis
+        htf_data = analyze_htf(symbol)
+
+        # 2. Session awareness
+        session_data = get_session_info()
+
+        # 3. Build signal input (same base as HYBRID + HTF + session)
+        signal_input = {
+            "global_trend": global_trend,
+            "local_trend": local_trend,
+            "rsi": rsi,
+            "volume_ratio": volume_ratio,
+            "current_price": current_price,
+            "support": support,
+            "resistance": resistance,
+            "ema9": ema9,
+            "ema21": ema21,
+            "last_5_direction": last_5_direction,
+            "atr": atr,
+            "atr_ratio": atr_ratio,
+            "macd_line": macd_line,
+            "macd_signal": macd_signal,
+            "macd_hist": macd_hist,
+            "bb_upper": bb_upper,
+            "bb_lower": bb_lower,
+            "bb_width": bb_width,
+            "close_prices": close_prices,
+            "rsi_values": rsi_values,
+        }
+
+        # 4. Pre-filter
+        should_proceed, filter_reason = intraday_pre_filter(signal_input, htf_data, session_data)
+        if not should_proceed:
+            info(f"🔧 [INTRADAY] Pre-filter skip: {filter_reason}")
+            signal_data = {
+                "signal": "HOLD", "score": 0, "max_score": 13,
+                "quality": 0.0, "confidence": 0.0,
+                "reasons": [f"Pre-filter: {filter_reason}"],
+                "filters_passed": False, "details": {"filter": filter_reason},
+                "regime": "NO_REGIME",
+            }
+        else:
+            # 5. Regime detection
+            try:
+                from src.core.regime import detect_regime
+                regime_data = detect_regime(signal_input)
+                info(f"🌐 [INTRADAY] Regime: {regime_data['regime']} (trend={regime_data.get('trend_strength', 0):.2f}, vol={regime_data.get('volatility_state', '?')})")
+            except Exception as e:
+                warning(f"⚠️ [INTRADAY] Regime detection failed: {e}")
+                regime_data = None
+
+            # 6. Generate intraday signal
+            signal_data = generate_intraday_signal(signal_input, htf_data, session_data, regime=regime_data)
+            info(f"🔧 [INTRADAY] Signal: {signal_data['signal']} (score: {signal_data['score']}, Q: {signal_data.get('quality', 0):.2f})")
+
+        # 7. Close signal check
+        if position:
+            close_signal = intraday_should_close(signal_input, position, htf_data)
+            if close_signal.get("should_close"):
+                info(f"🔧 [INTRADAY] Close signal: {close_signal['reason']}")
+
     # === СБОРКА ПРОМПТА ===
     from src.prompts.builder import PromptBuilder
 
@@ -879,9 +1035,12 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         "min_confidence": min_confidence,
         "is_momentum_market": is_momentum_market,
         "decision_history": decision_context,
-        # HYBRID mode specific
+        # HYBRID / INTRADAY mode specific
         "signal_data": signal_data,
         "close_signal": close_signal,
+        # INTRADAY specific
+        "htf_data": htf_data,
+        "session_data": session_data,
     }
 
     prompt = PromptBuilder.build(STRATEGY_STYLE, prompt_ctx)
@@ -901,10 +1060,13 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         "position": position,
         "prompt": prompt.strip(),
         "prompt_ctx": prompt_ctx,
-        # HYBRID mode specific
+        # HYBRID / INTRADAY mode specific
         "signal_data": signal_data,
         "close_signal": close_signal,
         "regime": regime_data,
+        # INTRADAY specific
+        "htf_data": htf_data,
+        "session_data": session_data,
     }
 
 def main():

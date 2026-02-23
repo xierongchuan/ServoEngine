@@ -3,6 +3,7 @@ Decision Journal — хранит историю решений AI между и
 Позволяет AI видеть свои предыдущие решения и initial trade plan.
 """
 
+import fcntl
 import json
 import os
 from datetime import datetime
@@ -31,10 +32,45 @@ class DecisionJournal:
             warning(f"[DecisionJournal] Failed to load: {e}")
         return {}
 
-    def _save(self):
+    def _save(self, symbol: str):
+        """Атомарный read-modify-write: мержит только данные текущего символа в файл."""
         try:
-            with open(JOURNAL_FILE, "w") as f:
-                json.dump(self.data, f, indent=2, default=str)
+            if os.path.exists(JOURNAL_FILE):
+                with open(JOURNAL_FILE, "r+") as f:
+                    fcntl.flock(f, fcntl.LOCK_EX)
+                    try:
+                        f.seek(0)
+                        content = f.read()
+                        if content.strip():
+                            try:
+                                disk_data = json.loads(content)
+                            except json.JSONDecodeError:
+                                warning("[DecisionJournal] Corrupt file, rebuilding")
+                                disk_data = {}
+                        else:
+                            disk_data = {}
+
+                        # Мержим только текущий символ
+                        if symbol in self.data:
+                            disk_data[symbol] = self.data[symbol]
+
+                        # Обновляем in-memory данные других символов
+                        for key, value in disk_data.items():
+                            if key != symbol:
+                                self.data[key] = value
+
+                        f.seek(0)
+                        f.truncate()
+                        json.dump(disk_data, f, indent=2, default=str)
+                    finally:
+                        fcntl.flock(f, fcntl.LOCK_UN)
+            else:
+                with open(JOURNAL_FILE, "w") as f:
+                    fcntl.flock(f, fcntl.LOCK_EX)
+                    try:
+                        json.dump(self.data, f, indent=2, default=str)
+                    finally:
+                        fcntl.flock(f, fcntl.LOCK_UN)
         except Exception as e:
             warning(f"[DecisionJournal] Failed to save: {e}")
 
@@ -63,7 +99,7 @@ class DecisionJournal:
         }
 
         self.data[symbol]["entries"].append(entry)
-        self._save()
+        self._save(symbol)
 
     def set_trade_plan(self, symbol: str, prediction: dict, entry_price: float):
         """Фиксирует initial plan при открытии позиции."""
@@ -79,20 +115,20 @@ class DecisionJournal:
             "confidence": prediction.get("confidence", 0),
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
-        self._save()
+        self._save(symbol)
         info(f"📋 [DecisionJournal] Trade plan set for {symbol}")
 
     def clear_trade_plan(self, symbol: str):
         """Очищает plan при закрытии позиции."""
         self._ensure_symbol(symbol)
         self.data[symbol]["trade_plan"] = None
-        self._save()
+        self._save(symbol)
 
     def record_close(self, symbol: str):
         """Записывает время закрытия позиции для cooldown tracking."""
         self._ensure_symbol(symbol)
         self.data[symbol]["last_close_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self._save()
+        self._save(symbol)
         info(f"❄️ [DecisionJournal] Close time recorded for {symbol}")
 
     def is_in_cooldown(self, symbol: str, cooldown_hours: float) -> tuple[bool, float]:
@@ -189,7 +225,7 @@ class DecisionJournal:
         entries = self.data[symbol]["entries"]
         if len(entries) > limit * 2:
             self.data[symbol]["entries"] = entries[-limit:]
-            self._save()
+            self._save(symbol)
 
     @staticmethod
     def _shorten_reason(reason: str) -> str:

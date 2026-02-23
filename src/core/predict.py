@@ -453,17 +453,23 @@ def validate_prediction(prediction, current_price, has_position=False):
 
     rr_ratio = reward / risk
 
-    # R/R validation: reject bad R/R for entry signals (buy/sell)
+    # R/R validation
     soft_limit = VALIDATION.get("rr_soft_limit", 0.5)
     action = prediction.get("action", "hold")
 
     if rr_ratio < soft_limit:
         if action in ("buy", "sell"):
-            # Reject entry signals with bad R/R
-            warning(f"⚠️ Low R/R ({rr_ratio:.2f} < {soft_limit}) for {action.upper()}. Forcing HOLD.")
-            prediction["action"] = "hold"
-            prediction["confidence"] = 0.0
-            prediction["reason"] += f" [AUTO-FIX: Low R/R {rr_ratio:.2f}]"
+            # Auto-correct TP to meet minimum R/R instead of blocking
+            required_reward = risk * soft_limit
+            if action == "buy":
+                new_tp = current_price + required_reward
+            else:
+                new_tp = current_price - required_reward
+
+            warning(f"⚠️ Low R/R ({rr_ratio:.2f} < {soft_limit}) for {action.upper()}. "
+                    f"Adjusting TP: {take_profit:.2f} → {new_tp:.2f} (R/R → {soft_limit:.2f})")
+            prediction["take_profit"] = new_tp
+            prediction["reason"] += f" [AUTO-FIX: TP adjusted for R/R {rr_ratio:.2f}→{soft_limit:.2f}]"
         else:
             # For hold/close, just warn
             warning(f"⚠️ Низкий Risk/Reward ({rr_ratio:.2f}) на SL/TP update. Applying anyway.")

@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from src.config import SYMBOLS, DATA_DIR, NEWS_SETTINGS, ENABLE_NEWS, CHART_RANGES, DEFAULT_CHART_RANGE, STYLE_PRESETS, STRATEGY_STYLE, parse_interval_minutes
+from src.config import SYMBOLS, DATA_DIR, NEWS_SETTINGS, ENABLE_NEWS, CHART_RANGES, DEFAULT_CHART_RANGE, STYLE_PRESETS, STRATEGY_STYLE, BOT_CONFIG, parse_interval_minutes
 from src.utils.logger import info, error
 from src.utils.helpers import get_filename
 from src.utils.news_api import get_news_for_symbol
@@ -84,6 +84,31 @@ def fetch_news(symbol):
 
     return news
 
+def fetch_htf_prices(symbol):
+    """Fetches higher-timeframe candles for INTRADAY multi-timeframe analysis."""
+    mtf_cfg = BOT_CONFIG.get("INTRADAY_SETTINGS", {}).get("multi_timeframe", {})
+    if not mtf_cfg.get("enabled", True):
+        return None
+
+    htf_interval = mtf_cfg.get("htf_timeframe", "1h")
+    htf_candles = mtf_cfg.get("htf_candles", 48)
+
+    client = get_exchange_client()
+
+    try:
+        info(f"📊 Получение HTF ({htf_interval}) свечей для {symbol}...")
+        prices = client.get_kline_data(symbol, interval=htf_interval, limit=htf_candles)
+
+        if not prices:
+            raise ValueError(f"API вернул пустой список HTF цен для {symbol}")
+
+        info(f"✅ Получено {len(prices)} HTF свечей для {symbol}")
+        return prices
+    except Exception as e:
+        error(f"❌ Ошибка получения HTF цен для {symbol}: {str(e)}")
+        return None
+
+
 def process_symbol(symbol):
     """Обрабатывает один символ: собирает цены и новости"""
     try:
@@ -93,6 +118,14 @@ def process_symbol(symbol):
         prices_file = f"{DATA_DIR}/prices/{symbol_file}.json"
         with open(prices_file, "w") as f:
             json.dump(prices, f)
+
+        # HTF candles for INTRADAY multi-timeframe analysis
+        if STRATEGY_STYLE == "INTRADAY":
+            htf_prices = fetch_htf_prices(symbol)
+            if htf_prices:
+                htf_file = f"{DATA_DIR}/prices/{symbol_file}_htf.json"
+                with open(htf_file, "w") as f:
+                    json.dump(htf_prices, f)
 
         # Сбор новостей
         if ENABLE_NEWS:

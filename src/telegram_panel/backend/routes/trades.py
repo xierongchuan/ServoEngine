@@ -221,35 +221,55 @@ async def close_position_by_symbol(
     """Close position for a symbol at market price."""
     symbol = symbol.upper().replace(" ", "")
 
-    # Read active trades
     project_root = get_project_root()
     active_path = project_root / "data" / "active_trades.json"
+    history_path = project_root / "data" / "trade_history.json"
     active = read_json(active_path)
 
     if not isinstance(active, dict) or symbol not in active:
         raise HTTPException(status_code=404, detail=f"No active position for {symbol}")
 
     trade = active[symbol]
-    deal_id = trade.get("deal_id") or trade.get("dealId")
+    deal_id = trade.get("dealId") or trade.get("deal_id")
 
-    if not deal_id:
-        raise HTTPException(status_code=400, detail=f"Cannot find deal ID for {symbol}")
-
-    # Try to close the position
     try:
-        # Import here to avoid circular imports
         import sys
         sys.path.insert(0, str(project_root))
         from src.exchanges.exchange_factory import get_exchange_client
 
         client = get_exchange_client()
 
-        if hasattr(client, "close_position"):
-            success = client.close_position(symbol, deal_id, 1.0)
-            if success:
-                return {"status": "success", "symbol": symbol, "message": "Position closed"}
+        # If dealId missing from file, fetch from exchange
+        if not deal_id:
+            positions = client.get_positions()
+            symbol_positions = positions.get(symbol, [])
+            if symbol_positions:
+                deal_id = symbol_positions[0].get("dealId")
+
+        if not deal_id:
+            raise HTTPException(status_code=400, detail=f"Cannot find deal ID for {symbol}")
+
+        if not hasattr(client, "close_position"):
+            raise HTTPException(status_code=400, detail="Exchange client does not support close_position")
+
+        success = client.close_position(symbol, deal_id, 1.0)
+        if not success:
             return {"status": "error", "message": "Failed to close position on exchange"}
-        raise HTTPException(status_code=400, detail="Exchange client does not support close_position")
+
+        # Update local files so UI reflects the change immediately
+        trade["status"] = "CLOSED"
+        trade["close_time"] = datetime.now().isoformat()
+        trade["reason"] = "PANEL_CLOSE"
+        del active[symbol]
+        write_json(active_path, active)
+
+        history = read_json(history_path)
+        if not isinstance(history, list):
+            history = []
+        history.append(trade)
+        write_json(history_path, history)
+
+        return {"status": "success", "symbol": symbol, "message": "Position closed"}
     except HTTPException:
         raise
     except Exception as e:
