@@ -12,6 +12,10 @@ export interface Trade {
   min_pnl: number;
   close_time?: string;
   reason?: string;
+  net_pnl?: number;
+  estimated_total_fees?: number;
+  estimated_entry_fee?: number;
+  fee_rate_used?: number;
 }
 
 export interface DashboardData {
@@ -25,6 +29,8 @@ export interface TradeStats {
   total_trades: number;
   win_rate: number;
   total_pnl: number;
+  total_net_pnl: number;
+  total_fees: number;
   avg_duration: string;
 }
 

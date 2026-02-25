@@ -230,10 +230,17 @@ def validate_risk_parameters(
 
     rr = sl_tp_result.get("risk_reward", 0.0)
     risk_pct = sl_tp_result.get("risk_pct", 0.0)
+    reward_pct = sl_tp_result.get("reward_pct", 0.0)
 
-    # Проверка минимального R/R
-    if rr < min_rr_ratio:
-        warning(f"❌ Валидация провалена: R/R={rr} < {min_rr_ratio} (минимум)")
+    # Fee-adjusted R/R calculation
+    from src.config import TRADING_FEE_TAKER
+    round_trip_fee_pct = TRADING_FEE_TAKER * 2.0
+    effective_rr = (reward_pct - round_trip_fee_pct) / (risk_pct + round_trip_fee_pct) if (risk_pct + round_trip_fee_pct) > 0 else 0.0
+    effective_rr = round(effective_rr, 2)
+
+    # Проверка минимального R/R (using fee-adjusted value)
+    if effective_rr < min_rr_ratio:
+        warning(f"❌ Валидация провалена: Gross R/R={rr}, Net R/R={effective_rr} < {min_rr_ratio} (fee={round_trip_fee_pct:.3f}%)")
         return False
 
     # Проверка разумности риска (не более 10% от цены)
@@ -246,5 +253,5 @@ def validate_risk_parameters(
         warning("❌ Валидация провалена: SL или TP равен нулю")
         return False
 
-    info(f"✅ Валидация пройдена: R/R={rr} >= {min_rr_ratio}, Risk={risk_pct}%")
+    info(f"✅ Валидация пройдена: Gross R/R={rr}, Net R/R={effective_rr} >= {min_rr_ratio}, Risk={risk_pct}%, Fee={round_trip_fee_pct:.3f}%")
     return True

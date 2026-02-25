@@ -7,6 +7,22 @@ from . import executor
 from src.utils.logger import info, error, warning, log_trade
 from src.exchanges.exchange_factory import get_exchange_client
 
+
+def _format_pnl_with_fees(pnl, position):
+    """Formats PnL string with estimated fee breakdown."""
+    from src.config import TRADING_FEE_TAKER
+    try:
+        size = float(position.get("size", 0))
+        entry = float(position.get("entry", position.get("avgPrice", 0)))
+        if size > 0 and entry > 0:
+            position_value = size * entry
+            round_trip_fee = position_value * (TRADING_FEE_TAKER / 100.0) * 2.0
+            net_pnl = pnl - round_trip_fee
+            return f"PnL: {pnl:.2f} (net: ~{net_pnl:.2f}, fee: ~{round_trip_fee:.2f})"
+    except (ValueError, TypeError):
+        pass
+    return f"PnL: {pnl}"
+
 def close_position(symbol, deal_id, working_order_id=None):
     """Закрывает позицию через ExchangeClient"""
     client = get_exchange_client()
@@ -76,9 +92,11 @@ def monitor_symbol(symbol):
 
                     minutes_held = (now - created_date).total_seconds() / 60
 
-                    info(f"⏳ {symbol} [pos {i+1}]: открыта {int(minutes_held)} мин | PnL: {pnl}")
+                    pnl_str = _format_pnl_with_fees(pnl, position)
+                    info(f"⏳ {symbol} [pos {i+1}]: открыта {int(minutes_held)} мин | {pnl_str}")
                 else:
-                    info(f"ℹ️ {symbol} [pos {i+1}]: PnL: {pnl}")
+                    pnl_str = _format_pnl_with_fees(pnl, position)
+                    info(f"ℹ️ {symbol} [pos {i+1}]: {pnl_str}")
 
             except Exception as e:
                 warning(f"⚠️ {symbol}: ошибка мониторинга: {str(e)}")
@@ -128,9 +146,11 @@ def main():
                     now = datetime.now(created_date.tzinfo) if created_date.tzinfo else datetime.now()
                     minutes_held = (now - created_date).total_seconds() / 60
 
-                    info(f"⏳ {sym} [позиция {i+1}]: открыта {int(minutes_held)} мин | PnL: {pnl}")
+                    pnl_str = _format_pnl_with_fees(pnl, position)
+                    info(f"⏳ {sym} [позиция {i+1}]: открыта {int(minutes_held)} мин | {pnl_str}")
                 else:
-                    info(f"ℹ️ {sym} [позиция {i+1}]: PnL: {pnl}")
+                    pnl_str = _format_pnl_with_fees(pnl, position)
+                    info(f"ℹ️ {sym} [позиция {i+1}]: {pnl_str}")
 
             except Exception as e:
                 warning(f"⚠️ {sym} [позиция {i+1}]: ошибка мониторинга: {str(e)}")

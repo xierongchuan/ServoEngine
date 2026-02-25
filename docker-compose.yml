@@ -17,4 +17,5 @@ services:
       - PANEL_DATA_DIR=/app/data
       - PANEL_CHARTS_DIR=/app/charts
       - PANEL_CONFIG_PATH=/app/bot_config.json
+      - TELEGRAM_PANEL_URL=${TELEGRAM_PANEL_URL:-}
     restart: unless-stopped

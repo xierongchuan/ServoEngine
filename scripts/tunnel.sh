@@ -42,22 +42,47 @@ LOCAL_PORT="${LOCAL_PORT:-8080}"
 
 SSH_KEY="${SSH_KEY/#\~/$HOME}"
 
+# Пароль для SSH (передаётся через env из start.sh)
+VPS_PASSWORD="${VPS_PASSWORD:-}"
+
 # --- SSH-команда ---
 _ssh() {
-    ssh -i "$SSH_KEY" -o "ConnectTimeout=10" -o "BatchMode=yes" \
-        -o "StrictHostKeyChecking=accept-new" \
-        "${REMOTE_USER}@${REMOTE_HOST}" "$@"
+    if [ -n "$VPS_PASSWORD" ]; then
+        sshpass -p "$VPS_PASSWORD" ssh \
+            -o "ConnectTimeout=10" \
+            -o "StrictHostKeyChecking=accept-new" \
+            "${REMOTE_USER}@${REMOTE_HOST}" "$@"
+    else
+        ssh -i "$SSH_KEY" -o "ConnectTimeout=10" -o "BatchMode=yes" \
+            -o "StrictHostKeyChecking=accept-new" \
+            "${REMOTE_USER}@${REMOTE_HOST}" "$@"
+    fi
 }
 
-# --- URL в .env ---
-_update_panel_url() {
-    local url="$1"
-    if [ -f "$ENV_FILE" ]; then
-        if grep -q "^TELEGRAM_PANEL_URL=" "$ENV_FILE"; then
-            sed -i "s|^TELEGRAM_PANEL_URL=.*|TELEGRAM_PANEL_URL=${url}|" "$ENV_FILE"
-        else
-            echo "TELEGRAM_PANEL_URL=${url}" >> "$ENV_FILE"
-        fi
+# SSH-команда для фонового reverse tunnel
+_ssh_tunnel() {
+    if [ -n "$VPS_PASSWORD" ]; then
+        sshpass -p "$VPS_PASSWORD" ssh -f -N \
+            -R "127.0.0.1:${REMOTE_PORT}:localhost:${LOCAL_PORT}" \
+            -o "ConnectTimeout=10" \
+            -o "ServerAliveInterval=30" \
+            -o "ServerAliveCountMax=3" \
+            -o "ExitOnForwardFailure=yes" \
+            -o "StrictHostKeyChecking=accept-new" \
+            -o "ConnectionAttempts=3" \
+            "${REMOTE_USER}@${REMOTE_HOST}"
+    else
+        ssh -f -N \
+            -R "127.0.0.1:${REMOTE_PORT}:localhost:${LOCAL_PORT}" \
+            -i "$SSH_KEY" \
+            -o "ConnectTimeout=10" \
+            -o "BatchMode=yes" \
+            -o "ServerAliveInterval=30" \
+            -o "ServerAliveCountMax=3" \
+            -o "ExitOnForwardFailure=yes" \
+            -o "StrictHostKeyChecking=accept-new" \
+            -o "ConnectionAttempts=3" \
+            "${REMOTE_USER}@${REMOTE_HOST}"
     fi
 }
 
@@ -68,7 +93,13 @@ _check_prereqs() {
         echo "Укажи в .env: VPS_HOST=1.2.3.4"
         return 1
     fi
-    if [ ! -f "$SSH_KEY" ]; then
+    if [ -n "$VPS_PASSWORD" ]; then
+        if ! command -v sshpass &>/dev/null; then
+            echo "ОШИБКА: sshpass не установлен."
+            echo "Установи: sudo dnf install sshpass"
+            return 1
+        fi
+    elif [ ! -f "$SSH_KEY" ]; then
         echo "ОШИБКА: SSH-ключ не найден: $SSH_KEY"
         echo "Создай: ssh-keygen -t ed25519 -f $SSH_KEY -N ''"
         echo "Скопируй: ssh-copy-id -i $SSH_KEY ${REMOTE_USER}@${REMOTE_HOST}"
@@ -101,17 +132,7 @@ start_tunnel() {
 
     # 2. Запуск SSH reverse tunnel
     echo "[2/3] SSH tunnel: localhost:${LOCAL_PORT} → VPS:${REMOTE_PORT}..."
-    if ! ssh -f -N \
-        -R "127.0.0.1:${REMOTE_PORT}:localhost:${LOCAL_PORT}" \
-        -i "$SSH_KEY" \
-        -o "ConnectTimeout=10" \
-        -o "BatchMode=yes" \
-        -o "ServerAliveInterval=30" \
-        -o "ServerAliveCountMax=3" \
-        -o "ExitOnForwardFailure=yes" \
-        -o "StrictHostKeyChecking=accept-new" \
-        -o "ConnectionAttempts=3" \
-        "${REMOTE_USER}@${REMOTE_HOST}" 2>&1; then
+    if ! _ssh_tunnel 2>&1; then
         echo "ОШИБКА: SSH-подключение не удалось"
         return 1
     fi
@@ -158,16 +179,10 @@ start_tunnel() {
 
     echo "$cf_url" > "$CF_URL_FILE"
 
-    # 4. Обновляем .env
-    _update_panel_url "$cf_url"
-
     echo ""
     echo "=== Туннель запущен ==="
     echo "  SSH:    localhost:${LOCAL_PORT} → VPS:${REMOTE_PORT} (PID: $ssh_pid)"
     echo "  HTTPS:  $cf_url"
-    echo "  .env:   TELEGRAM_PANEL_URL обновлён"
-    echo ""
-    echo "Запусти панель: ./scripts/start.sh"
 }
 
 # --- Остановка ---
@@ -202,8 +217,6 @@ stop_tunnel() {
         stopped=true
     fi
 
-    # Очищаем URL
-    _update_panel_url ""
     rm -f "$CF_URL_FILE"
 
     if $stopped; then

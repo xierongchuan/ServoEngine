@@ -651,7 +651,7 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         rsi_interpretation = "🔴 КРИТИЧЕСКИ ПЕРЕПРОДАН"
 
     # === ПОЗИЦИЯ ===
-    from src.config import TRADING_FEE, MIN_PARTIAL_CLOSE_PNL, LEVERAGE
+    from src.config import TRADING_FEE_MAKER, TRADING_FEE_TAKER, MIN_PARTIAL_CLOSE_PNL, LEVERAGE
 
     position_block = "**Статус:** НЕТ ОТКРЫТОЙ ПОЗИЦИИ"
     pnl_context = ""
@@ -665,7 +665,7 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         # Расчёт PnL метрик
         position_value = size_coin * entry_price
         margin = position_value / LEVERAGE if LEVERAGE > 0 else position_value
-        fee_rate = TRADING_FEE / 100.0
+        fee_rate = TRADING_FEE_TAKER / 100.0
         total_fee = position_value * fee_rate * 2.0
         net_pnl = pnl_usdt - total_fee
         roe_percent = (pnl_usdt / margin * 100) if margin > 0 else 0
@@ -994,10 +994,10 @@ def analyze_symbol(symbol, position=None, decision_context=""):
 
     fee_context = (
         f"## 💰 КОМИССИИ И УБЫТКИ (CRITICAL)\n"
-        f"*   **Биржевая комиссия:** {TRADING_FEE}% (за сделку).\n"
-        f"*   **Round-Trip (Вход+Выход):** ~{TRADING_FEE * 2:.3f}%.\n"
-        f"*   **Break-Even:** Цена должна пройти минимум {TRADING_FEE * 2.1:.3f}%, чтобы покрыть комиссию.\n"
-        f"*   **ПРАВИЛО:** Не открывай сделки с потенциалом прибыли < {TRADING_FEE * 3:.3f}% (комиссия съест прибыль)."
+        f"*   **Maker комиссия:** {TRADING_FEE_MAKER}% | **Taker комиссия:** {TRADING_FEE_TAKER}% (за сделку).\n"
+        f"*   **Round-Trip (Вход+Выход, taker):** ~{TRADING_FEE_TAKER * 2:.3f}%.\n"
+        f"*   **Break-Even:** Цена должна пройти минимум {TRADING_FEE_TAKER * 2.1:.3f}%, чтобы покрыть комиссию.\n"
+        f"*   **ПРАВИЛО:** Не открывай сделки с потенциалом прибыли < {TRADING_FEE_TAKER * 3:.3f}% (комиссия съест прибыль)."
     )
 
     prompt_ctx = {

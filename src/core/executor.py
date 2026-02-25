@@ -110,6 +110,16 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         if size_pct:
             info(f"📐 Dynamic position size: {effective_size_pct:.1f}% (default: {POSITION_SIZE_PERCENT}%)")
 
+        # Reserve fee from margin before sizing (round-trip: entry + exit)
+        from src.config import TRADING_FEE_TAKER
+        estimated_round_trip_fee = trade_amount * LEVERAGE * (TRADING_FEE_TAKER / 100.0) * 2.0
+        fee_adjusted_amount = trade_amount - estimated_round_trip_fee
+        if fee_adjusted_amount >= MIN_TRADE_AMOUNT_USDT:
+            info(f"💰 Fee reserve: ${estimated_round_trip_fee:.2f} (taker={TRADING_FEE_TAKER}% × 2 × {LEVERAGE}x) | ${trade_amount:.2f} → ${fee_adjusted_amount:.2f}")
+            trade_amount = fee_adjusted_amount
+        else:
+            info(f"💰 Fee reserve skipped (would reduce below min): ${estimated_round_trip_fee:.2f}")
+
         # Enforce Minimum Trade Amount
         if trade_amount < MIN_TRADE_AMOUNT_USDT:
             info(f"⚠️ Calculated amount ${trade_amount:.2f} is less than min ${MIN_TRADE_AMOUNT_USDT}. Using min amount.")

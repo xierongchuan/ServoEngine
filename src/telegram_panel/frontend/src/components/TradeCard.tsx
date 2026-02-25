@@ -1,5 +1,6 @@
 import type { Trade } from '@/api/types';
 import { disableSymbol, enableSymbol, closePosition } from '@/api/client';
+import { calcRoePct, formatDollar, formatPct } from '@/utils/pnl';
 import { useState } from 'react';
 
 function formatDuration(openTime: string): string {
@@ -19,8 +20,11 @@ export function TradeCard({ trade, disabledSymbols = [], onUpdate }: {
 }) {
   const [loading, setLoading] = useState(false);
   const isLong = trade.side === 'LONG';
-  const pnl = trade.last_pnl ?? 0;
-  const pnlPositive = pnl >= 0;
+  const grossPnl = trade.last_pnl ?? 0;
+  const netPnl = trade.net_pnl ?? grossPnl;
+  const fees = trade.estimated_total_fees ?? 0;
+  const isPositive = netPnl >= 0;
+  const netRoe = calcRoePct(trade, netPnl);
 
   // Check if this symbol is disabled (compare both formats)
   const normalizedSymbol = trade.symbol.replace('-', '').toUpperCase();
@@ -84,13 +88,24 @@ export function TradeCard({ trade, disabledSymbols = [], onUpdate }: {
             {trade.leverage}x
           </span>
         </div>
-        <span
-          className={`text-sm font-semibold ${
-            pnlPositive ? 'text-green-400' : 'text-red-400'
-          }`}
-        >
-          {pnlPositive ? '+' : ''}{pnl.toFixed(2)}%
-        </span>
+        <div className="flex flex-col items-end">
+          <span
+            className={`text-sm font-semibold ${
+              isPositive ? 'text-green-400' : 'text-red-400'
+            }`}
+          >
+            {formatDollar(netPnl)}
+          </span>
+          {netRoe !== null && (
+            <span
+              className={`text-[11px] ${
+                isPositive ? 'text-green-400/70' : 'text-red-400/70'
+              }`}
+            >
+              {formatPct(netRoe)}
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
@@ -109,6 +124,16 @@ export function TradeCard({ trade, disabledSymbols = [], onUpdate }: {
         <div className="flex justify-between">
           <span className="text-tg-hint">Duration</span>
           <span className="text-tg-text">{formatDuration(trade.open_time)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-tg-hint">Gross</span>
+          <span className={`${grossPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            {formatDollar(grossPnl)}
+          </span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-tg-hint">Fees</span>
+          <span className="text-orange-400">-${fees.toFixed(2)}</span>
         </div>
       </div>
 

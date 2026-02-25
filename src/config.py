@@ -141,6 +141,7 @@ def reload_bot_config() -> dict:
     global AI_SETTINGS, AI_MODEL, AI_TEMPERATURE, AI_MAX_TOKENS
     global AI_REASONING, AI_RETRY_COUNT, AI_PROVIDER_ROUTING
     global AI_FALLBACK_MODELS, AI_REQUEST_TIMEOUT, AI_RETRY_BACKOFF_BASE, AI_BASE_URL
+    global TRADING_FEE, TRADING_FEE_MAKER, TRADING_FEE_TAKER
 
     old_config = BOT_CONFIG.copy()
 
@@ -187,6 +188,17 @@ def reload_bot_config() -> dict:
     STYLE_PRESETS = BOT_CONFIG.get("STYLE_PRESETS", DEFAULT_STYLE_PRESETS)
     SCALP_SETTINGS = BOT_CONFIG.get("SCALP_SETTINGS", SCALP_SETTINGS)
 
+    # Reload fee rates
+    _exchange_fees = BOT_CONFIG.get("EXCHANGE_FEES", {"bingx": {"maker": 0.02, "taker": 0.05}})
+    _fee_val = _exchange_fees.get(EXCHANGE, 0.05)
+    if isinstance(_fee_val, dict):
+        TRADING_FEE_MAKER = _fee_val.get("maker", 0.02)
+        TRADING_FEE_TAKER = _fee_val.get("taker", 0.05)
+    else:
+        TRADING_FEE_MAKER = _fee_val
+        TRADING_FEE_TAKER = _fee_val
+    TRADING_FEE = TRADING_FEE_TAKER
+
     # Reapply style preset
     current_preset = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS.get("INTRADAY", {}))
     if "atr_sl_multiplier" not in MOMENTUM_STRATEGY:
@@ -229,8 +241,24 @@ EXCHANGE = os.getenv("EXCHANGE", "bingx")
 TRADING_SETTINGS = BOT_CONFIG.get("TRADING_SETTINGS", {})
 EXCHANGE_SYMBOLS = BOT_CONFIG.get("EXCHANGE_SYMBOLS", {})
 SYMBOLS = EXCHANGE_SYMBOLS.get(EXCHANGE, ["BTC/USD"])
-EXCHANGE_FEES = BOT_CONFIG.get("EXCHANGE_FEES", {"bingx": 0.05})
-TRADING_FEE = EXCHANGE_FEES.get(EXCHANGE, 0.05)
+EXCHANGE_FEES = BOT_CONFIG.get("EXCHANGE_FEES", {"bingx": {"maker": 0.02, "taker": 0.05}})
+_fee_value = EXCHANGE_FEES.get(EXCHANGE, 0.05)
+if isinstance(_fee_value, dict):
+    TRADING_FEE_MAKER = _fee_value.get("maker", 0.02)
+    TRADING_FEE_TAKER = _fee_value.get("taker", 0.05)
+else:
+    # Backward compatible: single number treated as taker fee
+    TRADING_FEE_MAKER = _fee_value
+    TRADING_FEE_TAKER = _fee_value
+TRADING_FEE = TRADING_FEE_TAKER  # Legacy alias
+
+
+def update_fee_rates(maker: float, taker: float):
+    """Update fee rates from exchange API (called at runtime)."""
+    global TRADING_FEE_MAKER, TRADING_FEE_TAKER, TRADING_FEE
+    TRADING_FEE_MAKER = maker
+    TRADING_FEE_TAKER = taker
+    TRADING_FEE = TRADING_FEE_TAKER
 
 # Отключённые символы (не торговля)
 DISABLED_SYMBOLS = BOT_CONFIG.get("DISABLED_SYMBOLS", [])

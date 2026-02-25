@@ -6,11 +6,9 @@
       "ESPUSDT"
     ]
   },
-  "DISABLED_SYMBOLS": [
-    "BTCUSDT"
-  ],
+  "DISABLED_SYMBOLS": [],
   "EXCHANGE_FEES": {
-    "bingx": 0.05
+    "bingx": {"maker": 0.02, "taker": 0.05}
   },
   "POSITION_SIZE_PERCENT": 10,
   "MIN_TRADE_AMOUNT_USDT": 10,

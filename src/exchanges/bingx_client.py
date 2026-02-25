@@ -26,6 +26,14 @@ class BingXClient(ExchangeClient):
     _balance_cache_time = 0
     _balance_cache_ttl = 10  # Cache TTL in seconds
 
+    # Class-level cache for commission rate
+    _commission_cache = {}  # {symbol: {"data": {...}, "time": float}}
+    _commission_cache_ttl = 3600  # 1 hour
+
+    # Class-level cache for funding rate
+    _funding_cache = {}  # {symbol: {"data": {...}, "time": float}}
+    _funding_cache_ttl = 300  # 5 minutes
+
     def __init__(self, api_key=None, secret_key=None):
         self.api_key = api_key or BINGX_API_KEY
         self.secret_key = secret_key or BINGX_SECRET_KEY
@@ -356,11 +364,13 @@ class BingXClient(ExchangeClient):
                 positions[symbol].append({
                     "type": side,
                     "entry": float(pos.get("avgPrice", 0)),
-                    "dealId": pos.get("positionId", ""), # Use positionId as dealId
+                    "dealId": pos.get("positionId", ""),
                     "workingOrderId": pos.get("positionId", ""),
-                    "created": None, # BingX does not provide creation time in this endpoint
+                    "created": None,
                     "size": abs(size),
-                    "pnl": float(pos.get("unrealizedProfit", 0))
+                    "pnl": float(pos.get("unrealizedProfit", 0)),
+                    "leverage": int(float(pos.get("leverage", 0))) or None,
+                    "markPrice": float(pos.get("markPrice", 0)) or None,
                 })
 
         # Update cache
@@ -804,6 +814,83 @@ class BingXClient(ExchangeClient):
                 return True
             error(f"❌ Failed to cancel all orders for {symbol}: {response}")
             return False
+
+    def get_commission_rate(self, symbol: str) -> dict:
+        """
+        Получает ставки комиссий maker/taker для символа.
+        BingX API возвращает rates как десятичные (0.0005 = 0.05%).
+        Returns: {"maker": float, "taker": float} в процентах (0.02 = 0.02%) или None.
+        """
+        now = time.time()
+        cached = BingXClient._commission_cache.get(symbol)
+        if cached and now - cached["time"] < BingXClient._commission_cache_ttl:
+            return cached["data"]
+
+        try:
+            formatted_symbol = self._format_symbol(symbol)
+            endpoint = "/openApi/swap/v2/user/commissionRate"
+            response = self.make_request("get", endpoint, {"symbol": formatted_symbol})
+
+            if response and response.get("code") == 0:
+                data = response.get("data", {})
+                # BingX returns decimal rates (e.g. 0.0005 = 0.05%)
+                maker_raw = float(data.get("makerCommissionRate", 0.0002))
+                taker_raw = float(data.get("takerCommissionRate", 0.0005))
+                result = {
+                    "maker": round(maker_raw * 100, 4),  # Convert to percent
+                    "taker": round(taker_raw * 100, 4),
+                }
+                BingXClient._commission_cache[symbol] = {"data": result, "time": now}
+                return result
+            else:
+                warning(f"⚠️ Commission rate API error: {response}")
+                return None
+        except Exception as e:
+            warning(f"⚠️ Failed to get commission rate for {symbol}: {e}")
+            return None
+
+    def get_funding_rate(self, symbol: str) -> dict:
+        """
+        Получает текущую ставку финансирования для символа.
+        Public endpoint — не требует подписи.
+        Returns: {"funding_rate": float, "funding_rate_pct": float, "next_funding_time": str} или None.
+        """
+        now = time.time()
+        cached = BingXClient._funding_cache.get(symbol)
+        if cached and now - cached["time"] < BingXClient._funding_cache_ttl:
+            return cached["data"]
+
+        try:
+            formatted_symbol = self._format_symbol(symbol)
+            market_url = "https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex"
+            params = {"symbol": formatted_symbol}
+
+            response = requests.get(market_url, params=params, timeout=6)
+            response.raise_for_status()
+            data = response.json()
+
+            if data and data.get("code") == 0:
+                index_data = data.get("data", {})
+                funding_rate = float(index_data.get("lastFundingRate", 0))
+                next_time_ms = index_data.get("nextFundingTime", 0)
+                next_time_str = ""
+                if next_time_ms:
+                    next_time_str = time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(int(next_time_ms) / 1000))
+
+                result = {
+                    "funding_rate": funding_rate,
+                    "funding_rate_pct": round(funding_rate * 100, 4),
+                    "next_funding_time": next_time_str,
+                }
+                BingXClient._funding_cache[symbol] = {"data": result, "time": now}
+                return result
+            else:
+                warning(f"⚠️ Funding rate API error: {data}")
+                return None
+        except Exception as e:
+            warning(f"⚠️ Failed to get funding rate for {symbol}: {e}")
+            return None
+
 
 # Global instance
 bingx_client = BingXClient()

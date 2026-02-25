@@ -47,6 +47,8 @@ async def get_trade_stats(_user: dict = Depends(get_current_user)) -> dict:
             "total_trades": 0,
             "win_rate": 0.0,
             "total_pnl": 0.0,
+            "total_net_pnl": 0.0,
+            "total_fees": 0.0,
             "avg_duration_hours": 0.0,
             "wins": 0,
             "losses": 0,
@@ -54,6 +56,8 @@ async def get_trade_stats(_user: dict = Depends(get_current_user)) -> dict:
 
     wins = 0
     total_pnl = 0.0
+    total_net_pnl = 0.0
+    total_fees = 0.0
     durations: list[float] = []
 
     for trade in history:
@@ -61,6 +65,16 @@ async def get_trade_stats(_user: dict = Depends(get_current_user)) -> dict:
         total_pnl += pnl
         if pnl > 0:
             wins += 1
+
+        net = trade.get("net_pnl")
+        if net is not None:
+            total_net_pnl += float(net)
+        else:
+            total_net_pnl += pnl
+
+        fees = trade.get("estimated_total_fees")
+        if fees is not None:
+            total_fees += float(fees)
 
         open_time = trade.get("open_time")
         close_time = trade.get("close_time")
@@ -77,6 +91,8 @@ async def get_trade_stats(_user: dict = Depends(get_current_user)) -> dict:
         "total_trades": total,
         "win_rate": round(wins / total * 100, 2) if total else 0.0,
         "total_pnl": round(total_pnl, 4),
+        "total_net_pnl": round(total_net_pnl, 4),
+        "total_fees": round(total_fees, 4),
         "avg_duration_hours": round(sum(durations) / len(durations), 2) if durations else 0.0,
         "wins": wins,
         "losses": total - wins,

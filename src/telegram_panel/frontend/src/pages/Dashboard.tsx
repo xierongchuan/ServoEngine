@@ -78,9 +78,9 @@ export function Dashboard({ subscribe }: { subscribe: (type: string, cb: (data: 
           trend={trades.length > 0 ? 'up' : 'neutral'}
         />
         <StatsCard
-          label="Total P&L"
-          value={stats ? `$${(stats.total_pnl ?? 0).toFixed(2)}` : '$0.00'}
-          trend={stats && (stats.total_pnl ?? 0) > 0 ? 'up' : stats && (stats.total_pnl ?? 0) < 0 ? 'down' : 'neutral'}
+          label="Net P&L"
+          value={stats ? `$${(stats.total_net_pnl ?? stats.total_pnl ?? 0).toFixed(2)}` : '$0.00'}
+          trend={stats && (stats.total_net_pnl ?? stats.total_pnl ?? 0) > 0 ? 'up' : stats && (stats.total_net_pnl ?? stats.total_pnl ?? 0) < 0 ? 'down' : 'neutral'}
         />
         <StatsCard
           label="Win Rate"

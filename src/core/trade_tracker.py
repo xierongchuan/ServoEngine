@@ -166,16 +166,27 @@ class TradeTracker:
 
     def _handle_new_trade(self, symbol, real_position):
         """Register a new trade"""
+        from src.config import TRADING_FEE_TAKER, LEVERAGE
+
+        entry_price = float(real_position.get("entry", real_position.get("avgPrice", 0)))
+        amount = float(real_position.get("size", real_position.get("amount", 0)))
+        estimated_entry_fee = entry_price * amount * (TRADING_FEE_TAKER / 100.0)
+
         trade_data = {
             "symbol": symbol,
             "dealId": real_position.get("dealId", ""),
             "side": "LONG" if real_position.get("type", "").upper() == "BUY" else "SHORT" if real_position.get("type", "").upper() == "SELL" else real_position.get("side", "UNKNOWN"),
-            "entry_price": float(real_position.get("entry", real_position.get("avgPrice", 0))),
-            "amount": float(real_position.get("size", real_position.get("amount", 0))),
-            "leverage": real_position.get("leverage"),
+            "entry_price": entry_price,
+            "amount": amount,
+            "leverage": real_position.get("leverage") or LEVERAGE,
             "open_time": datetime.now().isoformat(),
             "status": "OPEN",
-            "pnl_history": []
+            "pnl_history": [],
+            "estimated_entry_fee": round(estimated_entry_fee, 4),
+            "estimated_total_fees": round(estimated_entry_fee * 2, 4),
+            "fee_rate_used": TRADING_FEE_TAKER,
+            "net_pnl": 0.0,
+            "cumulative_funding": 0.0,
         }
 
         self.active_trades[symbol] = trade_data
@@ -208,7 +219,8 @@ class TradeTracker:
         """Update PnL and other stats"""
         current_pnl = float(real_position.get("unrealizedPnl", 0) or real_position.get("pnl", 0))
         stored_trade["last_pnl"] = current_pnl
-        stored_trade["current_price"] = real_position.get("markPrice") or real_position.get("avgPrice")
+        current_mark = real_position.get("markPrice") or real_position.get("avgPrice")
+        stored_trade["current_price"] = current_mark
 
         # Repair missing dealId for trades created before this field was stored
         if "dealId" not in stored_trade and real_position.get("dealId"):
@@ -222,6 +234,20 @@ class TradeTracker:
         # Repair side if unknown
         if stored_trade.get("side") in ["UNKNOWN", None]:
             stored_trade["side"] = "LONG" if real_position.get("type", "").upper() == "BUY" else "SHORT" if real_position.get("type", "").upper() == "SELL" else "UNKNOWN"
+
+        # Repair missing leverage from exchange data
+        if not stored_trade.get("leverage") and real_position.get("leverage"):
+            stored_trade["leverage"] = real_position.get("leverage")
+
+        # Recalculate fees and net PnL
+        entry_fee = stored_trade.get("estimated_entry_fee", 0)
+        amount = stored_trade.get("amount", 0)
+        if current_mark and amount > 0:
+            from src.config import TRADING_FEE_TAKER
+            fee_rate = stored_trade.get("fee_rate_used", TRADING_FEE_TAKER)
+            exit_fee = float(current_mark) * amount * (fee_rate / 100.0)
+            stored_trade["estimated_total_fees"] = round(entry_fee + exit_fee, 4)
+            stored_trade["net_pnl"] = round(current_pnl - entry_fee - exit_fee, 4)
 
         # Track Max/Min PnL
         pnl_history = stored_trade.get("pnl_history", [])

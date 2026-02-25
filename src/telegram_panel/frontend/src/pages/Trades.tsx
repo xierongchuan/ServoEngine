@@ -4,6 +4,7 @@ import type { Trade, TradeStats } from '../api/types';
 import { TradeCard } from '../components/TradeCard';
 import { StatsCard } from '../components/StatsCard';
 import { Spinner } from '../components/Spinner';
+import { calcRoePct, formatDollar, formatPct } from '../utils/pnl';
 
 type SubTab = 'active' | 'history';
 
@@ -103,9 +104,10 @@ export function Trades({ subscribe }: { subscribe: (type: string, cb: (data: Rec
 
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
+          <StatsCard label="Net P&L" value={`$${(stats.total_net_pnl ?? 0).toFixed(2)}`} trend={(stats.total_net_pnl ?? 0) > 0 ? 'up' : (stats.total_net_pnl ?? 0) < 0 ? 'down' : 'neutral'} />
+          <StatsCard label="Gross P&L" value={`$${(stats.total_pnl ?? 0).toFixed(2)}`} trend={(stats.total_pnl ?? 0) > 0 ? 'up' : (stats.total_pnl ?? 0) < 0 ? 'down' : 'neutral'} />
           <StatsCard label="Win Rate" value={`${stats.win_rate ?? 0}%`} trend={(stats.win_rate ?? 0) > 50 ? 'up' : 'neutral'} />
-          <StatsCard label="P&L" value={`$${(stats.total_pnl ?? 0).toFixed(2)}`} trend={(stats.total_pnl ?? 0) > 0 ? 'up' : (stats.total_pnl ?? 0) < 0 ? 'down' : 'neutral'} />
           <StatsCard label="Trades" value={stats.total_trades} />
         </div>
       )}
@@ -149,28 +151,48 @@ export function Trades({ subscribe }: { subscribe: (type: string, cb: (data: Rec
           history.length === 0 ? (
             <div className="text-center py-8 text-tg-hint text-sm">No trade history</div>
           ) : (
-            history.map((t, i) => (
-              <div key={i} className="bg-tg-section-bg rounded-xl p-3 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-tg-text">{t.symbol}</span>
-                  <span className={`text-xs px-1.5 py-0.5 rounded ${
-                    t.side === 'LONG' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
-                  }`}>
-                    {t.side}
-                  </span>
+            history.map((t, i) => {
+              const net = t.net_pnl ?? t.last_pnl ?? 0;
+              const gross = t.last_pnl ?? 0;
+              const hasFees = t.net_pnl != null;
+              const roe = calcRoePct(t, net);
+              return (
+                <div key={i} className="bg-tg-section-bg rounded-xl p-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-tg-text">{t.symbol}</span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${
+                      t.side === 'LONG' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                    }`}>
+                      {t.side}
+                    </span>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-sm font-semibold ${
+                        net >= 0 ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {formatDollar(net)}
+                      </span>
+                      {roe !== null && (
+                        <span className={`text-xs ${
+                          net >= 0 ? 'text-green-400/70' : 'text-red-400/70'
+                        }`}>
+                          {formatPct(roe)}
+                        </span>
+                      )}
+                    </div>
+                    {hasFees && (
+                      <span className="text-[10px] text-tg-hint">
+                        gross: {formatDollar(gross)}
+                      </span>
+                    )}
+                    <span className="text-xs text-tg-hint">
+                      {t.close_time ? new Date(t.close_time).toLocaleDateString() : ''}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex flex-col items-end">
-                  <span className={`text-sm font-semibold ${
-                    (t.last_pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'
-                  }`}>
-                    {(t.last_pnl || 0) >= 0 ? '+' : ''}{(t.last_pnl || 0).toFixed(2)}
-                  </span>
-                  <span className="text-xs text-tg-hint">
-                    {t.close_time ? new Date(t.close_time).toLocaleDateString() : ''}
-                  </span>
-                </div>
-              </div>
-            ))
+              );
+            })
           )
         )}
       </div>

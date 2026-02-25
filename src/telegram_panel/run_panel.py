@@ -87,28 +87,40 @@ def run_bot_polling():
     Cannot use app.run_polling() here because it sets signal handlers
     which only work in the main thread.  Instead we manually drive the
     Application lifecycle with lower-level async methods.
+
+    Retries with exponential backoff to handle DNS race conditions
+    when the container network is not yet ready.
     """
     import asyncio
+    import time
 
-    try:
-        BotClass = _import_bot_class()
-        bot = BotClass()
-        app = bot.get_app()
+    max_retries = 5
+    for attempt in range(1, max_retries + 1):
+        try:
+            BotClass = _import_bot_class()
+            bot = BotClass()
+            app = bot.get_app()
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-        async def _run() -> None:
-            await app.initialize()
-            await app.start()
-            await app.updater.start_polling()
-            # Block until the daemon thread is killed with the process
-            stop = asyncio.Event()
-            await stop.wait()
+            async def _run() -> None:
+                await app.initialize()
+                await app.start()
+                await app.updater.start_polling()
+                # Block until the daemon thread is killed with the process
+                stop = asyncio.Event()
+                await stop.wait()
 
-        loop.run_until_complete(_run())
-    except Exception as e:
-        logger.error("Telegram bot error: %s", e)
+            loop.run_until_complete(_run())
+            break
+        except Exception as e:
+            if attempt < max_retries:
+                delay = 2 ** attempt
+                logger.warning("Telegram bot attempt %d/%d failed: %s. Retry in %ds...", attempt, max_retries, e, delay)
+                time.sleep(delay)
+            else:
+                logger.error("Telegram bot failed after %d attempts: %s", max_retries, e)
 
 
 def main():

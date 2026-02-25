@@ -63,6 +63,18 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
         except Exception as e:
             warning(f"⚠️ [{symbol}] Startup sync failed: {e}")
 
+        # === STARTUP: Fetch real commission rates from exchange ===
+        try:
+            commission = client.get_commission_rate(symbol)
+            if commission:
+                from src.config import update_fee_rates
+                update_fee_rates(commission["maker"], commission["taker"])
+                info(f"💰 [{symbol}] Commission rates from exchange: maker={commission['maker']}%, taker={commission['taker']}%")
+            else:
+                info(f"ℹ️ [{symbol}] Using default commission rates from config")
+        except Exception as e:
+            warning(f"⚠️ [{symbol}] Commission rate fetch failed: {e}")
+
         cycle_count = 0
         config_check_interval = 30  # Check config every 30 seconds
         last_config_check = time.time()
@@ -493,6 +505,15 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                             info(f"📊 [{symbol}] Calibration check: {len(suggestions)} suggestions saved (cycle {cycle_count})")
                     except Exception as e:
                         warning(f"⚠️ [{symbol}] Calibration check failed: {e}")
+
+                # Periodic funding rate check (every 10 cycles)
+                if cycle_count % 10 == 0:
+                    try:
+                        funding = client.get_funding_rate(symbol)
+                        if funding:
+                            info(f"💸 [{symbol}] Funding rate: {funding['funding_rate_pct']:+.4f}% | Next: {funding['next_funding_time']}")
+                    except Exception:
+                        pass  # Non-critical
 
             except KeyboardInterrupt:
                 info(f"🛑 [{symbol}] Остановка по запросу (KeyboardInterrupt)")

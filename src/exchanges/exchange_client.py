@@ -79,3 +79,19 @@ class ExchangeClient(ABC):
         Returns True if successful, False otherwise.
         """
         pass
+
+    def get_commission_rate(self, symbol: str) -> dict:
+        """
+        Retrieves maker/taker commission rates for a symbol.
+        Returns: {"maker": float, "taker": float} in percent (e.g. 0.02 = 0.02%)
+        or None if not supported / error.
+        """
+        return None
+
+    def get_funding_rate(self, symbol: str) -> dict:
+        """
+        Retrieves current funding rate for a perpetual contract.
+        Returns: {"funding_rate": float, "funding_rate_pct": float, "next_funding_time": str}
+        or None if not supported / error.
+        """
+        return None

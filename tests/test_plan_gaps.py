@@ -193,12 +193,13 @@ class TestValidateRiskParameters(unittest.TestCase):
 
     @patch('src.core.risk_manager.BOT_CONFIG', {"MIN_RISK_REWARD_RATIO": 1.2})
     def test_valid_params_pass(self):
-        """R/R=1.5, risk=2% -> True."""
+        """R/R=1.5, risk=2%, reward=3% -> True (fee-adjusted R/R still above 1.2)."""
         from src.core.risk_manager import validate_risk_parameters
 
         result = validate_risk_parameters({
             "risk_reward": 1.5,
             "risk_pct": 2.0,
+            "reward_pct": 3.0,
             "stop_loss": 100.0,
             "take_profit": 110.0,
         })
@@ -212,6 +213,7 @@ class TestValidateRiskParameters(unittest.TestCase):
         result = validate_risk_parameters({
             "risk_reward": 0.8,
             "risk_pct": 2.0,
+            "reward_pct": 1.6,
             "stop_loss": 100.0,
             "take_profit": 110.0,
         })
@@ -225,6 +227,7 @@ class TestValidateRiskParameters(unittest.TestCase):
         result = validate_risk_parameters({
             "risk_reward": 2.0,
             "risk_pct": 12.0,
+            "reward_pct": 24.0,
             "stop_loss": 100.0,
             "take_profit": 120.0,
         })
@@ -238,6 +241,7 @@ class TestValidateRiskParameters(unittest.TestCase):
         result = validate_risk_parameters({
             "risk_reward": 2.0,
             "risk_pct": 2.0,
+            "reward_pct": 4.0,
             "stop_loss": 0,
             "take_profit": 110.0,
         })

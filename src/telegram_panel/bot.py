@@ -94,6 +94,20 @@ def find_latest_chart(symbol: str) -> Path | None:
     return matches[0] if matches else None
 
 
+def calc_roe_pct(trade: dict) -> float | None:
+    """Calculate ROE% (Return on Equity) for a trade. Returns None if data insufficient."""
+    entry = trade.get("entry_price")
+    amount = trade.get("amount")
+    leverage = trade.get("leverage")
+    pnl = trade.get("net_pnl") or trade.get("last_pnl")
+    if not all(isinstance(v, (int, float)) for v in [entry, amount, leverage, pnl]):
+        return None
+    if entry <= 0 or amount <= 0 or leverage <= 0:
+        return None
+    margin = entry * amount / leverage
+    return (pnl / margin) * 100 if margin else None
+
+
 # ---------------------------------------------------------------------------
 # Auth decorator
 # ---------------------------------------------------------------------------
@@ -171,9 +185,16 @@ async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         side = trade.get("side", "?")
         entry = trade.get("entry_price", "?")
         pnl = trade.get("last_pnl")
+        net = trade.get("net_pnl")
+        fees = trade.get("estimated_total_fees")
         leverage = trade.get("leverage", "?")
         pnl_str = f"${pnl:+.2f}" if isinstance(pnl, (int, float)) else "N/A"
-        lines.append(f"{symbol} {side} @ {entry} | P&L: {pnl_str} | Leverage: {leverage}x")
+        if isinstance(net, (int, float)):
+            pnl_str += f" (net: ${net:+.2f})"
+        roe = calc_roe_pct(trade)
+        roe_str = f" | ROE: {roe:+.2f}%" if roe is not None else ""
+        fees_str = f" | Fees: ${fees:.2f}" if isinstance(fees, (int, float)) else ""
+        lines.append(f"{symbol} {side} @ {entry} | P&L: {pnl_str}{roe_str}{fees_str} | {leverage}x")
 
     await update.message.reply_text("\n".join(lines))  # type: ignore[union-attr]
 
@@ -427,10 +448,11 @@ class TradingNotifier:
             trade = trades.get(sym, {})
             side = trade.get("side", "?")
             entry = trade.get("entry_price", "?")
+            leverage = trade.get("leverage", "?")
             try:
                 await context.bot.send_message(
                     chat_id=ADMIN_ID,
-                    text=f"New {side} position opened: {sym} @ ${entry}",
+                    text=f"New {side} position opened: {sym} @ ${entry} | {leverage}x",
                 )
             except Exception as e:
                 logger.error("Failed to send open notification: %s", e)
@@ -441,17 +463,28 @@ class TradingNotifier:
             # Try to find the close info from trade_history.json
             history = read_json(TRADE_HISTORY_PATH)
             pnl_str = "N/A"
+            roe_str = ""
+            fees_str = ""
             if isinstance(history, list):
                 for entry in reversed(history):
                     if isinstance(entry, dict) and entry.get("symbol") == sym:
                         pnl = entry.get("last_pnl")
+                        net = entry.get("net_pnl")
+                        fees = entry.get("estimated_total_fees")
                         if isinstance(pnl, (int, float)):
                             pnl_str = f"${pnl:+.2f}"
+                            if isinstance(net, (int, float)):
+                                pnl_str += f" (net: ${net:+.2f})"
+                        roe = calc_roe_pct(entry)
+                        if roe is not None:
+                            roe_str = f" | ROE: {roe:+.2f}%"
+                        if isinstance(fees, (int, float)):
+                            fees_str = f" | Fees: ${fees:.2f}"
                         break
             try:
                 await context.bot.send_message(
                     chat_id=ADMIN_ID,
-                    text=f"Position closed: {sym} | P&L: {pnl_str}",
+                    text=f"Position closed: {sym} | P&L: {pnl_str}{roe_str}{fees_str}",
                 )
             except Exception as e:
                 logger.error("Failed to send close notification: %s", e)
