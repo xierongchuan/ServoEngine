@@ -95,3 +95,10 @@ class ExchangeClient(ABC):
         or None if not supported / error.
         """
         return None
+
+    def get_recent_orders(self, symbol: str, limit: int = 10) -> list:
+        """
+        Retrieves recent orders (filled, cancelled, etc.) for a symbol.
+        Returns list of dicts with: orderId, side, status, avgPrice, executedQty, profit, commission, updateTime
+        """
+        return []

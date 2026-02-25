@@ -3,6 +3,11 @@ export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
+      keyframes: {
+        shimmer: {
+          '100%': { transform: 'translateX(200%)' },
+        },
+      },
       colors: {
         tg: {
           bg: 'var(--tg-theme-bg-color, #1a1a2e)',

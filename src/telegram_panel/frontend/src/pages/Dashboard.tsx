@@ -110,7 +110,7 @@ export function Dashboard({ subscribe }: { subscribe: (type: string, cb: (data: 
         {trades.length === 0 ? (
           <div className="text-center py-8 text-tg-hint text-sm">No active positions</div>
         ) : (
-          trades.map((trade) => <TradeCard key={trade.symbol} trade={trade} />)
+          trades.map((trade) => <TradeCard key={trade.symbol} trade={trade} onUpdate={fetchData} />)
         )}
       </div>
     </div>

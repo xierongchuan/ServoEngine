@@ -398,16 +398,14 @@ def analyze_htf(symbol):
     if not mtf_cfg.get("enabled", True):
         return None
 
-    htf_file = f"{DATA_DIR}/prices/{get_filename(symbol)}_htf.json"
-    if not os.path.exists(htf_file):
-        warning(f"⚠️ [INTRADAY] HTF file not found: {htf_file}")
-        return None
-
     try:
-        with open(htf_file) as f:
-            htf_prices = json.load(f)
+        from src.core.collector import fetch_htf_prices
+        htf_prices = fetch_htf_prices(symbol)
+        if not htf_prices:
+            warning(f"⚠️ [INTRADAY] HTF data unavailable for {symbol}")
+            return None
 
-        if not htf_prices or len(htf_prices) < 10:
+        if len(htf_prices) < 10:
             warning(f"⚠️ [INTRADAY] Not enough HTF data: {len(htf_prices) if htf_prices else 0} candles")
             return None
 

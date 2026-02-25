@@ -34,6 +34,10 @@ class BingXClient(ExchangeClient):
     _funding_cache = {}  # {symbol: {"data": {...}, "time": float}}
     _funding_cache_ttl = 300  # 5 minutes
 
+    # Class-level cache for recent orders
+    _orders_cache = {}  # {symbol: {"data": [...], "time": float}}
+    _orders_cache_ttl = 5  # seconds
+
     def __init__(self, api_key=None, secret_key=None):
         self.api_key = api_key or BINGX_API_KEY
         self.secret_key = secret_key or BINGX_SECRET_KEY
@@ -538,8 +542,8 @@ class BingXClient(ExchangeClient):
         positions = self.get_positions()
         target_pos = None
 
-        # Normalize symbol for lookup
-        lookup_symbol = symbol.replace("-", "/")
+        # Normalize symbol for lookup (get_positions() keys are like "BTCUSDT")
+        lookup_symbol = symbol.replace("-", "").replace("/", "")
 
         if lookup_symbol in positions:
             for p in positions[lookup_symbol]:
@@ -551,13 +555,7 @@ class BingXClient(ExchangeClient):
             error(f"❌ Position {position_id} not found for closing")
             return False
 
-        # Ensure symbol format is correct (BTC-USDT)
-        if symbol.endswith("/USD"):
-            formatted_symbol = symbol.replace("/USD", "-USDT")
-        elif symbol.endswith("USDT") and "-" not in symbol and "/" not in symbol:
-            formatted_symbol = symbol[:-4] + "-USDT"
-        else:
-            formatted_symbol = symbol.replace("/", "-")
+        formatted_symbol = self._format_symbol(symbol)
 
         # Determine side and positionSide for closing
         # To close a LONG, we SELL with positionSide=LONG
@@ -582,21 +580,8 @@ class BingXClient(ExchangeClient):
 
         info(f"📉 Closing {percentage*100}% of position {position_id} ({qty_to_close} / {full_size})")
 
-        # We need to manually call place_order logic but with specific positionSide
-        # Since place_order currently auto-calculates positionSide, we need to modify place_order OR
-        # manually construct params here.
-        # Better to modify place_order to accept positionSide override.
-
-        # For now, let's use a direct request here to avoid breaking place_order signature if we don't want to change it yet,
-        # OR better: update place_order to accept **kwargs or explicit positionSide.
-
-        # Let's update place_order signature in a separate step if needed, but for now I will duplicate the request logic
-        # here for safety and precision, or better yet, I will use place_order if I update it.
-
-        # Actually, I'll update place_order in the next step. For now, let's assume place_order supports it
-        # or I'll pass it via a new argument if I change it.
-        # Wait, I can't change place_order in this same tool call easily without conflict.
-        # I will implement the request directly here to be self-contained and safe.
+        # Cancel existing SL/TP orders to avoid orphaned conditional orders
+        self.cancel_all_orders(symbol)
 
         endpoint = "/openApi/swap/v2/trade/order"
         params = {
@@ -611,6 +596,9 @@ class BingXClient(ExchangeClient):
 
         if response and response.get("code") == 0:
             info(f"✅ Position {position_id} closed (partial: {percentage})")
+            # Invalidate positions cache so next get_positions() fetches fresh data
+            BingXClient._positions_cache = None
+            BingXClient._positions_cache_time = 0
             return True
         else:
             error(f"❌ Failed to close position {position_id}: {response}")
@@ -890,6 +878,50 @@ class BingXClient(ExchangeClient):
         except Exception as e:
             warning(f"⚠️ Failed to get funding rate for {symbol}: {e}")
             return None
+
+    def get_recent_orders(self, symbol: str, limit: int = 10) -> list:
+        """
+        Получает последние ордера (все статусы) для символа.
+        Returns list of dicts: orderId, side, status, avgPrice, executedQty, profit, commission, updateTime
+        """
+        now = time.time()
+        cached = BingXClient._orders_cache.get(symbol)
+        if cached and now - cached["time"] < BingXClient._orders_cache_ttl:
+            return cached["data"]
+
+        try:
+            formatted_symbol = self._format_symbol(symbol)
+            endpoint = "/openApi/swap/v2/trade/allOrders"
+            params = {
+                "symbol": formatted_symbol,
+                "limit": limit,
+            }
+
+            response = self.make_request("get", endpoint, params)
+
+            if response and response.get("code") == 0:
+                raw_orders = response.get("data", {}).get("orders", [])
+                result = []
+                for o in raw_orders:
+                    result.append({
+                        "orderId": o.get("orderId", ""),
+                        "side": o.get("side", ""),
+                        "positionSide": o.get("positionSide", ""),
+                        "status": o.get("status", ""),
+                        "avgPrice": float(o.get("avgPrice", 0) or 0),
+                        "executedQty": float(o.get("executedQty", 0) or 0),
+                        "profit": float(o.get("profit", 0) or 0),
+                        "commission": float(o.get("commission", 0) or 0),
+                        "updateTime": int(o.get("updateTime", 0) or 0),
+                    })
+                BingXClient._orders_cache[symbol] = {"data": result, "time": now}
+                return result
+            else:
+                warning(f"⚠️ Recent orders API error: {response}")
+                return []
+        except Exception as e:
+            warning(f"⚠️ Failed to get recent orders for {symbol}: {e}")
+            return []
 
 
 # Global instance

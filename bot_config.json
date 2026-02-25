@@ -213,7 +213,19 @@
     "provider_routing": {
       "allow_fallbacks": true
     },
-    "fallback_models": []
+    "fallback_models": [],
+    "overrides": {
+      "veto": {
+        "model": null,
+        "temperature": 0.1,
+        "max_tokens": 100
+      },
+      "regime": {
+        "model": null,
+        "temperature": 0.2,
+        "max_tokens": 150
+      }
+    }
   },
   "AGGRESSIVE_MODE": false,
   "AGGRESSIVE_SETTINGS": {
@@ -581,7 +593,6 @@
       "regime_enabled": true,
       "regime_interval_seconds": 300,
       "veto_enabled": true,
-      "veto_model": "google/gemini-3-flash-preview",
       "borderline_quality_threshold": 0.3,
       "veto_staleness_seconds": 10
     }

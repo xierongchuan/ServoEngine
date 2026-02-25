@@ -925,7 +925,7 @@ class TestClosePositionParsing:
         """Проверяет обработку нулевого количества при закрытии."""
         # Позиция с минимальным размером * percentage=0.0001 -> qty округлится до 0
         positions = {
-            "BTC/USD": [{
+            "BTCUSD": [{
                 "type": "buy",
                 "entry": 96500.0,
                 "dealId": "pos_tiny",
@@ -936,6 +936,7 @@ class TestClosePositionParsing:
             }]
         }
         with patch.object(bingx_client, "get_positions", return_value=positions), \
+             patch.object(bingx_client, "cancel_all_orders", return_value=True), \
              patch("src.exchanges.bingx_client.error"), \
              patch("src.exchanges.bingx_client.info"):
             # percentage очень маленький -> qty_to_close ~= 0
@@ -946,7 +947,7 @@ class TestClosePositionParsing:
     def test_close_position_success(self, bingx_client):
         """Проверяет успешное закрытие позиции."""
         positions = {
-            "BTC/USD": [{
+            "BTCUSD": [{
                 "type": "buy",
                 "entry": 96500.0,
                 "dealId": "pos_close_ok",
@@ -960,6 +961,7 @@ class TestClosePositionParsing:
 
         with patch.object(bingx_client, "get_positions", return_value=positions), \
              patch.object(bingx_client, "make_request", return_value=close_response), \
+             patch.object(bingx_client, "cancel_all_orders", return_value=True), \
              patch("src.exchanges.bingx_client.info"):
             result = bingx_client.close_position("BTC/USD", "pos_close_ok")
 
@@ -968,7 +970,7 @@ class TestClosePositionParsing:
     def test_close_position_short(self, bingx_client):
         """Проверяет закрытие SHORT позиции (side=BUY, positionSide=SHORT)."""
         positions = {
-            "ETH/USD": [{
+            "ETHUSD": [{
                 "type": "sell",
                 "entry": 3400.0,
                 "dealId": "pos_short_1",
@@ -982,6 +984,7 @@ class TestClosePositionParsing:
 
         with patch.object(bingx_client, "get_positions", return_value=positions), \
              patch.object(bingx_client, "make_request", return_value=close_response) as mock_req, \
+             patch.object(bingx_client, "cancel_all_orders", return_value=True), \
              patch("src.exchanges.bingx_client.info"):
             result = bingx_client.close_position("ETH/USD", "pos_short_1")
 
@@ -995,7 +998,7 @@ class TestClosePositionParsing:
     def test_close_position_api_failure(self, bingx_client):
         """Проверяет обработку ошибки API при закрытии позиции."""
         positions = {
-            "BTC/USD": [{
+            "BTCUSD": [{
                 "type": "buy",
                 "entry": 96500.0,
                 "dealId": "pos_fail",
@@ -1009,6 +1012,7 @@ class TestClosePositionParsing:
 
         with patch.object(bingx_client, "get_positions", return_value=positions), \
              patch.object(bingx_client, "make_request", return_value=error_response), \
+             patch.object(bingx_client, "cancel_all_orders", return_value=True), \
              patch("src.exchanges.bingx_client.info"), \
              patch("src.exchanges.bingx_client.error"):
             result = bingx_client.close_position("BTC/USD", "pos_fail")
@@ -1018,7 +1022,7 @@ class TestClosePositionParsing:
     def test_close_position_partial(self, bingx_client):
         """Проверяет частичное закрытие позиции (50%)."""
         positions = {
-            "BTC/USD": [{
+            "BTCUSD": [{
                 "type": "buy",
                 "entry": 96500.0,
                 "dealId": "pos_partial",
@@ -1032,6 +1036,7 @@ class TestClosePositionParsing:
 
         with patch.object(bingx_client, "get_positions", return_value=positions), \
              patch.object(bingx_client, "make_request", return_value=close_response) as mock_req, \
+             patch.object(bingx_client, "cancel_all_orders", return_value=True), \
              patch("src.exchanges.bingx_client.info"):
             result = bingx_client.close_position("BTC/USD", "pos_partial", percentage=0.5)
 

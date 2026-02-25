@@ -20,6 +20,7 @@ from typing import Dict, Optional
 
 from src.config import SCALP_SETTINGS, LEVERAGE, ERROR_HANDLING, DATA_DIR
 from src.config import should_reload_config, reload_bot_config
+from src.config import AI_VETO_OVERRIDE, AI_REGIME_OVERRIDE, AI_MODEL
 from src.utils.logger import setup_symbol_logger, info, error, warning
 from src.utils.helpers import get_filename
 
@@ -368,9 +369,14 @@ class ScalpEngine:
         ai_cfg = cfg.get("ai_integration", {})
         self._regime_ai_enabled = ai_cfg.get("regime_enabled", True)
         self._regime_interval_sec = ai_cfg.get("regime_interval_seconds", 300)
-        self._regime_model = ai_cfg.get("regime_model", None)  # None = use default AI_MODEL
+        # AI model overrides from AI_SETTINGS.overrides
+        self._regime_model = AI_REGIME_OVERRIDE.get("model", None) or AI_MODEL
+        self._regime_temperature = AI_REGIME_OVERRIDE.get("temperature", 0.2)
+        self._regime_max_tokens = AI_REGIME_OVERRIDE.get("max_tokens", 150)
         self._veto_enabled = ai_cfg.get("veto_enabled", True)
-        self._veto_model = ai_cfg.get("veto_model", None)  # e.g. "google/gemini-2.0-flash-lite"
+        self._veto_model = AI_VETO_OVERRIDE.get("model", None) or AI_MODEL
+        self._veto_temperature = AI_VETO_OVERRIDE.get("temperature", 0.1)
+        self._veto_max_tokens = AI_VETO_OVERRIDE.get("max_tokens", 100)
         self._veto_staleness_sec = ai_cfg.get("veto_staleness_seconds", 10)
         self._veto_max_cycles = ai_cfg.get("veto_max_stale_cycles", 2)
         self._borderline_quality = ai_cfg.get("borderline_quality_threshold", 0.3)
@@ -594,6 +600,10 @@ class ScalpEngine:
                             info(f"[SCALP] {self.symbol}: Calibrator generated {len(suggestions)} suggestions")
                     except Exception as e:
                         warning(f"[SCALP] {self.symbol}: Calibration error: {e}")
+
+                # 11. Flush pending trade tracker writes
+                if self._tracker:
+                    self._tracker.flush()
 
             except Exception as e:
                 error(f"[SCALP] {self.symbol}: Slow loop error: {e}")
@@ -959,7 +969,7 @@ class ScalpEngine:
 
             # Sync with trade tracker
             if self._tracker:
-                self._tracker.sync_position(self.symbol, real_position)
+                self._tracker.sync_position(self.symbol, real_position, exchange_client=self._client)
 
         except Exception as e:
             warning(f"[SCALP] {self.symbol}: Position sync error: {e}")
@@ -1038,8 +1048,8 @@ class ScalpEngine:
             raw_response = get_prediction(
                 prompt,
                 model=self._regime_model,
-                max_tokens=150,
-                temperature=0.2,
+                max_tokens=self._regime_max_tokens,
+                temperature=self._regime_temperature,
             )
 
             # Parse AI regime response
@@ -1210,8 +1220,8 @@ class ScalpEngine:
             raw_response = get_prediction(
                 prompt,
                 model=self._veto_model,
-                max_tokens=100,
-                temperature=0.1,
+                max_tokens=self._veto_max_tokens,
+                temperature=self._veto_temperature,
             )
             ai_result = parse_response(raw_response)
 

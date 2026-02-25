@@ -63,6 +63,19 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
         except Exception as e:
             warning(f"⚠️ [{symbol}] Startup sync failed: {e}")
 
+        # === STARTUP: Clean old price data for this symbol ===
+        try:
+            from src.utils.helpers import get_filename
+            from src.config import DATA_DIR
+            symbol_file = get_filename(symbol)
+            for suffix in ["", "_htf"]:
+                old_file = f"{DATA_DIR}/prices/{symbol_file}{suffix}.json"
+                if os.path.exists(old_file):
+                    os.remove(old_file)
+                    info(f"🧹 [{symbol}] Removed old price file: {symbol_file}{suffix}.json")
+        except Exception as e:
+            warning(f"⚠️ [{symbol}] Price cleanup failed: {e}")
+
         # === STARTUP: Fetch real commission rates from exchange ===
         try:
             commission = client.get_commission_rate(symbol)
@@ -110,7 +123,7 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
 
                 # Sync Trade Tracker (History & Manual Close Detection)
                 real_position = analysis_result.get("position")
-                active_trade = tracker.sync_position(symbol, real_position)
+                active_trade = tracker.sync_position(symbol, real_position, exchange_client=client)
 
                 # 4. Проверка min_hold_hours (SWING режим)
                 from src.config import STYLE_PRESETS
@@ -522,6 +535,9 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                 error(f"❌ [{symbol}] Ошибка внутри торгового цикла: {str(e)}")
                 error(traceback.format_exc())
                 sleep_time = ERROR_HANDLING.get("cycle_error_fallback_sleep", 5)
+
+            # Сброс накопленных PnL-обновлений на диск
+            tracker.flush()
 
             # Пауза между циклами
             time.sleep(sleep_time)

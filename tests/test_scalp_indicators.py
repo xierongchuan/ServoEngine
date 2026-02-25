@@ -713,7 +713,7 @@ class TestVetoStaleness:
             "veto_max_stale_cycles": 2,
             "borderline_quality_threshold": 0.3,
         }
-        ai_cfg.update(ai_overrides)
+        # Note: veto_model is now read from AI_VETO_OVERRIDE, not ai_integration
         settings = {
             "loops": {"fast_interval": 1.5, "slow_interval": 45},
             "time_exit": {},
@@ -783,9 +783,10 @@ class TestVetoStaleness:
         engine._process_veto()
         # Should discard because signal changed from BUY to SELL
 
+    @patch("src.core.scalp_engine.AI_VETO_OVERRIDE", {"model": "google/gemini-2.0-flash-lite", "temperature": 0.1, "max_tokens": 100})
     @patch("src.core.predict.requests.post")
     def test_veto_uses_model_override(self, mock_post):
-        engine = self._make_engine(veto_model="google/gemini-2.0-flash-lite")
+        engine = self._make_engine()
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
             "choices": [{"message": {"content": '{"action":"buy","confidence":0.8,"reason":"confirmed"}'}}]
@@ -801,7 +802,7 @@ class TestVetoStaleness:
         }
 
         # Mock _execute_entry to avoid actual order placement
-        engine._execute_entry = lambda s, i: None
+        engine._execute_entry = lambda s, i, **kwargs: None
 
         engine._process_veto()
 
@@ -839,9 +840,8 @@ class TestRegimeAdvisorIntegration:
         ai_cfg = {
             "regime_enabled": True,
             "regime_interval_seconds": 300,
-            "regime_model": "google/gemini-2.5-flash",
         }
-        ai_cfg.update(ai_overrides)
+        # Note: regime_model is now read from AI_REGIME_OVERRIDE, not ai_integration
         settings = {
             "loops": {"fast_interval": 1.5, "slow_interval": 45},
             "time_exit": {},
@@ -1001,12 +1001,10 @@ class TestRegimeAdvisorIntegration:
         assert engine._ai_regime_label == "VOLATILE"
         assert engine._ai_regime_duration == 1  # Reset
 
+    @patch("src.core.scalp_engine.AI_REGIME_OVERRIDE", {"model": "google/gemini-2.5-flash", "temperature": 0.2, "max_tokens": 150})
     @patch("src.core.predict.requests.post")
     def test_regime_uses_model_override(self, mock_post):
-        engine = self._make_engine(
-            regime_interval_seconds=0,
-            regime_model="google/gemini-2.5-flash",
-        )
+        engine = self._make_engine(regime_interval_seconds=0)
         engine._last_ai_regime_time = 0
 
         mock_analyzer = type("MockAnalyzer", (), {

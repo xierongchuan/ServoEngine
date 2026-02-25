@@ -220,6 +220,11 @@ def reload_bot_config() -> dict:
     AI_RETRY_BACKOFF_BASE = AI_SETTINGS.get("retry_backoff_base", 2)
     AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://openrouter.ai/api/v1/chat/completions"
 
+    # AI Overrides for use-case-specific settings
+    _ai_overrides = AI_SETTINGS.get("overrides", {})
+    AI_VETO_OVERRIDE = _ai_overrides.get("veto", {})
+    AI_REGIME_OVERRIDE = _ai_overrides.get("regime", {})
+
     # Notify callbacks
     for callback in _config_callbacks:
         try:
@@ -471,6 +476,11 @@ AI_PROVIDER_ROUTING = AI_SETTINGS.get("provider_routing", {})
 AI_FALLBACK_MODELS = AI_SETTINGS.get("fallback_models", [])
 AI_REQUEST_TIMEOUT = AI_SETTINGS.get("request_timeout", 60)
 AI_RETRY_BACKOFF_BASE = AI_SETTINGS.get("retry_backoff_base", 2)
+
+# AI Overrides for use-case-specific settings
+_ai_overrides = AI_SETTINGS.get("overrides", {})
+AI_VETO_OVERRIDE = _ai_overrides.get("veto", {})
+AI_REGIME_OVERRIDE = _ai_overrides.get("regime", {})
 
 # Load API Key
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")

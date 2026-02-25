@@ -8,11 +8,14 @@ from src.utils.logger import info, warning, log_trade
 
 HISTORY_FILE = os.path.join(DATA_DIR, "trade_history.json")
 ACTIVE_TRADES_FILE = os.path.join(DATA_DIR, "active_trades.json")
+BATCH_WRITE_INTERVAL = 15  # секунд между записями PnL-обновлений
 
 class TradeTracker:
     def __init__(self):
         self._ensure_files()
         self.active_trades = self._load_json(ACTIVE_TRADES_FILE)
+        self._dirty = False
+        self._last_save_time = time.monotonic()
 
     def _ensure_files(self):
         if not os.path.exists(DATA_DIR):
@@ -119,7 +122,7 @@ class TradeTracker:
         except Exception as e:
             warning(f"Failed to append to {HISTORY_FILE}: {e}")
 
-    def sync_position(self, symbol, real_position):
+    def sync_position(self, symbol, real_position, exchange_client=None):
         """
         Synchronizes the internal state with the real position from the exchange.
         Handles detecting new trades and closed trades (including manual closures).
@@ -133,7 +136,7 @@ class TradeTracker:
 
         # Scenario 2: Position Closed (Stored exists, Real does not)
         elif not real_position and stored_trade:
-            self._handle_closed_trade(symbol, stored_trade)
+            self._handle_closed_trade(symbol, stored_trade, exchange_client=exchange_client)
             return None
 
         # Scenario 3: Update existing position (Both exist)
@@ -195,15 +198,54 @@ class TradeTracker:
         log_trade(f"🆕 [TradeTracker] Detected NEW trade for {symbol} @ {trade_data['entry_price']}")
         info(f"🆕 [TradeTracker] New trade tracked: {symbol}")
 
-    def _handle_closed_trade(self, symbol, stored_trade):
-        """Archive a closed trade"""
-        # Since we don't have the Real position anymore, we don't know the EXACT close price
-        # unless we query order history. For now, we will mark it as closed.
-        # Ideally, passed PnL from the last update is used.
-
+    def _handle_closed_trade(self, symbol, stored_trade, exchange_client=None):
+        """Archive a closed trade, enriching with real exchange data when available."""
         stored_trade["status"] = "CLOSED"
         stored_trade["close_time"] = datetime.now().isoformat()
-        stored_trade["reason"] = "MANUAL_OR_TP_SL" # We infer this because it disappeared using sync()
+        stored_trade["reason"] = "MANUAL_OR_TP_SL"
+
+        # Try to enrich with real close data from exchange
+        if exchange_client:
+            try:
+                recent_orders = exchange_client.get_recent_orders(symbol, limit=10)
+                # Find last FILLED order with opposite side (LONG→SELL, SHORT→BUY)
+                trade_side = stored_trade.get("side", "").upper()
+                close_side = "SELL" if trade_side == "LONG" else "BUY"
+
+                close_order = None
+                for order in recent_orders:
+                    if (order.get("status", "").upper() == "FILLED" and
+                            order.get("side", "").upper() == close_side):
+                        close_order = order
+                        break
+
+                if close_order:
+                    close_price = close_order["avgPrice"]
+                    realized_pnl = close_order["profit"]
+                    close_fee = abs(close_order["commission"])
+                    entry_fee = stored_trade.get("estimated_entry_fee", 0)
+
+                    stored_trade["close_price"] = close_price
+                    stored_trade["realized_pnl"] = round(realized_pnl, 4)
+                    stored_trade["last_pnl"] = round(realized_pnl, 4)
+                    stored_trade["actual_close_fee"] = round(close_fee, 4)
+                    stored_trade["actual_total_fees"] = round(entry_fee + close_fee, 4)
+                    stored_trade["net_pnl"] = round(realized_pnl - entry_fee - close_fee, 4)
+                    stored_trade["close_order_id"] = close_order["orderId"]
+
+                    # Use actual close time from exchange
+                    update_time = close_order.get("updateTime", 0)
+                    if update_time:
+                        import time as _time
+                        stored_trade["close_time"] = _time.strftime(
+                            '%Y-%m-%dT%H:%M:%S', _time.gmtime(update_time / 1000)
+                        )
+
+                    info(f"💰 [TradeTracker] Enriched close data for {symbol}: "
+                         f"close_price={close_price}, realized_pnl={realized_pnl:.4f}, "
+                         f"fees={entry_fee + close_fee:.4f}, net_pnl={stored_trade['net_pnl']:.4f}")
+            except Exception as e:
+                warning(f"⚠️ [TradeTracker] Failed to enrich close data for {symbol}: {e}")
 
         # Move to history
         self._append_history(stored_trade)
@@ -256,7 +298,26 @@ class TradeTracker:
         stored_trade["min_pnl"] = min(stored_trade.get("min_pnl", 999999), current_pnl)
 
         self.active_trades[symbol] = stored_trade
-        self._save_active_trades(symbol)
+        self._mark_dirty()
+        self._save_if_due(symbol)
+
+    def _mark_dirty(self):
+        """Помечает данные как изменённые для отложенной записи."""
+        self._dirty = True
+
+    def flush(self):
+        """Сбрасывает накопленные изменения на диск, если есть что записывать."""
+        if self._dirty:
+            self._save_active_trades()
+            self._dirty = False
+            self._last_save_time = time.monotonic()
+
+    def _save_if_due(self, symbol: str = None):
+        """Записывает на диск, если прошло достаточно времени с последней записи."""
+        if time.monotonic() - self._last_save_time >= BATCH_WRITE_INTERVAL:
+            self._save_active_trades(symbol)
+            self._dirty = False
+            self._last_save_time = time.monotonic()
 
     def force_sync_all(self, real_positions_dict: dict):
         """

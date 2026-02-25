@@ -270,7 +270,7 @@ async def close_position_by_symbol(
 
         success = client.close_position(symbol, deal_id, 1.0)
         if not success:
-            return {"status": "error", "message": "Failed to close position on exchange"}
+            raise HTTPException(status_code=502, detail="Failed to close position on exchange")
 
         # Update local files so UI reflects the change immediately
         trade["status"] = "CLOSED"

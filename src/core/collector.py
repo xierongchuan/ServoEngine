@@ -119,14 +119,6 @@ def process_symbol(symbol):
         with open(prices_file, "w") as f:
             json.dump(prices, f)
 
-        # HTF candles for INTRADAY multi-timeframe analysis
-        if STRATEGY_STYLE == "INTRADAY":
-            htf_prices = fetch_htf_prices(symbol)
-            if htf_prices:
-                htf_file = f"{DATA_DIR}/prices/{symbol_file}_htf.json"
-                with open(htf_file, "w") as f:
-                    json.dump(htf_prices, f)
-
         # Сбор новостей
         if ENABLE_NEWS:
             news = fetch_news(symbol)
