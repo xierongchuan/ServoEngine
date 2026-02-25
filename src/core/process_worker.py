@@ -116,13 +116,15 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                 with StageTimer("Сбор данных", symbol, "📊"):
                     collector.process_symbol(symbol)
 
+                # 2b. Fetch positions ONCE per cycle (reused by analyzer, executor, monitor)
+                all_positions = client.get_positions()
+                symbol_positions = all_positions.get(symbol, [])
+                real_position = symbol_positions[0] if symbol_positions else None
+
                 # 3. Анализ (с контекстом предыдущих решений)
                 decision_context = journal.get_context(symbol, STRATEGY_STYLE)
                 with StageTimer("Анализ индикаторов", symbol, "🔍"):
-                    analysis_result = analyzer.analyze_symbol_with_position(symbol, decision_context=decision_context)
-
-                # Sync Trade Tracker (History & Manual Close Detection)
-                real_position = analysis_result.get("position")
+                    analysis_result = analyzer.analyze_symbol(symbol, position=real_position, decision_context=decision_context)
                 active_trade = tracker.sync_position(symbol, real_position, exchange_client=client)
 
                 # 4. Проверка min_hold_hours (SWING режим)
@@ -460,7 +462,7 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
 
                 # 6. Исполнение
                 with StageTimer("Исполнение сигналов", symbol, "💰"):
-                    executor.execute_prediction(prediction)
+                    executor.execute_prediction(prediction, all_positions=all_positions)
 
                 # 6b. Запись контекста входа для performance tracking (HYBRID)
                 if action in ("buy", "sell") and not real_position and STRATEGY_STYLE in ("HYBRID", "INTRADAY"):
@@ -480,7 +482,7 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
 
                 # 7. Мониторинг
                 with StageTimer("Мониторинг позиции", symbol, "👀"):
-                    monitor.monitor_symbol(symbol)
+                    monitor.monitor_symbol(symbol, all_positions=all_positions)
 
                 # 7. Графики (moved to separate process)
                 # plotter.plot_symbol(symbol, current_position=active_trade)

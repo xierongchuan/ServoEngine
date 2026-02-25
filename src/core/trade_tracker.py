@@ -205,6 +205,7 @@ class TradeTracker:
         stored_trade["reason"] = "MANUAL_OR_TP_SL"
 
         # Try to enrich with real close data from exchange
+        enriched = False
         if exchange_client:
             try:
                 recent_orders = exchange_client.get_recent_orders(symbol, limit=10)
@@ -241,11 +242,18 @@ class TradeTracker:
                             '%Y-%m-%dT%H:%M:%S', _time.gmtime(update_time / 1000)
                         )
 
+                    enriched = True
                     info(f"💰 [TradeTracker] Enriched close data for {symbol}: "
                          f"close_price={close_price}, realized_pnl={realized_pnl:.4f}, "
                          f"fees={entry_fee + close_fee:.4f}, net_pnl={stored_trade['net_pnl']:.4f}")
+                else:
+                    warning(f"⚠️ [TradeTracker] No matching close order found for {symbol} "
+                            f"(side={trade_side}, looked for {close_side} FILLED, "
+                            f"got {len(recent_orders)} orders). Using estimated PnL.")
             except Exception as e:
                 warning(f"⚠️ [TradeTracker] Failed to enrich close data for {symbol}: {e}")
+        else:
+            warning(f"⚠️ [TradeTracker] No exchange client for {symbol}, using estimated PnL")
 
         # Move to history
         self._append_history(stored_trade)
@@ -254,8 +262,14 @@ class TradeTracker:
         del self.active_trades[symbol]
         self._save_active_trades(symbol, delete=True)
 
-        log_trade(f"🏁 [TradeTracker] Trade CLOSED for {symbol}. Last PnL: {stored_trade.get('last_pnl', 'N/A')}")
-        info(f"🏁 [TradeTracker] Trade archived: {symbol}")
+        pnl_source = "real" if enriched else "estimated"
+        pnl_val = stored_trade.get('last_pnl', 'N/A')
+        net_val = stored_trade.get('net_pnl', 'N/A')
+        close_p = stored_trade.get('close_price', 'N/A')
+
+        log_trade(f"🏁 [TradeTracker] Trade CLOSED for {symbol}: "
+                  f"PnL={pnl_val} ({pnl_source}), net_pnl={net_val}, close_price={close_p}")
+        info(f"🏁 [TradeTracker] Trade archived: {symbol} [{pnl_source} data]")
 
     def _handle_update_trade(self, symbol, stored_trade, real_position):
         """Update PnL and other stats"""

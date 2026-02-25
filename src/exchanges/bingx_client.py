@@ -19,7 +19,7 @@ class BingXClient(ExchangeClient):
     # Class-level cache for positions (shared across instances)
     _positions_cache = None
     _positions_cache_time = 0
-    _positions_cache_ttl = 5  # Cache TTL in seconds
+    _positions_cache_ttl = 10  # Cache TTL in seconds
 
     # Class-level cache for balance
     _balance_cache = None
@@ -116,6 +116,19 @@ class BingXClient(ExchangeClient):
                     response = requests.delete(full_url, headers=headers, timeout=6)
                 else:
                     raise ValueError(f"Unsupported method: {method}")
+
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get("Retry-After", retry_delay))
+                    warning(f"⚠️ Rate limited (429) on {endpoint} (attempt {attempt+1}/{max_retries}). Backing off {retry_after}s...")
+                    time.sleep(retry_after)
+                    retry_delay = min(retry_delay * 2, 30)
+                    continue
+
+                if response.status_code in (500, 502, 503, 504):
+                    warning(f"⚠️ Server error {response.status_code} on {endpoint} (attempt {attempt+1}/{max_retries}). Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
 
                 response.raise_for_status()
                 return response.json()
@@ -273,6 +286,14 @@ class BingXClient(ExchangeClient):
         for attempt in range(max_retries):
             try:
                 response = requests.get(market_url, params=params, timeout=6)
+
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get("Retry-After", retry_delay))
+                    warning(f"⚠️ Rate limited (429): klines {symbol}. Backing off {retry_after}s...")
+                    time.sleep(retry_after)
+                    retry_delay = min(retry_delay * 2, 30)
+                    continue
+
                 response.raise_for_status()
                 data = response.json()
                 break
@@ -325,6 +346,12 @@ class BingXClient(ExchangeClient):
             return formatted_data
 
         return []
+
+    @classmethod
+    def invalidate_positions_cache(cls):
+        """Invalidates positions cache so next get_positions() fetches fresh data."""
+        cls._positions_cache = None
+        cls._positions_cache_time = 0
 
     def get_positions(self):
         """Получает открытые позиции (с кэшированием)"""
@@ -484,6 +511,8 @@ class BingXClient(ExchangeClient):
                 order_id = order_data["order"].get("orderId")
 
             info(f"✅ BingX Order Placed: {order_id}")
+            # Invalidate positions cache so next get_positions() fetches fresh data
+            BingXClient.invalidate_positions_cache()
             return order_id
         else:
             error(f"❌ Failed to place BingX order: {response}")
@@ -712,6 +741,14 @@ class BingXClient(ExchangeClient):
         for attempt in range(max_retries):
             try:
                 response = requests.get(market_url, params=params, timeout=6)
+
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get("Retry-After", retry_delay))
+                    warning(f"⚠️ Rate limited (429): order book {symbol}. Backing off {retry_after}s...")
+                    time.sleep(retry_after)
+                    retry_delay = min(retry_delay * 2, 30)
+                    continue
+
                 response.raise_for_status()
                 data = response.json()
 
@@ -754,6 +791,14 @@ class BingXClient(ExchangeClient):
         for attempt in range(max_retries):
             try:
                 response = requests.get(market_url, params=params, timeout=6)
+
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get("Retry-After", retry_delay))
+                    warning(f"⚠️ Rate limited (429): ticker {symbol}. Backing off {retry_after}s...")
+                    time.sleep(retry_after)
+                    retry_delay = min(retry_delay * 2, 30)
+                    continue
+
                 response.raise_for_status()
                 data = response.json()
 
@@ -853,9 +898,30 @@ class BingXClient(ExchangeClient):
             market_url = "https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex"
             params = {"symbol": formatted_symbol}
 
-            response = requests.get(market_url, params=params, timeout=6)
-            response.raise_for_status()
-            data = response.json()
+            max_retries = 3
+            retry_delay = 1
+            data = None
+            for attempt in range(max_retries):
+                try:
+                    response = requests.get(market_url, params=params, timeout=6)
+
+                    if response.status_code == 429:
+                        retry_after = int(response.headers.get("Retry-After", retry_delay))
+                        warning(f"⚠️ Rate limited (429): funding rate {symbol}. Backing off {retry_after}s...")
+                        time.sleep(retry_after)
+                        retry_delay = min(retry_delay * 2, 30)
+                        continue
+
+                    response.raise_for_status()
+                    data = response.json()
+                    break
+                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                    warning(f"⚠️ Funding rate request error (attempt {attempt+1}/{max_retries}): {e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                    else:
+                        return None
 
             if data and data.get("code") == 0:
                 index_data = data.get("data", {})

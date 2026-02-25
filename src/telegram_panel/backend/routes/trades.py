@@ -1,23 +1,15 @@
 from datetime import datetime
 import json
-import os
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query, HTTPException
 
 from ..services.auth import get_current_user
 from ..services.data_reader import DataReader
+from ..config import DATA_DIR, CONFIG_PATH
 
 router = APIRouter(prefix="/api/trades", tags=["trades"])
 reader = DataReader()
-
-
-def get_project_root() -> Path:
-    """Resolve project root relative to this file."""
-    return Path(__file__).resolve().parent.parent.parent.parent
-
-
-CONFIG_PATH = Path(os.environ.get("PANEL_CONFIG_PATH", str(get_project_root() / "bot_config.json")))
 
 
 @router.get("/active")
@@ -178,9 +170,8 @@ async def sync_positions(_user: dict = Depends(get_current_user)) -> dict:
     Removes stale trades that no longer exist on the exchange,
     detects manually closed positions.
     """
-    project_root = get_project_root()
-    active_path = project_root / "data" / "active_trades.json"
-    history_path = project_root / "data" / "trade_history.json"
+    active_path = DATA_DIR / "active_trades.json"
+    history_path = DATA_DIR / "trade_history.json"
 
     active = read_json(active_path)
     if not isinstance(active, dict):
@@ -190,8 +181,6 @@ async def sync_positions(_user: dict = Depends(get_current_user)) -> dict:
         return {"status": "ok", "removed": 0, "remaining": 0}
 
     try:
-        import sys
-        sys.path.insert(0, str(project_root))
         from src.exchanges.exchange_factory import get_exchange_client
 
         client = get_exchange_client()
@@ -237,9 +226,8 @@ async def close_position_by_symbol(
     """Close position for a symbol at market price."""
     symbol = symbol.upper().replace(" ", "")
 
-    project_root = get_project_root()
-    active_path = project_root / "data" / "active_trades.json"
-    history_path = project_root / "data" / "trade_history.json"
+    active_path = DATA_DIR / "active_trades.json"
+    history_path = DATA_DIR / "trade_history.json"
     active = read_json(active_path)
 
     if not isinstance(active, dict) or symbol not in active:
@@ -249,8 +237,6 @@ async def close_position_by_symbol(
     deal_id = trade.get("dealId") or trade.get("deal_id")
 
     try:
-        import sys
-        sys.path.insert(0, str(project_root))
         from src.exchanges.exchange_factory import get_exchange_client
 
         client = get_exchange_client()

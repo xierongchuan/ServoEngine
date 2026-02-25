@@ -721,21 +721,19 @@ class TestExchangeFactory:
 
     def test_bingx_client_created(self):
         """EXCHANGE=bingx → возвращается BingXClient."""
-        with patch("src.exchanges.exchange_factory.EXCHANGE", "bingx"):
-            from src.exchanges.exchange_factory import get_exchange_client
-            from src.exchanges.bingx_client import BingXClient
+        import src.exchanges.exchange_factory as factory_mod
+        from src.exchanges.bingx_client import BingXClient
 
-            # Нужно перезагрузить модуль для перехвата EXCHANGE
-            import importlib
-            import src.exchanges.exchange_factory as factory_mod
-            with patch.object(factory_mod, "EXCHANGE", "bingx"):
-                client = factory_mod.get_exchange_client()
-            assert isinstance(client, BingXClient)
+        with patch.object(factory_mod, "EXCHANGE", "bingx"), \
+             patch.object(factory_mod, "_client_instance", None):
+            client = factory_mod.get_exchange_client()
+        assert isinstance(client, BingXClient)
 
     def test_unknown_exchange_raises(self):
         """Неизвестный exchange → ValueError."""
         import src.exchanges.exchange_factory as factory_mod
-        with patch.object(factory_mod, "EXCHANGE", "kraken"):
+        with patch.object(factory_mod, "EXCHANGE", "kraken"), \
+             patch.object(factory_mod, "_client_instance", None):
             with pytest.raises(ValueError, match="Unknown exchange: kraken"):
                 factory_mod.get_exchange_client()
 
@@ -743,7 +741,8 @@ class TestExchangeFactory:
         """EXCHANGE проверяется в lower case."""
         import src.exchanges.exchange_factory as factory_mod
         from src.exchanges.bingx_client import BingXClient
-        with patch.object(factory_mod, "EXCHANGE", "BingX"):
+        with patch.object(factory_mod, "EXCHANGE", "BingX"), \
+             patch.object(factory_mod, "_client_instance", None):
             client = factory_mod.get_exchange_client()
         assert isinstance(client, BingXClient)
 

@@ -191,29 +191,9 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
                 except Exception as e:
                     error(f"❌ Failed to set SL/TP for new order {order_id}: {e}")
 
-            # NEW: Immediate Sync for Chart Worker
-            # Force update of active_trades.json so charts show the line instantly
-            try:
-                info(f"🔄 Performing immediate position sync for {symbol}...")
-                time.sleep(POSITION_LIMITS.get("position_sync_wait", 1.0)) # Short wait for API propagation
-
-                # Fetch fresh positions
-                fresh_positions = client.get_positions()
-                if fresh_positions and symbol in fresh_positions:
-                    target_positions = fresh_positions[symbol]
-                    # Should be a list, iterate and sync
-                    from src.core.trade_tracker import TradeTracker
-                    tracker = TradeTracker()
-
-                    for pos in target_positions:
-                        # Sync it
-                        tracker.sync_position(symbol, pos)
-
-                    info(f"✅ Immediate trade sync completed for {symbol}")
-                else:
-                    warning(f"⚠️ Immediate sync: Position not found for {symbol} after order.")
-            except Exception as e:
-                warning(f"⚠️ Immediate sync failed: {e}")
+            # Invalidate positions cache so next cycle gets fresh data
+            from src.exchanges.bingx_client import BingXClient
+            BingXClient.invalidate_positions_cache()
 
             log_trade(f"📌 {symbol}: открыт ордер {direction} по {price:.5f} "
                       f"(Qty={quantity}, TP={tp_price}, SL={sl_price}, ID={order_id}) "
@@ -228,13 +208,12 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         log_trade(f"❌ Ошибка создания ордера {symbol}: {str(e)}", level='ERROR')
         return None
 
-def execute_prediction(prediction):
+def execute_prediction(prediction, all_positions=None):
     """
     Исполняет одно предсказание для одного символа.
     Используется в режиме multiprocessing.
     """
     symbol = prediction["symbol"]
-    # action = prediction["action"] # Unused variable
 
     client = get_exchange_client()
     if not client.check_prerequisites():
@@ -243,7 +222,7 @@ def execute_prediction(prediction):
 
     # Получаем все текущие позиции для проверки лимитов и состояния
     try:
-        positions = get_open_positions()
+        positions = all_positions if all_positions is not None else get_open_positions()
     except Exception as e:
         error(f"❌ {symbol}: Ошибка получения позиций: {e}")
         return

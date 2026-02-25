@@ -47,16 +47,12 @@ def close_position(symbol, deal_id, working_order_id=None):
         error(f"❌ Ошибка закрытия позиции {symbol}: {str(e)}")
         return False
 
-def monitor_symbol(symbol):
+def monitor_symbol(symbol, all_positions=None):
     """Мониторит позиции только для одного символа"""
 
-    # Can reuse executor.get_open_positions or client.get_positions directly
-    # Since we want consistency, let's reuse executor if possible or just call client
-    # but executor imports monitor (cycle risk?), monitor imports executor...
-    # Current monitor imports executor.
-
     try:
-        all_positions = executor.get_open_positions()
+        if all_positions is None:
+            all_positions = executor.get_open_positions()
         if not all_positions:
             # No positions at all
             return

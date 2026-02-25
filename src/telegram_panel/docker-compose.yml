@@ -8,9 +8,11 @@ services:
     security_opt:
       - label:disable
     volumes:
-      - ../../data:/app/data:ro
+      - ../../data:/app/data:rw
       - ../../charts:/app/charts:ro
       - ../../bot_config.json:/app/bot_config.json:rw
+      - ../../src:/app/src:ro
+      - ../../.env:/app/.env:ro
     env_file: ../../.env
     environment:
       - PANEL_PORT=8080
