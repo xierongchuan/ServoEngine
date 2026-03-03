@@ -61,3 +61,6 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+
+# Local binaries
+ngrok

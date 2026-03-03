@@ -21,6 +21,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$PROJECT_ROOT/.env"
 NGROK_PID_FILE="/tmp/opb-ngrok.pid"
 CF_URL_FILE="/tmp/opb-cloudflare-url.txt"
+NGROK_BINARY="$PROJECT_ROOT/ngrok"
 
 _env_val() {
     local key="$1"
@@ -63,16 +64,30 @@ echo ""
 # --- Функции для каждого режима ---
 
 start_ngrok() {
-    # Проверяем что ngrok установлен
-    if ! command -v ngrok &>/dev/null; then
-        echo "ОШИБКА: ngrok не установлен."
-        echo "Установи: https://ngrok.com/download"
-        echo "Или используй режим tunnel: ./scripts/start_panel.sh tunnel"
+    # Проверяем что ngrok бинарник существует
+    if [ ! -f "$NGROK_BINARY" ]; then
+        echo "ОШИБКА: ngrok бинарник не найден: $NGROK_BINARY"
         exit 1
     fi
 
+    # Делаем бинарник исполняемым
+    chmod +x "$NGROK_BINARY"
+
     local port="${PANEL_PORT:-$(_env_val PANEL_PORT)}"
     port="${port:-8080}"
+
+    # Всегда запрашиваем токен (не сохраняем в .env)
+    echo "Введи ngrok authtoken (получи на https://dashboard.ngrok.com/auth):"
+    read -rsp "Authtoken: " ngrok_token
+    echo ""
+
+    if [ -z "$ngrok_token" ]; then
+        echo "ОШИБКА: токен не введён."
+        exit 1
+    fi
+
+    # Авторизуем (токен сохраняется в ~/.ngrok2/ngrok.yml, но это локально для пользователя)
+    "$NGROK_BINARY" config add-authtoken "$ngrok_token" 2>/dev/null || true
 
     # Убиваем старый ngrok если есть
     if [ -f "$NGROK_PID_FILE" ]; then
@@ -88,7 +103,7 @@ start_ngrok() {
 
     # Запускаем ngrok в фоне
     echo "Запускаю ngrok http $port..."
-    ngrok http "$port" --log=stdout > /tmp/opb-ngrok.log 2>&1 &
+    "$NGROK_BINARY" http "$port" --log=stdout > /tmp/opb-ngrok.log 2>&1 &
     local ngrok_pid=$!
     echo "$ngrok_pid" > "$NGROK_PID_FILE"
 
