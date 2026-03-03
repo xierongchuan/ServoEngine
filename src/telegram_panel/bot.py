@@ -459,13 +459,15 @@ class TradingNotifier:
             side = trade.get("side", "?")
             entry = trade.get("entry_price", "?")
             leverage = trade.get("leverage", "?")
-            try:
-                await context.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=f"New {side} position opened: {sym} @ ${entry} | {leverage}x",
-                )
-            except Exception as e:
-                logger.error("Failed to send open notification: %s", e)
+            message = f"New {side} position opened: {sym} @ ${entry} | {leverage}x"
+            for user_id in ALLOWED_IDS:
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=message,
+                    )
+                except Exception as e:
+                    logger.error("Failed to send open notification to %s: %s", user_id, e)
 
         # Detect closed trades
         closed = self._last_symbols - current_symbols
@@ -491,13 +493,15 @@ class TradingNotifier:
                         if isinstance(fees, (int, float)):
                             fees_str = f" | Fees: ${fees:.2f}"
                         break
-            try:
-                await context.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=f"Position closed: {sym} | P&L: {pnl_str}{roe_str}{fees_str}",
-                )
-            except Exception as e:
-                logger.error("Failed to send close notification: %s", e)
+            message = f"Position closed: {sym} | P&L: {pnl_str}{roe_str}{fees_str}"
+            for user_id in ALLOWED_IDS:
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=message,
+                    )
+                except Exception as e:
+                    logger.error("Failed to send close notification to %s: %s", user_id, e)
 
         self._last_symbols = current_symbols
 

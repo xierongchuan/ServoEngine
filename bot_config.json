@@ -263,7 +263,7 @@
     "momentum_entry_enabled": true,
     "momentum_consecutive_candles": 3
   },
-  "STRATEGY_STYLE": "AISCALP",
+  "STRATEGY_STYLE": "SCALP",
   "STYLE_PRESETS": {
     "SCALP": {
       "timeframe": "1m",
