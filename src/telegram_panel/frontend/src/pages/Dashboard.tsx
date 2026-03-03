@@ -40,6 +40,9 @@ export function Dashboard({ subscribe }: { subscribe: (type: string, cb: (data: 
     }
   }, []);
 
+  // Extract symbols that have active positions
+  const symbolsWithPositions = new Set(trades.map(t => t.symbol));
+
   useEffect(() => {
     fetchData();
   }, [fetchData]);
@@ -97,7 +100,8 @@ export function Dashboard({ subscribe }: { subscribe: (type: string, cb: (data: 
       {dashboard?.symbols && dashboard.symbols.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {dashboard.symbols.map((s) => (
-            <span key={s} className="text-xs bg-tg-section-bg px-2 py-1 rounded text-tg-text/70">
+            <span key={s} className="text-xs bg-tg-section-bg px-2 py-1 rounded text-tg-text/70 flex items-center gap-1.5">
+              <span className={`w-1.5 h-1.5 rounded-full ${symbolsWithPositions.has(s) ? 'bg-green-400' : 'bg-gray-500'}`} />
               {s}
             </span>
           ))}

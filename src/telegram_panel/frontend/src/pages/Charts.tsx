@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { getChartData, getConfig } from '../api/client';
+import { getChartData, getConfig, getActiveTrades } from '../api/client';
 import type { ChartData } from '../api/types';
 import { InteractiveChart } from '../components/InteractiveChart';
 import { Spinner } from '../components/Spinner';
@@ -13,6 +13,7 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
   const [error, setError] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const fsContainerRef = useRef<HTMLDivElement>(null);
+  const [symbolsWithPositions, setSymbolsWithPositions] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     getConfig().then((cfg) => {
@@ -27,6 +28,13 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
           setSelectedSymbol((prev) => prev || all[0]);
         }
       }
+    }).catch(() => {});
+
+    // Fetch active trades to get symbols with positions
+    getActiveTrades().then((trades) => {
+      const tradesArray = Array.isArray(trades) ? trades : Object.values(trades);
+      const symbolsSet = new Set((tradesArray as any[]).map((t: any) => t.symbol));
+      setSymbolsWithPositions(symbolsSet);
     }).catch(() => {});
   }, []);
 
@@ -104,12 +112,13 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
             <button
               key={sym}
               onClick={() => setSelectedSymbol(sym)}
-              className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${
+              className={`text-xs px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 ${
                 selectedSymbol === sym
                   ? 'bg-tg-button text-white'
                   : 'bg-tg-section-bg text-tg-hint'
               }`}
             >
+              <span className={`w-1.5 h-1.5 rounded-full ${symbolsWithPositions.has(sym) ? 'bg-green-400' : 'bg-gray-500'}`} />
               {sym}
             </button>
           ))}
