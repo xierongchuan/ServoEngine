@@ -1,0 +1,143 @@
+{
+  "_description": "Infrastructure and rarely-changed settings",
+  "_version": "1.0.0",
+
+  "exchange": {
+    "default": "bingx",
+    "fees": {
+      "bingx": {
+        "maker": 0.02,
+        "taker": 0.05
+      }
+    }
+  },
+
+  "ai": {
+    "provider": "openrouter",
+    "model": "google/gemini-3-flash-preview",
+    "base_url": "https://openrouter.ai/api/v1/chat/completions",
+    "temperature": 0.3,
+    "max_tokens": 4096,
+    "reasoning": {
+      "enabled": true,
+      "effort": "medium",
+      "exclude": true
+    },
+    "retry_count": 3,
+    "request_timeout": 60,
+    "retry_backoff_base": 2,
+    "provider_routing": {
+      "allow_fallbacks": true
+    },
+    "fallback_models": [],
+    "overrides": {
+      "veto": {
+        "model": null,
+        "temperature": 0.1,
+        "max_tokens": 100
+      },
+      "regime": {
+        "model": null,
+        "temperature": 0.2,
+        "max_tokens": 150
+      }
+    }
+  },
+
+  "chart_ranges": {
+    "15m": { "minutes": 15, "candles": 15, "interval": "1m", "ai_context_candles": 15 },
+    "30m": { "minutes": 30, "candles": 30, "interval": "1m", "ai_context_candles": 30 },
+    "1h": { "hours": 1, "candles": 60, "interval": "1m", "ai_context_candles": 60 },
+    "6h": { "hours": 6, "candles": 360, "interval": "1m", "ai_context_candles": 360 },
+    "12h": { "hours": 12, "candles": 720, "interval": "1m", "ai_context_candles": 500 },
+    "1D": { "days": 1, "candles": 1440, "interval": "1m", "ai_context_candles": 600 },
+    "3D": { "days": 3, "candles": 864, "interval": "5m", "ai_context_candles": 500 },
+    "1W": { "days": 7, "candles": 750, "interval": "15m", "ai_context_candles": 500 },
+    "14D": { "days": 14, "candles": 400, "interval": "1h", "ai_context_candles": 336 },
+    "30D": { "days": 30, "candles": 720, "interval": "1h", "ai_context_candles": 720 }
+  },
+
+  "plotter_ranges": {
+    "15m": { "minutes": 15, "interval": "1m" },
+    "30m": { "minutes": 30, "interval": "1m" },
+    "1h": { "hours": 1, "interval": "1m" },
+    "2h": { "hours": 2, "interval": "1m" },
+    "4h": { "hours": 4, "interval": "5m" },
+    "6h": { "hours": 6, "interval": "5m" },
+    "12h": { "hours": 12, "interval": "5m" },
+    "1D": { "days": 1, "interval": "5m" },
+    "2D": { "days": 2, "interval": "15m" },
+    "3D": { "days": 3, "interval": "15m" },
+    "1W": { "days": 7, "interval": "1h" },
+    "14D": { "days": 14, "interval": "1h" }
+  },
+
+  "technical_analysis": {
+    "sr_window": 20,
+    "ema_periods": [9, 21],
+    "trend_candle_count": 12,
+    "volume_avg_window": 20,
+    "volume_thresholds": {
+      "anomaly": 2,
+      "elevated": 1.2,
+      "low": 0.5
+    },
+    "seb_length": 20,
+    "seb_multiplier": 2,
+    "momentum_volume_threshold": 1.2,
+    "momentum_trend_volume_threshold": 1,
+    "news_items_in_prompt": 5
+  },
+
+  "chart_settings": {
+    "enabled": false,
+    "update_interval": 10,
+    "min_sleep": 0.5,
+    "sma_periods": [10, 20, 50, 100, 200],
+    "chart_height": 13.5,
+    "dpi": 200
+  },
+
+  "cleanup_settings": {
+    "cleanup_old_charts": true,
+    "charts_retention_days": 7,
+    "cleanup_old_data": true,
+    "data_retention_days": 30
+  },
+
+  "position_limits": {
+    "max_positions": 1,
+    "price_precision": 4,
+    "quantity_precision": 4,
+    "balance_safety_margin": 0.95,
+    "position_sync_wait": 1
+  },
+
+  "error_handling": {
+    "cycle_error_fallback_sleep": 5
+  },
+
+  "news": {
+    "use_real_news": true,
+    "provider": "newsapi",
+    "max_news_items": 15,
+    "news_timeout_seconds": 30,
+    "extract_full_content": true
+  },
+
+  "decision_journal": {
+    "enabled": true,
+    "max_entries": {
+      "SCALP": 5,
+      "AISCALP": 10,
+      "SWING": 50,
+      "GRID": 20,
+      "HYBRID": 10,
+      "MACDX": 10
+    }
+  },
+
+  "validation": {
+    "rr_soft_limit": 0.8
+  }
+}

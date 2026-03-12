@@ -11,6 +11,7 @@ services:
       - ./data:/app/data:rw
       - ./charts:/app/charts:ro
       - ./bot_config.json:/app/bot_config.json:rw
+      - ./config:/app/config:rw
       - ./src:/app/src:ro
       - ./.env:/app/.env:ro
     env_file: .env

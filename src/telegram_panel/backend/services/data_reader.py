@@ -31,8 +31,13 @@ class DataReader:
             logger.warning("Invalid JSON in %s", path)
             return default
 
-    def read_active_trades(self) -> dict:
-        return self._read_json(self.data_dir / "active_trades.json", default={})
+    def read_active_trades(self) -> dict | list:
+        """Read active trades. Returns dict (expected format) or list (legacy/corrupted format)."""
+        data = self._read_json(self.data_dir / "active_trades.json", default={})
+        if not isinstance(data, (dict, list)):
+            logger.warning("Unexpected active_trades format: %s, returning empty dict", type(data).__name__)
+            return {}
+        return data
 
     def read_trade_history(self) -> list:
         return self._read_json(self.data_dir / "trade_history.json", default=[])

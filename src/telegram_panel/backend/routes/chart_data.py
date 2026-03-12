@@ -290,7 +290,13 @@ async def get_chart_data(
     # Позиция
     active_trades = _read_json(DATA_DIR / "active_trades.json", default={})
     position = None
-    trade = active_trades.get(symbol)
+    # Handle both dict and list formats for active_trades
+    trade = None
+    if isinstance(active_trades, dict):
+        trade = active_trades.get(symbol)
+    elif isinstance(active_trades, list):
+        # Find trade by symbol in list format
+        trade = next((t for t in active_trades if isinstance(t, dict) and t.get("symbol") == symbol), None)
     if trade and trade.get("status") == "OPEN":
         position = {
             "side": trade.get("side", "UNKNOWN"),

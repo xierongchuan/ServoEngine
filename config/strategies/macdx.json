@@ -1,0 +1,34 @@
+{
+  "_description": "MACDX - No-AI MACD crossover strategy with 3-5 confirmations",
+  "_version": "1.0.0",
+
+  "preset": {
+    "timeframe": "15m",
+    "chart_period": "1D",
+    "plotter_period": "1D",
+    "loop_interval": 60,
+    "position_check_interval": 15,
+    "atr_sl_mult": 1.5,
+    "atr_tp_mult": 3.0,
+    "leverage": 10
+  },
+
+  "signal_rules": {
+    "macd_cross_weight": 2,
+    "rsi_zone_weight": 2,
+    "ema_alignment_weight": 2,
+    "not_sideways_weight": 1,
+    "no_exhaustion_weight": 1,
+    "volume_weight": 1,
+    "min_score_for_signal": 4,
+    "min_confirmations": 3,
+    "min_volume_ratio": 0.5,
+    "min_atr_ratio": 0.3,
+    "rsi_long_max": 65,
+    "rsi_long_min": 25,
+    "rsi_short_max": 75,
+    "rsi_short_min": 35,
+    "bb_width_threshold": 0.5,
+    "adx_threshold": 20
+  }
+}

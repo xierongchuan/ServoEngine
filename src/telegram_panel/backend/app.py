@@ -1,10 +1,13 @@
 import asyncio
 import logging
+import time
+import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .routes import dashboard, trades, charts, logs, config_routes, journal, chart_data
@@ -13,12 +16,28 @@ from .ws import manager
 
 logger = logging.getLogger("panel.app")
 
+
 file_watcher: FileWatcher | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global file_watcher
+
+    # Log config paths for diagnostics
+    from .config import DATA_DIR, CHARTS_DIR, CONFIG_PATH, PROJECT_ROOT
+    logger.info("Config paths:")
+    logger.info("  PROJECT_ROOT: %s (exists=%s)", PROJECT_ROOT, PROJECT_ROOT.is_dir())
+    logger.info("  CONFIG_PATH: %s (exists=%s)", CONFIG_PATH, CONFIG_PATH.exists())
+    logger.info("  DATA_DIR: %s (exists=%s)", DATA_DIR, DATA_DIR.is_dir())
+    logger.info("  CHARTS_DIR: %s (exists=%s)", CHARTS_DIR, CHARTS_DIR.is_dir())
+
+    # Check new config system
+    config_dir = CONFIG_PATH.parent / "config"
+    logger.info("  CONFIG_DIR: %s (exists=%s)", config_dir, config_dir.is_dir())
+    if config_dir.is_dir():
+        logger.info("  active.json exists: %s", (config_dir / "active.json").exists())
+
     loop = asyncio.get_running_loop()
     file_watcher = FileWatcher(loop=loop)
     file_watcher.set_ws_manager(manager)
@@ -31,6 +50,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="OpenProducerBot Panel", lifespan=lifespan)
 
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Catch unhandled exceptions, log them, and return detailed error for debugging."""
+    tb = traceback.format_exc()
+    logger.error("Unhandled exception on %s %s: %s\n%s", request.method, request.url.path, exc, tb)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": str(exc),
+            "type": type(exc).__name__,
+            "path": request.url.path,
+        },
+    )
+
+
 # CORS for Telegram WebApp
 app.add_middleware(
     CORSMiddleware,
@@ -39,6 +74,32 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Request logging middleware
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    """Log all HTTP requests for debugging."""
+    start_time = time.time()
+    path = request.url.path
+    method = request.method
+
+    # Skip logging for static assets and websocket
+    if path.startswith(("/assets/", "/ws")):
+        return await call_next(request)
+
+    logger.info("→ %s %s", method, path)
+
+    try:
+        response = await call_next(request)
+        duration = (time.time() - start_time) * 1000
+        logger.info("← %s %s → %d (%.1fms)", method, path, response.status_code, duration)
+        return response
+    except Exception as e:
+        duration = (time.time() - start_time) * 1000
+        logger.error("← %s %s → EXCEPTION: %s (%.1fms)", method, path, e, duration)
+        raise
+
 
 # API routes
 app.include_router(dashboard.router)
@@ -53,6 +114,30 @@ app.include_router(chart_data.router)
 @app.get("/api/health")
 async def health_check() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/api/debug")
+async def debug_info() -> dict:
+    """Diagnostic endpoint — returns env and config paths."""
+    from .config import DATA_DIR, CHARTS_DIR, CONFIG_PATH, PROJECT_ROOT
+
+    config_dir = CONFIG_PATH.parent / "config"
+    return {
+        "status": "ok",
+        "paths": {
+            "project_root": str(PROJECT_ROOT),
+            "project_root_exists": PROJECT_ROOT.is_dir(),
+            "config_path": str(CONFIG_PATH),
+            "config_exists": CONFIG_PATH.exists(),
+            "data_dir": str(DATA_DIR),
+            "data_dir_exists": DATA_DIR.is_dir(),
+            "charts_dir": str(CHARTS_DIR),
+            "charts_dir_exists": CHARTS_DIR.is_dir(),
+            "config_dir": str(config_dir),
+            "config_dir_exists": config_dir.is_dir(),
+            "active_json_exists": (config_dir / "active.json").exists() if config_dir.is_dir() else False,
+        },
+    }
 
 
 @app.websocket("/ws")

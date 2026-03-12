@@ -1,0 +1,20 @@
+{
+  "_description": "Conservative profile for ETH - lower leverage, wider stops",
+  "_version": "1.0.0",
+  "_inherits": "default",
+
+  "preset": {
+    "leverage": 5,
+    "atr_sl_mult": 2.0,
+    "atr_tp_mult": 4.0
+  },
+
+  "position": {
+    "size_percent": 5
+  },
+
+  "signal_rules": {
+    "min_score_for_signal": 6,
+    "min_volume_ratio": 0.7
+  }
+}
