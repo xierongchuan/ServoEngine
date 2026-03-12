@@ -1,5 +1,5 @@
 {
-  "STRATEGY_STYLE": "AISCALP",
+  "STRATEGY_STYLE": "MACDX",
   "EXCHANGE_SYMBOLS": {
     "bingx": [
       "BTCUSDT",
@@ -326,9 +326,9 @@
       "description": "5m swing with deterministic signals. Better quality."
     },
     "MACDX": {
-      "timeframe": "5m",
+      "timeframe": "15m",
       "chart_period": "1D",
-      "plotter_period": "6h",
+      "plotter_period": "1D",
       "loop_interval": 60,
       "position_check_interval": 15,
       "atr_sl_mult": 1.5,
