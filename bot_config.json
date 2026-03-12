@@ -3,7 +3,19 @@
     "bingx": [
       "BTCUSDT",
       "SOLUSDT",
-      "ESPUSDT"
+      "ESPUSDT",
+      "ETHUSDT",
+      "XRPUSDT",
+      "ADAUSDT",
+      "DOGEUSDT",
+      "DOTUSDT",
+      "AVAXUSDT",
+      "LTCUSDT",
+      "LINKUSDT",
+      "UNIUSDT",
+      "BCHUSDT",
+      "ALGOUSDT",
+      "XLMUSDT"
     ]
   },
   "DISABLED_SYMBOLS": [],

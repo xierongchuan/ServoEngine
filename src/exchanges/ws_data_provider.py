@@ -209,14 +209,25 @@ class WebSocketDataProvider:
         self._last_msg_time = time.time()
 
         # Subscribe to each symbol's kline stream
+        # BingX WebSocket uses format: btcusdt@kline_1m (no dash, lowercase)
         for symbol in self._symbols:
-            formatted = self._normalize_symbol(symbol)
+            # Normalize to format without dash: BTCUSDT -> btcusdt
+            if "-" in symbol:
+                # BTC-USDT -> btcusdt
+                ws_symbol = symbol.replace("-", "").lower()
+            elif symbol.endswith("USDT"):
+                # BTCUSDT -> btcusdt
+                ws_symbol = symbol.lower()
+            else:
+                ws_symbol = symbol.lower()
+
             sub_msg = {
-                "id": f"kline_{formatted}",
+                "id": f"kline_{ws_symbol}",
                 "reqType": "sub",
-                "dataType": f"{formatted}@kline_{self._interval}"
+                "dataType": f"{ws_symbol}@kline_{self._interval}"
             }
             ws.send(json.dumps(sub_msg))
+            info(f"[WS] Subscribing: {ws_symbol}@kline_{self._interval}")
             time.sleep(0.05)  # Small delay between subscriptions
 
         info(f"[WS] Subscribed to {len(self._symbols)} kline streams")
@@ -251,6 +262,13 @@ class WebSocketDataProvider:
 
             data = json.loads(message)
 
+            # DEBUG: Log first 10 messages of any type
+            if not hasattr(self, '_debug_msg_count'):
+                self._debug_msg_count = 0
+            if self._debug_msg_count < 10:
+                info(f"[WS-DEBUG] Raw message: {str(data)[:200]}")
+                self._debug_msg_count += 1
+
             # Handle BingX ping/pong (keeps connection alive)
             if "ping" in data:
                 pong_msg = json.dumps({"pong": data["ping"], "time": int(time.time() * 1000)})
@@ -266,6 +284,10 @@ class WebSocketDataProvider:
             data_type = data.get("dataType", "")
             if "@kline_" in data_type:
                 self._handle_kline_update(data)
+            else:
+                # DEBUG: Log non-kline messages
+                if self._debug_msg_count < 20:
+                    info(f"[WS-DEBUG] Non-kline message type: {data_type}")
 
         except json.JSONDecodeError:
             pass  # Ignore non-JSON messages
@@ -275,16 +297,34 @@ class WebSocketDataProvider:
     def _handle_kline_update(self, data: dict):
         """Process kline update from WebSocket."""
         try:
-            # Extract symbol from dataType: "BTC-USDT@kline_5m"
+            # Extract symbol from dataType: "btcusdt@kline_1m" (lowercase, no dash)
             data_type = data.get("dataType", "")
-            symbol = self._normalize_symbol(data_type.split("@")[0])
+            # BingX returns: btcusdt@kline_1m -> BTC-USDT
+            raw_symbol = data_type.split("@")[0].lower()
+            # Convert btcusdt -> BTC-USDT
+            if raw_symbol.endswith("usdt"):
+                symbol = raw_symbol[:-4].upper() + "-USDT"
+            else:
+                symbol = raw_symbol.upper()
 
-            kline_data = data.get("data", {})
+            kline_data = data.get("data")
 
-            # BingX format: data.K contains the kline
-            k = kline_data.get("K", kline_data)
+            # BingX Swap WebSocket returns a list in data
+            if isinstance(kline_data, list):
+                if len(kline_data) == 0:
+                    warning(f"[WS-KLINE] {symbol}: No kline data (empty list)")
+                    return
+                # Get the most recent candle update from the list
+                k = kline_data[-1] 
+            elif isinstance(kline_data, dict):
+                # Standard/Spot fallback
+                k = kline_data.get("K", kline_data)
+            else:
+                warning(f"[WS-KLINE] {symbol}: Unknown kline_data format {type(kline_data)}")
+                return
 
             if not k:
+                warning(f"[WS-KLINE] {symbol}: No kline data structure found")
                 return
 
             # Format the candle
@@ -298,6 +338,9 @@ class WebSocketDataProvider:
                 "closePrice": float(k.get("c", 0)),
                 "volume": float(k.get("v", 0))
             }
+
+            # DEBUG: Log every kline update
+            info(f"[WS-KLINE] {symbol}: close={new_candle['closePrice']:.4f}, vol={new_candle['volume']:.2f}")
 
             # Update cache
             self._update_cache(symbol, new_candle)
@@ -313,9 +356,11 @@ class WebSocketDataProvider:
         cached = list(self._kline_cache.get(symbol, []))
 
         # Check if this updates the last candle or adds new one
+        is_new_candle = True
         if cached and cached[-1]["timestamp"] == new_candle["timestamp"]:
             # Update existing candle (same time = same candle updating)
             cached[-1] = new_candle
+            is_new_candle = False
         else:
             # New candle
             cached.append(new_candle)
@@ -326,6 +371,15 @@ class WebSocketDataProvider:
 
         # Write back to manager dict
         self._kline_cache[symbol] = cached
+
+        # DEBUG: Log cache update (every 10th update per symbol to avoid spam)
+        if not hasattr(self, '_cache_update_counts'):
+            self._cache_update_counts = {}
+        self._cache_update_counts[symbol] = self._cache_update_counts.get(symbol, 0) + 1
+
+        if self._cache_update_counts[symbol] % 10 == 0:
+            cache_type = "NEW" if is_new_candle else "UPDATE"
+            info(f"[WS-CACHE] {symbol}: {cache_type} candle, cache_size={len(cached)}, updates={self._cache_update_counts[symbol]}")
 
     def _on_error(self, ws, error):
         """Handle WebSocket error."""

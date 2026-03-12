@@ -1260,11 +1260,17 @@ class ScalpEngine:
         if is_cache_ready(self.symbol):
             candles = get_klines_from_shared_cache(self.symbol, limit)
             if candles:
+                # DEBUG: Log cache read every 60 cycles (~90 seconds)
+                if self._fast_cycle % 60 == 0:
+                    last_price = candles[-1].get('closePrice', 0) if candles else 0
+                    info(f"[SCALP-CACHE] {self.symbol}: Got {len(candles)} candles from cache, last_price={last_price}")
                 return candles
 
         # REST fallback (slower, should be rare)
         try:
             candles = self._client.get_kline_data(self.symbol, interval="1m", limit=limit)
+            if candles and self._fast_cycle % 60 == 0:
+                info(f"[SCALP-CACHE] {self.symbol}: REST fallback, got {len(candles)} candles")
             return candles if candles else []
         except Exception as e:
             warning(f"[SCALP] {self.symbol}: Candle fetch failed: {e}")
