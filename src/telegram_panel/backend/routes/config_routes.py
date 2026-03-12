@@ -479,6 +479,117 @@ async def update_trading_config(request: Request, _user: dict = Depends(get_curr
     return {"status": "ok", "config": current}
 
 
+@router.get("/base")
+async def get_base_config(_user: dict = Depends(get_current_user)) -> dict:
+    """Get base.json configuration (infrastructure, AI, etc.)."""
+    if not _use_new_config_system():
+        return {}
+    return _load_json(CONFIG_DIR / "base.json")
+
+
+@router.put("/base")
+async def update_base_config(request: Request, _user: dict = Depends(get_current_user)) -> dict:
+    """Update base.json configuration."""
+    try:
+        body = await request.body()
+        new_data = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    if not _use_new_config_system():
+        raise HTTPException(status_code=400, detail="New config system not available")
+
+    base_path = CONFIG_DIR / "base.json"
+    current = _load_json(base_path)
+
+    # Deep merge
+    def deep_merge(base: dict, override: dict) -> dict:
+        result = base.copy()
+        for key, value in override.items():
+            if key.startswith("_"):
+                continue
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result
+
+    current = deep_merge(current, new_data)
+
+    try:
+        _save_json(base_path, current)
+        logger.info("Base config updated")
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
+
+    return {"status": "ok", "config": current}
+
+
+@router.post("/active/symbol")
+async def add_active_symbol(request: Request, _user: dict = Depends(get_current_user)) -> dict:
+    """Add a symbol to the active configuration."""
+    try:
+        body = await request.body()
+        data = json.loads(body)
+        symbol = data.get("symbol")
+        exchange = data.get("exchange", "bingx")
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    if not symbol:
+        raise HTTPException(status_code=400, detail="Symbol is required")
+
+    if not _use_new_config_system():
+        raise HTTPException(status_code=400, detail="New config system not available")
+
+    active_path = CONFIG_DIR / "active.json"
+    active = _load_json(active_path)
+
+    symbols = active.get("symbols", {})
+    exchange_symbols = symbols.get(exchange, [])
+    
+    symbol_upper = symbol.upper()
+    if symbol_upper not in exchange_symbols:
+        exchange_symbols.append(symbol_upper)
+        symbols[exchange] = exchange_symbols
+        active["symbols"] = symbols
+        
+        try:
+            _save_json(active_path, active)
+            logger.info("Symbol %s added to %s", symbol_upper, exchange)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
+
+    return {"status": "ok", "symbols": symbols}
+
+
+@router.delete("/active/symbol/{symbol}")
+async def remove_active_symbol(symbol: str, exchange: str = "bingx", _user: dict = Depends(get_current_user)) -> dict:
+    """Remove a symbol from the active configuration."""
+    if not _use_new_config_system():
+        raise HTTPException(status_code=400, detail="New config system not available")
+
+    active_path = CONFIG_DIR / "active.json"
+    active = _load_json(active_path)
+
+    symbols = active.get("symbols", {})
+    exchange_symbols = symbols.get(exchange, [])
+    
+    symbol_upper = symbol.upper()
+    if symbol_upper in exchange_symbols:
+        exchange_symbols.remove(symbol_upper)
+        symbols[exchange] = exchange_symbols
+        active["symbols"] = symbols
+        
+        try:
+            _save_json(active_path, active)
+            logger.info("Symbol %s removed from %s", symbol_upper, exchange)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
+
+    return {"status": "ok", "symbols": symbols}
+
+
 # ============================================================================
 # Strategies Endpoints
 # ============================================================================

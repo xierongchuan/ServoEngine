@@ -9,18 +9,25 @@ import {
   getProfiles,
   getSymbolProfiles,
   setSymbolProfile,
+  getBaseConfig,
+  updateBaseConfig,
+  addSymbol,
+  removeSymbol,
   type ConfigSystemInfo,
   type ActiveConfig,
   type TradingConfig,
+  type BaseConfig,
   type StrategiesResponse,
   type ProfilesResponse,
   type SymbolProfilesResponse,
 } from '../api/client';
 import { Spinner } from '../components/Spinner';
 
-type Tab = 'strategy' | 'trading' | 'profiles' | 'symbols';
+type Tab = 'strategy' | 'trading' | 'infrastructure' | 'profiles' | 'symbols';
 
 type Message = { type: 'success' | 'error' | 'warning'; text: string } | null;
+
+const sortedUnique = (arr: string[]) => [...new Set(arr)].sort();
 
 export function Settings() {
   const [tab, setTab] = useState<Tab>('strategy');
@@ -37,6 +44,9 @@ export function Settings() {
   // Trading config
   const [tradingConfig, setTradingConfig] = useState<TradingConfig | null>(null);
 
+  // Base (Infrastructure) config
+  const [baseConfig, setBaseConfig] = useState<BaseConfig | null>(null);
+
   // Strategies
   const [strategies, setStrategies] = useState<StrategiesResponse | null>(null);
 
@@ -49,13 +59,14 @@ export function Settings() {
   const fetchAll = useCallback(async () => {
     try {
       setError(null);
-      const [sysInfo, active, trading, strats, profs, symProfs] = await Promise.all([
+      const [sysInfo, active, trading, strats, profs, symProfs, base] = await Promise.all([
         getConfigSystemInfo(),
         getActiveConfig(),
         getTradingConfig(),
         getStrategies(),
         getProfiles(),
         getSymbolProfiles(),
+        getBaseConfig(),
       ]);
       // Debug logging for strategy loading issues
       console.log('[Settings] Config system info:', sysInfo);
@@ -68,6 +79,7 @@ export function Settings() {
       setStrategies(strats);
       setProfiles(profs);
       setSymbolProfiles(symProfs);
+      setBaseConfig(base);
     } catch (err) {
       console.error('Settings fetch error:', err);
       setError(err instanceof Error ? err.message : 'Failed to load settings');
@@ -142,8 +154,8 @@ export function Settings() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-tg-section-bg p-1 rounded-xl">
-        {(['strategy', 'trading', 'profiles', 'symbols'] as Tab[]).map((t) => (
+      <div className="flex gap-1 bg-tg-section-bg p-1 rounded-xl overflow-x-auto no-scrollbar">
+        {(['strategy', 'trading', 'infrastructure', 'profiles', 'symbols'] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -151,7 +163,7 @@ export function Settings() {
               tab === t ? 'bg-tg-button text-white' : 'text-tg-hint hover:text-tg-text'
             }`}
           >
-            {t === 'strategy' ? 'Strategy' : t === 'trading' ? 'Trading' : t === 'profiles' ? 'Profiles' : 'Symbols'}
+            {t === 'strategy' ? 'Strategy' : t === 'trading' ? 'Trading' : t === 'infrastructure' ? 'Infra' : t === 'profiles' ? 'Profiles' : 'Symbols'}
           </button>
         ))}
       </div>
@@ -192,6 +204,23 @@ export function Settings() {
         />
       )}
 
+      {tab === 'infrastructure' && baseConfig && (
+        <InfrastructureTab
+          config={baseConfig}
+          onUpdate={async (data) => {
+            try {
+              const result = await updateBaseConfig(data);
+              setBaseConfig(result.config);
+              showMessage({ type: 'success', text: 'Infrastructure settings saved' });
+              hapticFeedback('success');
+            } catch (err) {
+              showMessage({ type: 'error', text: 'Failed to save infrastructure' });
+              hapticFeedback('error');
+            }
+          }}
+        />
+      )}
+
       {tab === 'profiles' && profiles && (
         <ProfilesTab profiles={profiles} />
       )}
@@ -200,7 +229,7 @@ export function Settings() {
         <SymbolsTab
           symbolProfiles={symbolProfiles}
           availableProfiles={profiles.available}
-          onUpdate={async (symbol, profile) => {
+          onProfileUpdate={async (symbol, profile) => {
             try {
               await setSymbolProfile(symbol, profile);
               setSymbolProfiles({
@@ -211,6 +240,35 @@ export function Settings() {
               hapticFeedback('success');
             } catch (err) {
               showMessage({ type: 'error', text: 'Failed to update profile' });
+              hapticFeedback('error');
+            }
+          }}
+          onAddSymbol={async (symbol) => {
+            try {
+              await addSymbol(symbol);
+              setSymbolProfiles({
+                ...symbolProfiles,
+                symbols: sortedUnique([...symbolProfiles.symbols, (symbol as string).toUpperCase()]),
+              });
+              showMessage({ type: 'success', text: `Symbol ${symbol} added` });
+              hapticFeedback('success');
+            } catch (err) {
+              showMessage({ type: 'error', text: 'Failed to add symbol' });
+              hapticFeedback('error');
+            }
+          }}
+          onRemoveSymbol={async (symbol) => {
+            if (!confirm(`Remove ${symbol}?`)) return;
+            try {
+              await removeSymbol(symbol);
+              setSymbolProfiles({
+                ...symbolProfiles,
+                symbols: symbolProfiles.symbols.filter(s => s !== symbol),
+              });
+              showMessage({ type: 'success', text: `Symbol ${symbol} removed` });
+              hapticFeedback('success');
+            } catch (err) {
+              showMessage({ type: 'error', text: 'Failed to remove symbol' });
               hapticFeedback('error');
             }
           }}
@@ -478,6 +536,154 @@ function TradingTab({
 }
 
 // ============================================================================
+// Infrastructure Tab
+// ============================================================================
+
+function InfrastructureTab({
+  config,
+  onUpdate,
+}: {
+  config: BaseConfig;
+  onUpdate: (data: Partial<BaseConfig>) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [localConfig, setLocalConfig] = useState(config);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onUpdate(localConfig);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateAI = (key: string, value: any) => {
+    setLocalConfig({
+      ...localConfig,
+      ai: { ...localConfig.ai, [key]: value },
+    });
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex justify-end">
+        <button
+          onClick={() => {
+            if (editing) setLocalConfig(config);
+            setEditing(!editing);
+          }}
+          className={`text-xs px-3 py-1.5 rounded-lg ${
+            editing ? 'bg-amber-500/20 text-amber-400' : 'bg-tg-section-bg text-tg-hint'
+          }`}
+        >
+          {editing ? 'Cancel' : 'Edit'}
+        </button>
+      </div>
+
+      <Section title="AI Infrastructure" badge="restart">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-tg-text">Provider</span>
+            {editing ? (
+              <select
+                value={localConfig.ai?.provider || 'openai'}
+                onChange={(e) => updateAI('provider', e.target.value)}
+                className="bg-tg-bg text-tg-text text-sm rounded px-2 py-1 border border-white/10"
+              >
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="google">Google</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="openrouter">OpenRouter</option>
+              </select>
+            ) : (
+              <span className="text-sm text-tg-hint capitalize">{localConfig.ai?.provider || 'openai'}</span>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm text-tg-text">Model</span>
+            {editing ? (
+              <input
+                type="text"
+                value={localConfig.ai?.model || ''}
+                onChange={(e) => updateAI('model', e.target.value)}
+                className="bg-tg-bg text-tg-text text-sm rounded px-3 py-1.5 border border-white/10 w-full"
+                placeholder="e.g. gpt-4o"
+              />
+            ) : (
+              <span className="text-xs text-tg-hint font-mono bg-tg-bg p-1.5 rounded">{localConfig.ai?.model || 'N/A'}</span>
+            )}
+          </div>
+
+          <SettingRow
+            label="Temperature"
+            value={localConfig.ai?.temperature}
+            editing={editing}
+            step={0.1}
+            onChange={(v) => updateAI('temperature', v)}
+          />
+
+          <SettingRow
+            label="Max Tokens"
+            value={localConfig.ai?.max_tokens}
+            editing={editing}
+            step={100}
+            onChange={(v) => updateAI('max_tokens', v)}
+          />
+        </div>
+      </Section>
+
+      <Section title="AI Reasoning" badge="restart">
+        <ToggleRow
+          label="Enable Reasoning"
+          value={localConfig.ai?.reasoning?.enabled ?? false}
+          editing={editing}
+          onChange={(v) => {
+            const reasoning = { ...(localConfig.ai?.reasoning || { effort: 'medium', exclude: false }), enabled: v };
+            updateAI('reasoning', reasoning);
+          }}
+        />
+        {localConfig.ai?.reasoning?.enabled && (
+          <div className="flex items-center justify-between mt-1">
+            <span className="text-sm text-tg-text pl-4">Effort level</span>
+            {editing ? (
+              <select
+                value={localConfig.ai?.reasoning?.effort || 'medium'}
+                onChange={(e) => {
+                  const reasoning = { ...(localConfig.ai?.reasoning || { enabled: true, exclude: false }), effort: e.target.value };
+                  updateAI('reasoning', reasoning);
+                }}
+                className="bg-tg-bg text-tg-text text-sm rounded px-2 py-1 border border-white/10"
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            ) : (
+              <span className="text-sm text-tg-hint uppercase">{localConfig.ai?.reasoning?.effort || 'medium'}</span>
+            )}
+          </div>
+        )}
+      </Section>
+
+      {editing && (
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="w-full py-3 bg-tg-button text-white font-medium rounded-xl disabled:opacity-50 transition-opacity"
+        >
+          {saving ? 'Saving...' : 'Save Infrastructure Settings'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
 // Profiles Tab
 // ============================================================================
 
@@ -581,63 +787,111 @@ function ProfilesTab({
 function SymbolsTab({
   symbolProfiles,
   availableProfiles,
-  onUpdate,
+  onProfileUpdate,
+  onAddSymbol,
+  onRemoveSymbol,
 }: {
   symbolProfiles: SymbolProfilesResponse;
   availableProfiles: string[];
-  onUpdate: (symbol: string, profile: string) => Promise<void>;
+  onProfileUpdate: (symbol: string, profile: string) => Promise<void>;
+  onAddSymbol: (symbol: string) => Promise<void>;
+  onRemoveSymbol: (symbol: string) => Promise<void>;
 }) {
   const [savingSymbol, setSavingSymbol] = useState<string | null>(null);
+  const [newSymbol, setNewSymbol] = useState('');
+  const [adding, setAdding] = useState(false);
 
   const handleProfileChange = async (symbol: string, profile: string) => {
     setSavingSymbol(symbol);
     try {
-      await onUpdate(symbol, profile);
+      await onProfileUpdate(symbol, profile);
     } finally {
       setSavingSymbol(null);
     }
   };
 
+  const handleAddSymbol = async () => {
+    if (!newSymbol.trim()) return;
+    setAdding(true);
+    try {
+      await onAddSymbol(newSymbol.trim());
+      setNewSymbol('');
+    } finally {
+      setAdding(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
-      <Section title="Symbol Profiles" badge="hot-reload">
+      {/* Add Symbol */}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={newSymbol}
+          onChange={(e) => setNewSymbol(e.target.value)}
+          placeholder="BTC-USDT"
+          className="flex-1 bg-tg-section-bg text-tg-text text-sm rounded-xl px-4 py-3 border border-white/10 outline-none focus:border-tg-button transition-colors"
+        />
+        <button
+          onClick={handleAddSymbol}
+          disabled={adding || !newSymbol.trim()}
+          className="px-6 py-3 bg-tg-button text-white text-sm font-medium rounded-xl disabled:opacity-50"
+        >
+          Add
+        </button>
+      </div>
+
+      <Section title="Active Symbols" badge="hot-reload">
         <div className="flex flex-col gap-3">
-          {symbolProfiles.symbols.map((symbol) => {
-            const currentProfile = symbolProfiles.symbol_profiles[symbol] || 'default';
-            const isDisabled = symbolProfiles.disabled_symbols.includes(symbol);
-            const isSaving = savingSymbol === symbol;
+          {symbolProfiles.symbols.length === 0 ? (
+            <div className="text-center py-4 text-tg-hint text-sm">No active symbols</div>
+          ) : (
+            symbolProfiles.symbols.map((symbol) => {
+              const currentProfile = symbolProfiles.symbol_profiles[symbol] || 'default';
+              const isDisabled = symbolProfiles.disabled_symbols.includes(symbol);
+              const isSaving = savingSymbol === symbol;
 
-            return (
-              <div
-                key={symbol}
-                className={`flex items-center justify-between p-3 rounded-xl border ${
-                  isDisabled ? 'border-red-500/30 bg-red-500/5' : 'border-white/10 bg-tg-bg'
-                }`}
-              >
-                <div className="flex flex-col">
-                  <span className={`text-sm font-medium ${isDisabled ? 'text-red-400' : 'text-tg-text'}`}>
-                    {symbol}
-                  </span>
-                  {isDisabled && (
-                    <span className="text-[10px] text-red-400">disabled</span>
-                  )}
-                </div>
-
-                <select
-                  value={currentProfile}
-                  onChange={(e) => handleProfileChange(symbol, e.target.value)}
-                  disabled={isSaving}
-                  className="bg-tg-section-bg text-tg-text text-sm rounded-lg px-2 py-1.5 border border-white/10 disabled:opacity-50"
+              return (
+                <div
+                  key={symbol}
+                  className={`flex items-center justify-between p-3 rounded-xl border ${
+                    isDisabled ? 'border-red-500/30 bg-red-500/5' : 'border-white/10 bg-tg-bg'
+                  }`}
                 >
-                  {availableProfiles.map((profile) => (
-                    <option key={profile} value={profile}>
-                      {profile}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            );
-          })}
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => onRemoveSymbol(symbol)}
+                      className="text-red-400 p-1 hover:bg-red-500/10 rounded-lg transition-colors"
+                      title="Remove from config"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6"/></svg>
+                    </button>
+                    <div className="flex flex-col">
+                      <span className={`text-sm font-medium ${isDisabled ? 'text-red-400' : 'text-tg-text'}`}>
+                        {symbol}
+                      </span>
+                      {isDisabled && (
+                        <span className="text-[10px] text-red-400">disabled</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <select
+                    value={currentProfile}
+                    onChange={(e) => handleProfileChange(symbol, e.target.value)}
+                    disabled={isSaving}
+                    className="bg-tg-section-bg text-tg-text text-xs rounded-lg px-2 py-1.5 border border-white/10 disabled:opacity-50"
+                  >
+                    {availableProfiles.map((profile) => (
+                      <option key={profile} value={profile}>
+                        {profile}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })
+          )}
         </div>
       </Section>
 

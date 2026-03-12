@@ -138,6 +138,19 @@ export interface TradingConfig {
   [key: string]: unknown;
 }
 
+export interface BaseConfig {
+  ai?: {
+    provider?: string;
+    model?: string;
+    temperature?: number;
+    max_tokens?: number;
+    reasoning?: { enabled: boolean; effort: string; exclude: boolean };
+    [key: string]: unknown;
+  };
+  exchange?: { fees?: Record<string, { maker: number; taker: number }> };
+  [key: string]: unknown;
+}
+
 export interface StrategyInfo {
   name: string;
   description: string;
@@ -200,6 +213,30 @@ export function updateTradingConfig(data: Partial<TradingConfig>) {
   return fetchAPI<{ status: string; config: TradingConfig }>('/api/config/trading', {
     method: 'PUT',
     body: JSON.stringify(data),
+  });
+}
+
+export function getBaseConfig() {
+  return fetchAPI<BaseConfig>('/api/config/base');
+}
+
+export function updateBaseConfig(data: Partial<BaseConfig>) {
+  return fetchAPI<{ status: string; config: BaseConfig }>('/api/config/base', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export function addSymbol(symbol: string, exchange: string = 'bingx') {
+  return fetchAPI<{ status: string; symbols: Record<string, string[]> }>('/api/config/active/symbol', {
+    method: 'POST',
+    body: JSON.stringify({ symbol, exchange }),
+  });
+}
+
+export function removeSymbol(symbol: string, exchange: string = 'bingx') {
+  return fetchAPI<{ status: string; symbols: Record<string, string[]> }>(`/api/config/active/symbol/${encodeURIComponent(symbol)}?exchange=${encodeURIComponent(exchange)}`, {
+    method: 'DELETE',
   });
 }
 
