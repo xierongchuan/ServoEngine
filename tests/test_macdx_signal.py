@@ -217,6 +217,11 @@ class TestBuySignal:
 
     def test_hold_insufficient_confirmations(self, generator):
         # Only MACD cross + EMA = 2 confirmations (not enough)
+        # RSI must be outside long zone (>65 or <25) to NOT get RSI confirmation
+        # BB width < 0.5% AND adx < 20 = sideways (no "not sideways" confirmation)
+        # Volume < 0.8 = no volume confirmation
+        # No divergence data = no exhaustion confirmation (actually GIVES +1, so we need divergence)
+        # To get only 2 confirmations: MACD + EMA, need RSI outside zone + sideways + divergence
         analysis = _base_analysis(
             macd_line=10,
             macd_signal=5,
@@ -224,15 +229,22 @@ class TestBuySignal:
             macd_hist_prev=-1,
             ema9=50200,
             ema21=50000,
-            rsi=50,  # Not in long zone (46-55 neutral)
-            volume_ratio=0.6,  # Not volume confirmed
-            bb_upper=50200,
-            bb_lower=49800,  # Sideways
-            adx=15,
+            rsi=70,  # Outside long zone (25-65) - no RSI confirmation
+            volume_ratio=0.6,  # < 0.8, no volume confirmation
+            bb_upper=50100,
+            bb_lower=49900,  # BB width = 0.4% < 0.5% threshold
+            bb_middle=50000,
+            adx=15,  # < 20 - combined with tight BB = sideways
+            # Bearish divergence: price makes higher high, RSI makes lower high
+            close_prices=[100, 102, 101, 103, 102, 105, 103, 107, 105, 109, 107],
+            rsi_values=[60, 65, 62, 63, 60, 61, 58, 59, 56, 55, 52],
         )
         result = generator.generate_signal(analysis)
-        # With only 2 confirmations (MACD=1, EMA=1), should hold
-        assert result["signal"] == "HOLD" or result["confirmations"] < 3
+        # With only 2 confirmations (MACD + EMA), should hold
+        # Score: MACD(2) + EMA(2) - divergence_penalty(1) = 3 < min_score(4)
+        # Confirmations: MACD(1) + EMA(1) = 2 < min_confirmations(3)
+        assert result["signal"] == "HOLD"
+        assert result["confirmations"] < 3
 
 
 class TestSellSignal:
