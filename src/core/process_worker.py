@@ -414,6 +414,128 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                         if size_pct is not None:
                             prediction["size_pct"] = size_pct
 
+                elif STRATEGY_STYLE == "MACDX":
+                    # MACDX: No-AI deterministic MACD crossover strategy
+                    # All decisions are made by the signal generator - NO AI calls
+                    from src.core.macdx_signal import generate_macdx_signal, should_close_macdx
+                    from src.core.regime import get_regime_detector
+
+                    current_price = analysis_result.get("current_price", 0)
+                    regime_data = get_regime_detector().detect(analysis_result)
+                    analysis_result["regime"] = regime_data
+
+                    # Generate MACDX signal
+                    signal_data = generate_macdx_signal(analysis_result, regime_data)
+                    analysis_result["signal_data"] = signal_data
+                    signal = signal_data.get("signal", "HOLD")
+                    signal_quality = signal_data.get("quality", 0.0)
+                    signal_confidence = signal_data.get("confidence", 0.0)
+                    confirmations = signal_data.get("confirmations", 0)
+
+                    regime_label = regime_data.get("regime", "UNKNOWN") if regime_data else "UNKNOWN"
+
+                    # Check for close signal first
+                    close_signal = should_close_macdx(analysis_result, real_position)
+                    analysis_result["close_signal"] = close_signal
+
+                    if real_position and close_signal.get("should_close"):
+                        close_reason = close_signal.get("reason", "Deterministic exit")
+                        close_urgency = close_signal.get("urgency", "medium")
+                        info(f"🚨 [{symbol}] MACDX CLOSE: {close_reason} (urgency: {close_urgency})")
+                        prediction = {
+                            "symbol": symbol,
+                            "action": "close",
+                            "confidence": 0.9 if close_urgency == "high" else 0.75,
+                            "reason": f"[MACDX] {close_reason}",
+                            "current_price": current_price
+                        }
+                    elif signal == "HOLD":
+                        # No signal - HOLD
+                        details = signal_data.get("details", {})
+                        info(f"🔧 [{symbol}] MACDX: No signal (score: {signal_data.get('score', 0)}, conf: {confirmations}) [{regime_label}]")
+                        prediction = {
+                            "symbol": symbol,
+                            "action": "hold",
+                            "confidence": 0.0,
+                            "reason": f"[MACDX] No signal (score: {signal_data.get('score', 0)}, confirmations: {confirmations}) [{regime_label}]",
+                            "current_price": current_price
+                        }
+                    else:
+                        # Signal exists - execute directly (NO AI)
+                        details = signal_data.get("details", {})
+                        support = analysis_result.get("support", 0)
+                        resistance = analysis_result.get("resistance", 0)
+
+                        # Calculate SL/TP
+                        sl = None
+                        tp = None
+                        try:
+                            from src.core.risk_manager import calculate_dynamic_sl_tp, validate_risk_parameters
+                            sl_tp = calculate_dynamic_sl_tp(
+                                signal=signal,
+                                current_price=current_price,
+                                atr=analysis_result.get("atr", 0),
+                                support=support,
+                                resistance=resistance,
+                                regime=regime_data if regime_data else {},
+                                quality=signal_quality
+                            )
+                            sl = sl_tp["stop_loss"]
+                            tp = sl_tp["take_profit"]
+                            info(f"🎯 [{symbol}] MACDX SL/TP: SL={sl:.2f} TP={tp:.2f} R/R={sl_tp['risk_reward']:.2f}")
+
+                            # Validate risk
+                            if not validate_risk_parameters(sl_tp):
+                                warning(f"⚠️ [{symbol}] MACDX: Risk validation failed (R/R={sl_tp.get('risk_reward', 0):.2f}), skipping trade")
+                                prediction = {
+                                    "symbol": symbol,
+                                    "action": "hold",
+                                    "confidence": 0.0,
+                                    "reason": f"[MACDX] Risk validation failed (R/R={sl_tp.get('risk_reward', 0):.2f})",
+                                    "current_price": current_price
+                                }
+                                # Skip rest of signal processing
+                                signal = "HOLD"
+                        except Exception as e:
+                            warning(f"⚠️ [{symbol}] MACDX: SL/TP calculation failed: {e}, using ATR fallback")
+                            atr = analysis_result.get("atr", 0)
+                            if signal == "BUY":
+                                sl = current_price - atr * 1.5
+                                tp = current_price + atr * 3.0
+                            else:
+                                sl = current_price + atr * 1.5
+                                tp = current_price - atr * 3.0
+
+                        if signal != "HOLD":
+                            # Calculate position size
+                            size_pct = None
+                            try:
+                                from src.core.risk_manager import calculate_position_size
+                                from src.core.performance import get_performance_tracker
+                                from src.config import POSITION_SIZE_PERCENT
+                                perf = get_performance_tracker().get_recent_performance(symbol)
+                                size_pct = calculate_position_size(
+                                    base_pct=POSITION_SIZE_PERCENT,
+                                    quality=signal_quality,
+                                    regime=regime_data if regime_data else {},
+                                    recent_performance=perf
+                                )
+                                info(f"📐 [{symbol}] MACDX sizing: {size_pct:.1f}% (Q={signal_quality:.2f})")
+                            except Exception as e:
+                                warning(f"⚠️ [{symbol}] MACDX: Dynamic sizing failed: {e}")
+
+                            info(f"🔧 [{symbol}] MACDX: {signal} Q:{signal_quality:.2f} conf:{confirmations} [{regime_label}] - DIRECT EXECUTION (NO AI)")
+                            prediction = {
+                                "symbol": symbol,
+                                "action": signal.lower(),
+                                "confidence": signal_confidence,
+                                "reason": f"[MACDX] {signal} (score: {signal_data.get('score', 0)}/{signal_data.get('max_score', 9)}, conf: {confirmations}) [{regime_label}]",
+                                "current_price": current_price,
+                                "stop_loss": sl,
+                                "take_profit": tp,
+                                "size_pct": size_pct,
+                            }
+
                 else:
                     # Fallback for SWING/GRID/etc - standard AI prediction
                     with StageTimer("AI Прогноз", symbol, "🧠"):
@@ -464,8 +586,8 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                 with StageTimer("Исполнение сигналов", symbol, "💰"):
                     executor.execute_prediction(prediction, all_positions=all_positions)
 
-                # 6b. Запись контекста входа для performance tracking (HYBRID)
-                if action in ("buy", "sell") and not real_position and STRATEGY_STYLE in ("HYBRID", "AISCALP"):
+                # 6b. Запись контекста входа для performance tracking (HYBRID/AISCALP/MACDX)
+                if action in ("buy", "sell") and not real_position and STRATEGY_STYLE in ("HYBRID", "AISCALP", "MACDX"):
                     try:
                         entry_ctx = {
                             "entry_regime": regime_data.get("regime", "UNKNOWN") if regime_data else "UNKNOWN",

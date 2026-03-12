@@ -7,6 +7,7 @@ from src.prompts.strategies.swing_veto import SwingVetoStrategy
 from src.prompts.strategies.grid import GridStrategy
 from src.prompts.strategies.hybrid import HybridStrategy
 from src.prompts.strategies.hybrid_veto import HybridVetoStrategy
+from src.prompts.strategies.macdx import MACDXStrategy
 
 STRATEGIES = {
     "SCALP": ScalpStrategy,
@@ -18,4 +19,5 @@ STRATEGIES = {
     "GRID": GridStrategy,
     "HYBRID": HybridStrategy,
     "HYBRID_VETO": HybridVetoStrategy,
+    "MACDX": MACDXStrategy,
 }
