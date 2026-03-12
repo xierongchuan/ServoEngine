@@ -76,6 +76,7 @@
 | **SWING** | 1h | 4h | 5x | Многодневное удержание (2-14 дней). Min hold 24h, cooldown 6h. Milestone exits. Широкие стопы (3x ATR) |
 | **GRID** | 1m | 5s | 5x | Сетка лимитных ордеров. Inventory management. ADX-based pause при сильном тренде |
 | **HYBRID** | 5m | 60s | 10x | Детерминированные сигналы (scoring 0-10) + AI подтверждение. Авто-выполнение при quality >= 0.7, AI veto для borderline |
+| **MACDX** | 15m | 60s | 10x | **Без AI** — чистый MACD crossover с 3-5 подтверждениями. Полностью детерминированное выполнение |
 
 ### Система скоринга сигналов (HYBRID/AISCALP)
 
@@ -91,6 +92,29 @@
 - Momentum (+1), Bollinger Bands (+1), Volume (+1)
 
 **Бонусы/штрафы**: EMA+MACD confluence (+1), Reversal confluence (+2), RSI divergence (-2)
+
+### Система скоринга MACDX (без AI)
+
+Стратегия **MACDX** работает полностью без AI. Все решения принимаются детерминированно на основе MACD crossover с подтверждениями.
+
+**Обязательный сигнал** (без него — HOLD):
+- MACD Crossover (+2): Линия MACD пересекает сигнальную линию
+
+**Подтверждения** (минимум 3 из 5 для открытия):
+| Индикатор | Вес | Условие |
+|-----------|-----|---------|
+| RSI Zone | +2 | Long: RSI в [25-65], Short: RSI в [35-75] |
+| EMA Alignment | +2 | Long: EMA9 > EMA21, Short: EMA9 < EMA21 |
+| Not Sideways | +1 | BB width > 0.5% ИЛИ ADX > 20 |
+| No Exhaustion | +1 | Нет RSI-дивергенции против направления |
+| Volume | +1 | Volume ratio >= 0.5 |
+
+**Требования**: Max score = 9, Min score = 4, Min confirmations = 3
+
+**Условия выхода**:
+- MACD гистограмма разворачивается против позиции
+- RSI достигает экстремума (>80 для long, <20 для short)
+- Take profit при хорошем PnL с угасанием моментума
 
 ### Рыночные режимы
 
@@ -167,7 +191,7 @@ python3 src/core/plotter.py 1W    # за 1 неделю
 
 | Параметр | Тип | Описание | По умолчанию |
 |----------|-----|----------|:------------:|
-| `STRATEGY_STYLE` | String | Стиль торговли | `AISCALP` |
+| `STRATEGY_STYLE` | String | Стиль торговли | `MACDX` |
 | `EXCHANGE_SYMBOLS` | Dict | Торговые пары по биржам | `{"bingx": ["BTCUSDT"]}` |
 | `DISABLED_SYMBOLS` | List | Заблокированные символы | `[]` |
 | `POSITION_SIZE_PERCENT` | Float | % баланса на сделку | `10` |
@@ -220,6 +244,7 @@ python3 src/core/plotter.py 1W    # за 1 неделю
 - **AISCALP**: `htf_timeframe` (1h), session-based filtering, `pre_filter` (skip dead markets)
 - **SWING**: `min_hold_hours` (24), `cooldown_after_close_hours` (6)
 - **GRID**: `grid_levels` (5), `grid_spacing_pct` (0.3%), `inventory_limit`, `emergency_stop_loss_pct`
+- **MACDX**: `MACDX_SETTINGS.signal_rules` — веса индикаторов, пороги RSI, min_score, min_confirmations
 
 ---
 
@@ -260,6 +285,7 @@ src/
 │   ├── analyzer.py                 # Технический анализ (EMA, RSI, MACD, ATR, BB, SEB, S/R)
 │   ├── signal_generator.py         # Детерминированный скоринг (HYBRID)
 │   ├── aiscalp_signal.py           # Multi-TF скоринг (AISCALP)
+│   ├── macdx_signal.py             # MACD crossover скоринг (MACDX) — без AI
 │   ├── scalp_engine.py             # Dual-loop движок (SCALP)
 │   ├── scalp_signal.py             # Скоринг с OB/VWAP (SCALP)
 │   ├── regime.py                   # Детектор рыночного режима
@@ -282,7 +308,7 @@ src/
 ├── prompts/                        # AI промпт система
 │   ├── builder.py                  # Модульная сборка промптов
 │   ├── blocks/                     # Текстовые блоки (10 файлов)
-│   └── strategies/                 # 9 стратегий (Scalp/AiScalp/Swing/Grid/Hybrid + варианты)
+│   └── strategies/                 # 10 стратегий (Scalp/AiScalp/Swing/Grid/Hybrid/MACDX + варианты)
 ├── utils/                          # Утилиты
 │   ├── logger.py                   # Логирование (per-symbol + StageTimer)
 │   ├── helpers.py                  # Вспомогательные функции
