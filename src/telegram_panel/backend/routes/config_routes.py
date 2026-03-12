@@ -73,7 +73,14 @@ AVAILABLE_STRATEGIES = ["SCALP", "AISCALP", "SWING", "GRID", "HYBRID", "MACDX"]
 
 def _use_new_config_system() -> bool:
     """Check if new config system is available."""
-    return CONFIG_DIR.is_dir() and (CONFIG_DIR / "active.json").exists()
+    config_dir_exists = CONFIG_DIR.is_dir()
+    active_json_exists = (CONFIG_DIR / "active.json").exists()
+    result = config_dir_exists and active_json_exists
+    logger.debug(
+        "_use_new_config_system: CONFIG_DIR=%s (exists=%s), active.json exists=%s, result=%s",
+        CONFIG_DIR, config_dir_exists, active_json_exists, result
+    )
+    return result
 
 
 def _load_json(path: Path) -> dict:
@@ -353,9 +360,18 @@ async def update_trading_config(request: Request, _user: dict = Depends(get_curr
 async def list_strategies(_user: dict = Depends(get_current_user)) -> dict:
     """List all available strategies with their presets."""
     strategies = {}
+    use_new = _use_new_config_system()
+    strategies_dir_exists = STRATEGIES_DIR.exists()
 
-    if _use_new_config_system() and STRATEGIES_DIR.exists():
-        for path in STRATEGIES_DIR.glob("*.json"):
+    logger.info(
+        "list_strategies: use_new_config=%s, STRATEGIES_DIR=%s, exists=%s",
+        use_new, STRATEGIES_DIR, strategies_dir_exists
+    )
+
+    if use_new and strategies_dir_exists:
+        json_files = list(STRATEGIES_DIR.glob("*.json"))
+        logger.info("list_strategies: found %d json files: %s", len(json_files), [f.name for f in json_files])
+        for path in json_files:
             name = path.stem.upper()
             config = _load_json(path)
             strategies[name] = {
@@ -368,6 +384,7 @@ async def list_strategies(_user: dict = Depends(get_current_user)) -> dict:
         # Fallback to legacy STYLE_PRESETS
         legacy = reader.read_config()
         presets = legacy.get("STYLE_PRESETS", {})
+        logger.info("list_strategies: fallback to legacy, found %d presets: %s", len(presets), list(presets.keys()))
         for name, preset in presets.items():
             strategies[name] = {
                 "name": name,
@@ -376,6 +393,7 @@ async def list_strategies(_user: dict = Depends(get_current_user)) -> dict:
                 "has_ai": name not in ["MACDX", "GRID"],
             }
 
+    logger.info("list_strategies: returning %d strategies: %s", len(strategies), list(strategies.keys()))
     return {"strategies": strategies, "available": list(strategies.keys())}
 
 
