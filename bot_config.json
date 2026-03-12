@@ -261,7 +261,7 @@
   "MOMENTUM_STRATEGY": {
     "enabled": true,
     "min_volume_ratio": 0.5,
-    "max_candles_in_prompt": 100,
+    "max_candles_in_prompt": 200,
     "trend_consensus_required": false,
     "momentum_entry_enabled": true,
     "momentum_consecutive_candles": 3
