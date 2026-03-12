@@ -1,10 +1,19 @@
+"""
+Configuration Module
+
+This module provides configuration loading with support for both:
+- New modular config system (config/*.json files)
+- Legacy single-file config (bot_config.json)
+
+The module automatically detects which system to use and maintains
+backward compatibility with all existing code.
+"""
+
 import os
 import json
 
-# Загружаем переменные из .env файла если он существует
-# (небезопасно загружать .env в продакшене, используйте переменные окружения)
+# Load environment variables from .env file
 try:
-    # Look for .env in the project root (one level up from src)
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
     if os.path.exists(env_path):
         with open(env_path, 'r') as f:
@@ -13,50 +22,61 @@ try:
                 if line and not line.startswith('#') and '=' in line:
                     key, value = line.split('=', 1)
                     key = key.strip()
-                    # Don't override if already set in environment
                     if key not in os.environ:
                         os.environ[key] = value.strip().strip('"').strip("'")
 
-    # Инициализируем логгер только после загрузки конфигурации
     try:
         from src.utils import logger
     except:
-        pass  # Логгер может быть еще не готов
-except Exception as e:
-    pass  # Молча игнорируем ошибки загрузки .env
+        pass
+except Exception:
+    pass
 
-# Настройки системы
-MODE = os.getenv("MODE", "demo")  # "demo" для тестов, "real" для реальных денег
+# System settings
+MODE = os.getenv("MODE", "demo")
 
 # --- Hot-Reload State ---
 _CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bot_config.json')
+_NEW_CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config')
 _config_mtime: float = 0.0
 _config_callbacks: list = []
 
-# Функция для загрузки конфигурации
+
+def _use_new_config_system() -> bool:
+    """Check if new config system is available."""
+    return os.path.isdir(_NEW_CONFIG_DIR) and os.path.exists(os.path.join(_NEW_CONFIG_DIR, 'active.json'))
+
+
 def load_bot_config():
-    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bot_config.json')
+    """
+    Load configuration from the appropriate source.
+
+    If the new config system (config/ directory) is available, uses it.
+    Otherwise falls back to legacy bot_config.json.
+    """
+    if _use_new_config_system():
+        try:
+            from src.config_loader import get_legacy_compatible_config
+            config = get_legacy_compatible_config()
+            print(f"✅ Loaded configuration from config/ directory (new system)")
+            return config
+        except Exception as e:
+            print(f"⚠️ New config system failed: {e}, falling back to legacy")
+
+    # Legacy loading
+    config_path = _CONFIG_PATH
     default_config = {
-        "EXCHANGE_SYMBOLS": {
-            "bingx": ["BTC-USDT"]
-        },
+        "EXCHANGE_SYMBOLS": {"bingx": ["BTC-USDT"]},
         "POSITION_SIZE_PERCENT": 5.0,
         "MIN_TRADE_AMOUNT_USDT": 10.0,
         "TAKE_PROFIT_PERCENT": 1.5,
         "STOP_LOSS_PERCENT": 1.5,
         "MIN_CONFIDENCE_THRESHOLD": 0.7,
-
         "AI_THRESHOLDS": {
-            "RSI_OVERSOLD": 30,
-            "RSI_OVERBOUGHT": 70,
-            "MIN_POSITIVE_NEWS": 3,
-            "MIN_NEGATIVE_NEWS": 3,
-            "STRONG_SIGNAL_CONFIDENCE": 0.8,
-            "SMA_PERIOD": 20,
-            "RSI_PERIOD": 14,
-            "RSI_NEUTRAL_MIN": 45,
-            "RSI_NEUTRAL_MAX": 55,
-
+            "RSI_OVERSOLD": 30, "RSI_OVERBOUGHT": 70,
+            "MIN_POSITIVE_NEWS": 3, "MIN_NEGATIVE_NEWS": 3,
+            "STRONG_SIGNAL_CONFIDENCE": 0.8, "SMA_PERIOD": 20, "RSI_PERIOD": 14,
+            "RSI_NEUTRAL_MIN": 45, "RSI_NEUTRAL_MAX": 55,
         },
         "CHART_RANGES": {
             "1D": {"days": 1, "candles": 288},
@@ -66,24 +86,17 @@ def load_bot_config():
         },
         "DEFAULT_CHART_RANGE": "1D",
         "CLEANUP_SETTINGS": {
-            "cleanup_old_charts": True,
-            "charts_retention_days": 7,
-            "cleanup_old_data": True,
-            "data_retention_days": 30
+            "cleanup_old_charts": True, "charts_retention_days": 7,
+            "cleanup_old_data": True, "data_retention_days": 30
         },
         "NEWS_SETTINGS": {
-            "use_real_news": True,
-            "provider": "newsapi",
-            "max_news_items": 10,
-            "news_timeout_seconds": 30,
-            "extract_full_content": True
+            "use_real_news": True, "provider": "newsapi",
+            "max_news_items": 10, "news_timeout_seconds": 30, "extract_full_content": True
         },
         "AGGRESSIVE_MODE": False,
         "AGGRESSIVE_SETTINGS": {
-            "RSI_BUY_COND": 60,
-            "RSI_BUY_FORBIDDEN": 80,
-            "RSI_SELL_COND": 40,
-            "RSI_SELL_FORBIDDEN": 20
+            "RSI_BUY_COND": 60, "RSI_BUY_FORBIDDEN": 80,
+            "RSI_SELL_COND": 40, "RSI_SELL_FORBIDDEN": 20
         }
     }
 
@@ -91,7 +104,6 @@ def load_bot_config():
         try:
             with open(config_path, 'r') as f:
                 user_config = json.load(f)
-                # Обновляем дефолтный конфиг пользовательским (глубокое слияние не делаем, просто верхний уровень)
                 default_config.update(user_config)
                 print(f"✅ Загружена конфигурация из {config_path}")
         except Exception as e:
@@ -101,7 +113,13 @@ def load_bot_config():
 
 
 def get_config_mtime() -> float:
-    """Get modification time of bot_config.json."""
+    """Get modification time of config file(s)."""
+    if _use_new_config_system():
+        active_path = os.path.join(_NEW_CONFIG_DIR, 'active.json')
+        try:
+            return os.path.getmtime(active_path)
+        except OSError:
+            pass
     try:
         return os.path.getmtime(_CONFIG_PATH)
     except OSError:
@@ -115,23 +133,17 @@ def should_reload_config() -> bool:
 
 
 def register_config_callback(callback):
-    """Register a function to be called when config is reloaded.
-
-    Callback signature: callback(old_config: dict, new_config: dict)
-    """
+    """Register a function to be called when config is reloaded."""
     _config_callbacks.append(callback)
 
 
 def reload_bot_config() -> dict:
-    """Reload configuration from file and update all module-level variables.
-
-    Returns the new BOT_CONFIG dict.
-    """
+    """Reload configuration from file and update all module-level variables."""
     global BOT_CONFIG, _config_mtime
     global DISABLED_SYMBOLS, POSITION_SIZE_PERCENT, MIN_TRADE_AMOUNT_USDT
     global LEVERAGE, TAKE_PROFIT_PERCENT, STOP_LOSS_PERCENT
     global MIN_CONFIDENCE_THRESHOLD, MIN_RISK_REWARD_RATIO, MIN_PARTIAL_CLOSE_PNL
-    global TRADING_SETTINGS, AI_THRESHOLDS
+    global AI_THRESHOLDS
     global ENABLE_NEWS, ENABLE_ADVANCED_ANALYSIS
     global AGGRESSIVE_MODE, AGGRESSIVE_SETTINGS, NEWS_SETTINGS
     global SMART_SAMPLING, ENABLE_AI_SKIP_ON_RSI
@@ -155,7 +167,6 @@ def reload_bot_config() -> dict:
 
     # Update all derived variables
     DISABLED_SYMBOLS = BOT_CONFIG.get("DISABLED_SYMBOLS", [])
-    TRADING_SETTINGS = BOT_CONFIG.get("TRADING_SETTINGS", {})
     POSITION_SIZE_PERCENT = BOT_CONFIG.get("POSITION_SIZE_PERCENT", 5.0)
     MIN_TRADE_AMOUNT_USDT = BOT_CONFIG.get("MIN_TRADE_AMOUNT_USDT", 10.0)
     TAKE_PROFIT_PERCENT = BOT_CONFIG.get("TAKE_PROFIT_PERCENT", 1.5)
@@ -178,8 +189,7 @@ def reload_bot_config() -> dict:
     CHART_SETTINGS = BOT_CONFIG.get("CHART_SETTINGS", {"enabled": True, "update_interval": 10, "min_sleep": 0.5, "sma_periods": [10, 20, 50, 100, 200], "chart_height": 13.5, "dpi": 200})
     ERROR_HANDLING = BOT_CONFIG.get("ERROR_HANDLING", {"cycle_error_fallback_sleep": 5})
     MOMENTUM_STRATEGY = BOT_CONFIG.get("MOMENTUM_STRATEGY", {
-        "enabled": True, "atr_sl_multiplier": 1.5, "atr_tp_multiplier": 2.5,
-        "min_volume_ratio": 0.7, "max_candles_in_prompt": 50,
+        "enabled": True, "min_volume_ratio": 0.7, "max_candles_in_prompt": 50,
         "trend_consensus_required": False, "momentum_entry_enabled": True,
         "momentum_consecutive_candles": 3
     })
@@ -202,10 +212,6 @@ def reload_bot_config() -> dict:
 
     # Reapply style preset
     current_preset = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS.get("AISCALP", {}))
-    if "atr_sl_multiplier" not in MOMENTUM_STRATEGY:
-        MOMENTUM_STRATEGY["atr_sl_multiplier"] = current_preset.get("atr_sl_mult", 2.0)
-    if "atr_tp_multiplier" not in MOMENTUM_STRATEGY:
-        MOMENTUM_STRATEGY["atr_tp_multiplier"] = current_preset.get("atr_tp_mult", 3.0)
     LEVERAGE = current_preset.get("leverage", 10)
 
     # AI Settings
@@ -221,11 +227,6 @@ def reload_bot_config() -> dict:
     AI_RETRY_BACKOFF_BASE = AI_SETTINGS.get("retry_backoff_base", 2)
     AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://openrouter.ai/api/v1/chat/completions"
 
-    # AI Overrides for use-case-specific settings
-    _ai_overrides = AI_SETTINGS.get("overrides", {})
-    AI_VETO_OVERRIDE = _ai_overrides.get("veto", {})
-    AI_REGIME_OVERRIDE = _ai_overrides.get("regime", {})
-
     # Notify callbacks
     for callback in _config_callbacks:
         try:
@@ -236,15 +237,14 @@ def reload_bot_config() -> dict:
     return BOT_CONFIG
 
 
-# Загружаем конфиг
+# --- Load Configuration ---
 BOT_CONFIG = load_bot_config()
 _config_mtime = get_config_mtime()
 
-# Выбор биржи (нужен для определения списка символов)
+# Exchange selection
 EXCHANGE = os.getenv("EXCHANGE", "bingx")
 
-# Настройки трейдинга из конфига
-TRADING_SETTINGS = BOT_CONFIG.get("TRADING_SETTINGS", {})
+# Trading settings from config
 EXCHANGE_SYMBOLS = BOT_CONFIG.get("EXCHANGE_SYMBOLS", {})
 SYMBOLS = EXCHANGE_SYMBOLS.get(EXCHANGE, ["BTC/USD"])
 EXCHANGE_FEES = BOT_CONFIG.get("EXCHANGE_FEES", {"bingx": {"maker": 0.02, "taker": 0.05}})
@@ -253,58 +253,55 @@ if isinstance(_fee_value, dict):
     TRADING_FEE_MAKER = _fee_value.get("maker", 0.02)
     TRADING_FEE_TAKER = _fee_value.get("taker", 0.05)
 else:
-    # Backward compatible: single number treated as taker fee
     TRADING_FEE_MAKER = _fee_value
     TRADING_FEE_TAKER = _fee_value
-TRADING_FEE = TRADING_FEE_TAKER  # Legacy alias
+TRADING_FEE = TRADING_FEE_TAKER
 
 
 def update_fee_rates(maker: float, taker: float):
-    """Update fee rates from exchange API (called at runtime)."""
+    """Update fee rates from exchange API."""
     global TRADING_FEE_MAKER, TRADING_FEE_TAKER, TRADING_FEE
     TRADING_FEE_MAKER = maker
     TRADING_FEE_TAKER = taker
     TRADING_FEE = TRADING_FEE_TAKER
 
-# Отключённые символы (не торговля)
+
+# Disabled symbols
 DISABLED_SYMBOLS = BOT_CONFIG.get("DISABLED_SYMBOLS", [])
 
+# Trading parameters
 POSITION_SIZE_PERCENT = BOT_CONFIG.get("POSITION_SIZE_PERCENT", 5.0)
 MIN_TRADE_AMOUNT_USDT = BOT_CONFIG.get("MIN_TRADE_AMOUNT_USDT", 10.0)
-# LEVERAGE is now dynamic based on style, but we initialize a default here
-# It will be overwritten by style settings below
-LEVERAGE = 10
+LEVERAGE = 10  # Will be overwritten by style preset
 TAKE_PROFIT_PERCENT = BOT_CONFIG.get("TAKE_PROFIT_PERCENT", 1.5)
 STOP_LOSS_PERCENT = BOT_CONFIG.get("STOP_LOSS_PERCENT", 1.5)
 MIN_CONFIDENCE_THRESHOLD = BOT_CONFIG.get("MIN_CONFIDENCE_THRESHOLD", 0.7)
-
 MIN_RISK_REWARD_RATIO = BOT_CONFIG.get("MIN_RISK_REWARD_RATIO", 1.5)
 MIN_PARTIAL_CLOSE_PNL = BOT_CONFIG.get("MIN_PARTIAL_CLOSE_PNL", 0.5)
 
-# Пороговые значения для AI-анализа
+# AI thresholds
 AI_THRESHOLDS = BOT_CONFIG.get("AI_THRESHOLDS", {})
 
-# Пути к данным
+# Data paths
 DATA_DIR = "data"
 CHARTS_DIR = "charts"
 
-# Настройки графиков
+# Chart settings
 CHART_RANGES = BOT_CONFIG.get("CHART_RANGES", {})
 DEFAULT_CHART_RANGE = BOT_CONFIG.get("DEFAULT_CHART_RANGE", "1D")
-
-# Настройки для генератора картинок (plotter.py)
 PLOTTER_RANGES = BOT_CONFIG.get("PLOTTER_RANGES", {})
 DEFAULT_PLOTTER_RANGE = BOT_CONFIG.get("DEFAULT_PLOTTER_RANGE", "1D")
+CLEANUP_SETTINGS = BOT_CONFIG.get("CLEANUP_SETTINGS", {
+    "cleanup_old_charts": True, "charts_retention_days": 7,
+    "cleanup_old_data": True, "data_retention_days": 30
+})
 
-# Настройки очистки старых файлов
-CLEANUP_SETTINGS = BOT_CONFIG.get("CLEANUP_SETTINGS", {})
-
-# News API настройки (для получения реальных новостей)
+# News API settings
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY", "")
 ALPHAVANTAGE_KEY = os.getenv("ALPHAVANTAGE_KEY", "")
 FINNHUB_KEY = os.getenv("FINNHUB_KEY", "")
 
-# Настройки новостей
+# Feature flags
 ENABLE_NEWS = BOT_CONFIG.get("ENABLE_NEWS", True)
 ENABLE_ADVANCED_ANALYSIS = BOT_CONFIG.get("ENABLE_ADVANCED_ANALYSIS", True)
 ENABLE_PARALLEL_MODE = BOT_CONFIG.get("ENABLE_PARALLEL_MODE", True)
@@ -314,7 +311,6 @@ AGGRESSIVE_MODE = BOT_CONFIG.get("AGGRESSIVE_MODE", False)
 AGGRESSIVE_SETTINGS = BOT_CONFIG.get("AGGRESSIVE_SETTINGS", {})
 NEWS_SETTINGS = BOT_CONFIG.get("NEWS_SETTINGS", {})
 SMART_SAMPLING = BOT_CONFIG.get("SMART_SAMPLING", {"enabled": True, "recent_candles": 30, "history_step": 10})
-MIN_RISK_REWARD_RATIO = BOT_CONFIG.get("MIN_RISK_REWARD_RATIO", 1.5)
 ENABLE_AI_SKIP_ON_RSI = BOT_CONFIG.get("ENABLE_AI_SKIP_ON_RSI", True)
 DECISION_JOURNAL = BOT_CONFIG.get("DECISION_JOURNAL", {"enabled": True, "max_entries": {"SCALP": 5, "AISCALP": 10, "SWING": 10}})
 POSITION_LIMITS = BOT_CONFIG.get("POSITION_LIMITS", {"max_positions": 5, "price_precision": 4, "quantity_precision": 4, "balance_safety_margin": 0.95, "position_sync_wait": 1.0})
@@ -323,126 +319,100 @@ TECHNICAL_ANALYSIS = BOT_CONFIG.get("TECHNICAL_ANALYSIS", {"sr_window": 20, "ema
 CHART_SETTINGS = BOT_CONFIG.get("CHART_SETTINGS", {"enabled": True, "update_interval": 10, "min_sleep": 0.5, "sma_periods": [10, 20, 50, 100, 200], "chart_height": 13.5, "dpi": 200})
 ERROR_HANDLING = BOT_CONFIG.get("ERROR_HANDLING", {"cycle_error_fallback_sleep": 5})
 MOMENTUM_STRATEGY = BOT_CONFIG.get("MOMENTUM_STRATEGY", {
-    "enabled": True,
-    "atr_sl_multiplier": 1.5,
-    "atr_tp_multiplier": 2.5,
-    "min_volume_ratio": 0.7,
-    "max_candles_in_prompt": 50,
-    "trend_consensus_required": False,
-    "momentum_entry_enabled": True,
+    "enabled": True, "min_volume_ratio": 0.7, "max_candles_in_prompt": 50,
+    "trend_consensus_required": False, "momentum_entry_enabled": True,
     "momentum_consecutive_candles": 3
 })
 
-# SCALP Settings (separate from HYBRID/AISCALP)
+# SCALP Settings
 SCALP_SETTINGS = BOT_CONFIG.get("SCALP_SETTINGS", {
-    "enabled": True,
-    "signal_rules": {},
+    "enabled": True, "signal_rules": {},
     "sl_tp": {"sl_atr_mult": 1.0, "tp_atr_mult": 3.0, "trailing_activation_mult": 1.5, "trailing_distance_mult": 0.5},
     "breakeven": {"enabled": True, "trigger_pct": 0.3, "fee_buffer_pct": 0.05},
     "time_exit": {"max_hold_minutes": 15, "breakeven_timeout_minutes": 8},
     "risk_limits": {"base_position_pct": 5.0, "max_consecutive_losses": 5, "daily_loss_limit_pct": 3.0},
     "loops": {"fast_interval": 1.5, "slow_interval": 45},
-    "regime_overrides": {},
-    "interaction_rules": {},
+    "regime_overrides": {}, "interaction_rules": {},
     "ai_integration": {"regime_enabled": True, "veto_enabled": True}
 })
 
-# MACDX Settings (No-AI MACD Crossover strategy)
+# MACDX Settings
 MACDX_SETTINGS = BOT_CONFIG.get("MACDX_SETTINGS", {
     "enabled": True,
     "signal_rules": {
-        "macd_cross_weight": 2,
-        "rsi_zone_weight": 2,
-        "ema_alignment_weight": 2,
-        "not_sideways_weight": 1,
-        "no_exhaustion_weight": 1,
-        "volume_weight": 1,
-        "min_score_for_signal": 4,
-        "min_confirmations": 3,
-        "min_volume_ratio": 0.5,
-        "min_atr_ratio": 0.3,
-        "rsi_long_max": 65,
-        "rsi_long_min": 25,
-        "rsi_short_max": 75,
-        "rsi_short_min": 35,
-        "bb_width_threshold": 0.5,
-        "adx_threshold": 20
+        "macd_cross_weight": 2, "rsi_zone_weight": 2, "ema_alignment_weight": 2,
+        "not_sideways_weight": 1, "no_exhaustion_weight": 1, "volume_weight": 1,
+        "min_score_for_signal": 4, "min_confirmations": 3, "min_volume_ratio": 0.5,
+        "min_atr_ratio": 0.3, "rsi_long_max": 65, "rsi_long_min": 25,
+        "rsi_short_max": 75, "rsi_short_min": 35, "bb_width_threshold": 0.5, "adx_threshold": 20
     }
 })
 
-# Trading Style Settings (Scalp / AiScalp / Swing / MACDX)
-STRATEGY_STYLE = BOT_CONFIG.get("STRATEGY_STYLE", "AISCALP")  # Default to AISCALP
+# Strategy Style
+STRATEGY_STYLE = BOT_CONFIG.get("STRATEGY_STYLE", "AISCALP")
 
-# Presets for different styles (Can be overridden by bot_config.json if keys exist there)
-# Presets for different styles (Can be overridden by bot_config.json if keys exist there)
+# Style Presets
 DEFAULT_STYLE_PRESETS = {
     "SCALP": {
-        "timeframe": "1m",
-        "chart_period": "6h",
-        "plotter_period": "4h",
-        "loop_interval": 3, # Fast reaction search
-        "position_check_interval": 3, # Quick check (3s)
-        "atr_sl_mult": 1.5,
-        "atr_tp_mult": 2.0,
+        "timeframe": "1m", "chart_period": "6h", "plotter_period": "4h",
+        "loop_interval": 3, "position_check_interval": 3,
+        "atr_sl_mult": 1.5, "atr_tp_mult": 2.0, "leverage": 15,
         "description": "High frequency, small moves, strict exits."
     },
     "AISCALP": {
-        "timeframe": "1m",
-        "chart_period": "1D",
-        "plotter_period": "12h",
-        "loop_interval": 60, # Standard search
-        "position_check_interval": 10, # Balanced monitoring (10s)
-        "atr_sl_mult": 5.0,
-        "atr_tp_mult": 7.0,
+        "timeframe": "1m", "chart_period": "1D", "plotter_period": "12h",
+        "loop_interval": 60, "position_check_interval": 10,
+        "atr_sl_mult": 5.0, "atr_tp_mult": 7.0, "leverage": 10,
         "description": "Day trading, capturing daily trends."
     },
     "SWING": {
-        "timeframe": "1h", # True Swing base timeframe
-        "chart_period": "14D", # 2 weeks of context
-        "plotter_period": "3D", # Visualise last 3 days
-        "loop_interval": 300, # Check every 5 minutes (sufficient for hourly closes)
-        "position_check_interval": 60, # Check positions every minute
-        "atr_sl_mult": 3.0,
-        "atr_tp_mult": 6.0, # Target large moves
-        "description": "Multi-day holding (Days/Weeks), wide stops, ignoring short-term noise."
+        "timeframe": "1h", "chart_period": "14D", "plotter_period": "3D",
+        "loop_interval": 300, "position_check_interval": 60,
+        "atr_sl_mult": 3.0, "atr_tp_mult": 6.0, "leverage": 5,
+        "description": "Multi-day holding, wide stops, ignoring short-term noise."
+    },
+    "GRID": {
+        "timeframe": "1m", "chart_period": "1D", "plotter_period": "6h",
+        "loop_interval": 5, "position_check_interval": 5, "leverage": 5,
+        "description": "Grid trading with limit order grid."
+    },
+    "HYBRID": {
+        "timeframe": "5m", "chart_period": "1D", "plotter_period": "6h",
+        "loop_interval": 60, "position_check_interval": 15,
+        "atr_sl_mult": 1.5, "atr_tp_mult": 3.0, "leverage": 10,
+        "description": "5m swing with deterministic signals."
     },
     "MACDX": {
-        "timeframe": "5m", # Configurable, default 5m
-        "chart_period": "1D",
-        "plotter_period": "6h",
-        "loop_interval": 60, # Check every minute
-        "position_check_interval": 15, # Monitor positions
-        "atr_sl_mult": 1.5,
-        "atr_tp_mult": 3.0,
-        "leverage": 10,
+        "timeframe": "5m", "chart_period": "1D", "plotter_period": "6h",
+        "loop_interval": 60, "position_check_interval": 15,
+        "atr_sl_mult": 1.5, "atr_tp_mult": 3.0, "leverage": 10,
         "description": "No-AI MACD crossover strategy with 3-5 confirmations."
     }
 }
 STYLE_PRESETS = BOT_CONFIG.get("STYLE_PRESETS", DEFAULT_STYLE_PRESETS)
 
-# Apply style preset if values are missing in specific configs
-current_preset = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS["AISCALP"])
-if "atr_sl_multiplier" not in MOMENTUM_STRATEGY:
-    MOMENTUM_STRATEGY["atr_sl_multiplier"] = current_preset["atr_sl_mult"]
-if "atr_tp_multiplier" not in MOMENTUM_STRATEGY:
-    MOMENTUM_STRATEGY["atr_tp_multiplier"] = current_preset["atr_tp_mult"]
-
-# Set LEVERAGE from the current style preset
+# Apply style preset
+current_preset = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS.get("AISCALP", {}))
 LEVERAGE = current_preset.get("leverage", 10)
 print(f"🔧 Strategy: {STRATEGY_STYLE}, Leverage: {LEVERAGE}x")
 
-# --- DYNAMIC CONFIGURATION LOGIC ---
+
 def parse_interval_minutes(interval_str):
-    """Converts '1m', '5m', '1h', '1d' to minutes"""
-    if not interval_str: return 1
+    """Converts '1m', '5m', '1h', '1d' to minutes."""
+    if not interval_str:
+        return 1
     unit = interval_str[-1].lower()
     value = int(interval_str[:-1])
-    if unit == 'm': return value
-    if unit == 'h': return value * 60
-    if unit == 'd': return value * 1440
+    if unit == 'm':
+        return value
+    if unit == 'h':
+        return value * 60
+    if unit == 'd':
+        return value * 1440
     return value
 
-# 1. Override DEFAULT_CHART_RANGE based on Style Preset
+
+# Dynamic config adjustment based on style
 target_chart_period = current_preset.get("chart_period")
 if target_chart_period and target_chart_period in CHART_RANGES:
     if DEFAULT_CHART_RANGE != target_chart_period:
@@ -450,21 +420,18 @@ if target_chart_period and target_chart_period in CHART_RANGES:
         DEFAULT_CHART_RANGE = target_chart_period
         BOT_CONFIG["DEFAULT_CHART_RANGE"] = target_chart_period
 
-# 2. Override DEFAULT_PLOTTER_RANGE base on Style Preset
 target_plotter_period = current_preset.get("plotter_period")
 if target_plotter_period and target_plotter_period in PLOTTER_RANGES:
-     if DEFAULT_PLOTTER_RANGE != target_plotter_period:
+    if DEFAULT_PLOTTER_RANGE != target_plotter_period:
         print(f"🔄 Auto-adjusted PLOTTER_RANGE to {target_plotter_period} for {STRATEGY_STYLE} style")
         DEFAULT_PLOTTER_RANGE = target_plotter_period
         BOT_CONFIG["DEFAULT_PLOTTER_RANGE"] = target_plotter_period
 
-# 3. Auto-calculate Smart Sampling Step based on max_candles_in_prompt
-# This ensures proper OHLCV aggregation to fit within AI token budget
+# Smart sampling step calculation
 chart_config = CHART_RANGES.get(DEFAULT_CHART_RANGE, {})
 target_timeframe_str = current_preset.get("timeframe", "1m")
 target_minutes = parse_interval_minutes(target_timeframe_str)
 
-# Calculate how many candles will be fetched
 chart_days = chart_config.get("days", 0)
 chart_hours = chart_config.get("hours", 0)
 chart_minutes_duration = chart_config.get("minutes", 0)
@@ -475,31 +442,21 @@ if target_minutes > 0 and total_duration_minutes > 0:
 else:
     fetched_candles = chart_config.get("candles", 720)
 
-# Get AI prompt limits
 max_ai_candles = MOMENTUM_STRATEGY.get("max_candles_in_prompt", 50)
 recent_candles = SMART_SAMPLING.get("recent_candles", 30)
-
-# Calculate optimal step for history aggregation
 history_candles = max(0, fetched_candles - recent_candles)
 ai_history_budget = max(1, max_ai_candles - recent_candles)
 
 if SMART_SAMPLING.get("enabled", True) and history_candles > ai_history_budget:
-    # Need aggregation: step = ceil(history_candles / ai_history_budget)
     import math
     optimal_step = max(1, math.ceil(history_candles / ai_history_budget))
-
     expected_total = (history_candles // optimal_step) + recent_candles
-    print(f"🔄 Smart Sampling: step={optimal_step} | {fetched_candles} candles → ~{expected_total} for AI "
-          f"({history_candles // optimal_step} aggregated + {recent_candles} recent)")
+    print(f"🔄 Smart Sampling: step={optimal_step} | {fetched_candles} candles → ~{expected_total} for AI")
     SMART_SAMPLING["history_step"] = optimal_step
 else:
-    # No aggregation needed
     SMART_SAMPLING["history_step"] = 1
-    if fetched_candles > max_ai_candles:
-        print(f"⚠️ Smart Sampling disabled but {fetched_candles} > {max_ai_candles} candles")
 
-
-# AI API Settings (OpenRouter)
+# AI API Settings
 AI_SETTINGS = BOT_CONFIG.get("AI_SETTINGS", {})
 AI_PROVIDER = "openrouter"
 AI_MODEL = AI_SETTINGS.get("model", "x-ai/grok-4.1-fast")
@@ -512,15 +469,13 @@ AI_FALLBACK_MODELS = AI_SETTINGS.get("fallback_models", [])
 AI_REQUEST_TIMEOUT = AI_SETTINGS.get("request_timeout", 60)
 AI_RETRY_BACKOFF_BASE = AI_SETTINGS.get("retry_backoff_base", 2)
 
-# AI Overrides for use-case-specific settings
+# AI Overrides
 _ai_overrides = AI_SETTINGS.get("overrides", {})
 AI_VETO_OVERRIDE = _ai_overrides.get("veto", {})
 AI_REGIME_OVERRIDE = _ai_overrides.get("regime", {})
 
-# Load API Key
+# API Keys
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-
-# OpenRouter API configuration
 AI_API_KEY = OPENROUTER_API_KEY
 AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://openrouter.ai/api/v1/chat/completions"
 print(f"🤖 AI Provider: OpenRouter ({AI_MODEL})")
@@ -528,16 +483,33 @@ print(f"🤖 AI Provider: OpenRouter ({AI_MODEL})")
 if not AI_API_KEY:
     print(f"⚠️ WARNING: API Key for provider '{AI_PROVIDER}' is missing!")
 
-# BingX API настройки
+# BingX API
 BINGX_API_KEY = os.getenv("BINGX_API_KEY", "")
 BINGX_SECRET_KEY = os.getenv("BINGX_SECRET_KEY", "")
-
-# BingX API URLs
-# Standard Futures: https://open-api.bingx.com
-# VST Futures (Demo): https://open-api-vst.bingx.com
 BINGX_API_URL = "https://open-api-vst.bingx.com" if MODE == "demo" else "https://open-api.bingx.com"
-
-# Логируем выбранный endpoint для отладки
 print(f"🌐 BingX API endpoint: {BINGX_API_URL} ({'Demo (VST)' if MODE == 'demo' else 'Real'})")
-
 print(f"📰 Новости: {'ВКЛЮЧЕНЫ' if ENABLE_NEWS else 'ОТКЛЮЧЕНЫ'}")
+
+
+# --- Per-Symbol Config Access (New System) ---
+
+def get_symbol_config(symbol: str) -> dict:
+    """
+    Get resolved configuration for a specific symbol.
+
+    If new config system is available, returns symbol-specific config
+    with profile overrides applied. Otherwise returns global BOT_CONFIG.
+    """
+    if _use_new_config_system():
+        try:
+            from src.config_loader import resolve_symbol_config
+            return resolve_symbol_config(symbol)
+        except Exception as e:
+            print(f"⚠️ Symbol config resolution failed for {symbol}: {e}")
+    return BOT_CONFIG
+
+
+def get_strategy_preset(strategy: str = None) -> dict:
+    """Get preset for a strategy."""
+    strategy = strategy or STRATEGY_STYLE
+    return STYLE_PRESETS.get(strategy, STYLE_PRESETS.get("AISCALP", {}))

@@ -1,0 +1,120 @@
+{
+  "_description": "SCALP - Dual-loop scalp engine with deterministic signals and trailing stops",
+  "_version": "1.0.0",
+
+  "preset": {
+    "timeframe": "1m",
+    "chart_period": "6h",
+    "plotter_period": "30m",
+    "loop_interval": 1.5,
+    "position_check_interval": 1,
+    "atr_sl_mult": 1,
+    "atr_tp_mult": 3,
+    "leverage": 15
+  },
+
+  "signal_rules": {
+    "ema_periods": [5, 13],
+    "ema_macro": 21,
+    "rsi_period": 7,
+    "macd_params": [6, 13, 5],
+    "atr_period": 10,
+    "atr_fast_period": 5,
+    "bb_period": 20,
+    "bb_std": 2,
+
+    "min_score_for_signal": 4,
+    "tier1_required": true,
+    "conflict_friction_threshold": 2,
+    "auto_execute_quality": 0.6,
+
+    "rsi_long_zone": [25, 40],
+    "rsi_short_zone": [60, 75],
+    "ob_imbalance_threshold": 0.3,
+
+    "weights": {
+      "ema": 2,
+      "momentum": 1,
+      "rsi": 2,
+      "vwap": 1,
+      "volume": 1,
+      "ob_imbalance": 1,
+      "macd": 1,
+      "bb": 1
+    }
+  },
+
+  "sl_tp": {
+    "sl_atr_mult": 1,
+    "tp_atr_mult": 3,
+    "trailing_activation_mult": 1.5,
+    "trailing_distance_mult": 0.5,
+    "trailing_mode": "atr"
+  },
+
+  "breakeven": {
+    "enabled": true,
+    "trigger_pct": 0.3,
+    "fee_buffer_pct": 0.05
+  },
+
+  "time_exit": {
+    "max_hold_minutes": 15,
+    "breakeven_timeout_minutes": 8
+  },
+
+  "risk_limits": {
+    "base_position_pct": 5,
+    "max_consecutive_losses": 5,
+    "consecutive_loss_cooldown_minutes": 30,
+    "daily_loss_limit_pct": 3,
+    "hourly_loss_limit_pct": 1,
+    "max_trades_per_hour": 6,
+    "max_trades_per_day": 50,
+    "min_cooldown_seconds": 120
+  },
+
+  "loops": {
+    "fast_interval": 1.5,
+    "slow_interval": 30
+  },
+
+  "regime_overrides": {
+    "TRENDING": {
+      "ema_weight": 3,
+      "rsi_weight": 1,
+      "bb_weight": 0,
+      "min_score": 3
+    },
+    "RANGING": {
+      "ema_weight": 1,
+      "rsi_weight": 3,
+      "bb_weight": 2,
+      "min_score": 6
+    },
+    "VOLATILE": {
+      "ema_weight": 2,
+      "volume_weight": 2,
+      "min_score": 5
+    },
+    "TRANSITIONAL": {
+      "min_score": 7
+    }
+  },
+
+  "interaction_rules": {
+    "momentum_burst_bonus": 2,
+    "vwap_bounce_bonus": 1,
+    "ob_confluence_bonus": 1,
+    "counter_momentum_penalty": -2,
+    "spike_penalty": -1
+  },
+
+  "ai_integration": {
+    "regime_enabled": true,
+    "regime_interval_seconds": 300,
+    "veto_enabled": true,
+    "borderline_quality_threshold": 0.3,
+    "veto_staleness_seconds": 10
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "_description": "Active runtime configuration - strategy and symbol profile mapping",
+  "_version": "1.0.0",
+
+  "strategy": "MACDX",
+
+  "symbols": {
+    "bingx": ["BTCUSDT", "SOLUSDT", "ETHUSDT"]
+  },
+
+  "symbol_profiles": {
+    "BTCUSDT": "default",
+    "SOLUSDT": "default",
+    "ETHUSDT": "default"
+  },
+
+  "disabled_symbols": []
+}

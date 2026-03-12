@@ -1,0 +1,23 @@
+{
+  "_description": "GRID - Grid trading with limit order grid and inventory management",
+  "_version": "1.0.0",
+
+  "preset": {
+    "timeframe": "1m",
+    "chart_period": "1D",
+    "plotter_period": "6h",
+    "loop_interval": 5,
+    "position_check_interval": 5,
+    "leverage": 5
+  },
+
+  "grid_settings": {
+    "grid_levels": 5,
+    "grid_spacing_pct": 0.3,
+    "order_size_usdt": 10,
+    "inventory_limit": 100,
+    "check_interval": 5,
+    "ai_rebalance_interval": 120,
+    "emergency_stop_loss_pct": 5
+  }
+}

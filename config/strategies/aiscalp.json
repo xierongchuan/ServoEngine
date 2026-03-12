@@ -1,0 +1,81 @@
+{
+  "_description": "AISCALP - Day trading with multi-timeframe analysis and AI decisions",
+  "_version": "1.0.0",
+
+  "preset": {
+    "timeframe": "1m",
+    "htf_timeframe": "1h",
+    "chart_period": "1D",
+    "plotter_period": "1h",
+    "loop_interval": 60,
+    "position_check_interval": 10,
+    "atr_sl_mult": 5,
+    "atr_tp_mult": 7,
+    "leverage": 10
+  },
+
+  "signal_rules": {
+    "min_score_for_signal": 5,
+    "tier1_required": true,
+    "conflict_friction_threshold": 4,
+    "min_volume_ratio": 0.3,
+    "min_atr_ratio": 0.3,
+    "macd_exit_pnl_threshold": -1.5,
+
+    "rsi_long_zone": [25, 55],
+    "rsi_short_zone": [45, 75],
+    "sr_proximity_pct": 2.5,
+
+    "weights": {
+      "htf_trend": 3,
+      "ema_cross": 2,
+      "rsi_zone": 2,
+      "sr_proximity": 2,
+      "macd": 1,
+      "momentum": 1,
+      "bb": 1,
+      "volume": 1
+    }
+  },
+
+  "sessions": {
+    "enabled": true,
+    "definitions": {
+      "ASIAN": { "start_utc": 0, "end_utc": 8 },
+      "EUROPEAN": { "start_utc": 7, "end_utc": 15 },
+      "US": { "start_utc": 13, "end_utc": 21 }
+    },
+    "overlap_bonus": 1
+  },
+
+  "multi_timeframe": {
+    "enabled": true,
+    "htf_timeframe": "1h",
+    "htf_candles": 48,
+    "htf_ema_periods": [21, 50],
+    "daily_bias_lookback_candles": 24,
+    "daily_bias_threshold_pct": 0.5
+  },
+
+  "pre_filter": {
+    "skip_dead_market_volume": 0.2,
+    "skip_rsi_neutral_zone": [46, 54],
+    "skip_no_htf_trend": true
+  },
+
+  "ai_filter": {
+    "enabled": false,
+    "auto_approve_quality": 0.75,
+    "invoke_on_borderline": true,
+    "invoke_on_conflicting": true
+  },
+
+  "interaction_rules": {
+    "htf_ltf_confluence_bonus": 2,
+    "ema_macd_confluence_bonus": 1,
+    "reversal_confluence_bonus": 2,
+    "momentum_burst_bonus": 1,
+    "counter_htf_trend_penalty": -3,
+    "rsi_divergence_penalty": -2
+  }
+}
