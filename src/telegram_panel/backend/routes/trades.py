@@ -12,6 +12,44 @@ from ..config import DATA_DIR, CONFIG_PATH
 router = APIRouter(prefix="/api/trades", tags=["trades"])
 reader = DataReader()
 
+# Derive new config dir from CONFIG_PATH parent
+_CONFIG_DIR = CONFIG_PATH.parent / "config"
+
+
+def _use_new_config() -> bool:
+    return (_CONFIG_DIR / "active.json").exists()
+
+
+def _read_disabled_symbols() -> list:
+    """Read disabled symbols from active.json (new) or bot_config.json (legacy)."""
+    if _use_new_config():
+        try:
+            with open(_CONFIG_DIR / "active.json", "r", encoding="utf-8") as f:
+                return json.load(f).get("disabled_symbols", [])
+        except Exception:
+            return []
+    config = read_json(CONFIG_PATH) or {}
+    return config.get("DISABLED_SYMBOLS", [])
+
+
+def _write_disabled_symbols(disabled: list) -> bool:
+    """Write disabled symbols to active.json (new) or bot_config.json (legacy)."""
+    if _use_new_config():
+        active_path = _CONFIG_DIR / "active.json"
+        try:
+            with open(active_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["disabled_symbols"] = disabled
+            with open(active_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception:
+            return False
+    # Legacy fallback
+    config = read_json(CONFIG_PATH) or {}
+    config["DISABLED_SYMBOLS"] = disabled
+    return write_json(CONFIG_PATH, config)
+
 
 @router.get("/active")
 async def get_active_trades(_user: dict = Depends(get_current_user)) -> dict:
@@ -133,16 +171,14 @@ async def disable_symbol(
     """Disable trading for a symbol."""
     symbol = symbol.upper().replace(" ", "")
 
-    config = read_json(CONFIG_PATH) or {}
-    disabled = config.get("DISABLED_SYMBOLS", [])
+    disabled = _read_disabled_symbols()
 
     if symbol in disabled:
         return {"status": "already_disabled", "symbol": symbol}
 
     disabled.append(symbol)
-    config["DISABLED_SYMBOLS"] = disabled
 
-    if write_json(CONFIG_PATH, config):
+    if _write_disabled_symbols(disabled):
         return {"status": "success", "symbol": symbol, "action": "disabled"}
     return {"status": "error", "message": "Failed to write config"}
 
@@ -155,16 +191,14 @@ async def enable_symbol(
     """Enable trading for a symbol."""
     symbol = symbol.upper().replace(" ", "")
 
-    config = read_json(CONFIG_PATH) or {}
-    disabled = config.get("DISABLED_SYMBOLS", [])
+    disabled = _read_disabled_symbols()
 
     if symbol not in disabled:
         return {"status": "already_enabled", "symbol": symbol}
 
     disabled.remove(symbol)
-    config["DISABLED_SYMBOLS"] = disabled
 
-    if write_json(CONFIG_PATH, config):
+    if _write_disabled_symbols(disabled):
         return {"status": "success", "symbol": symbol, "action": "enabled"}
     return {"status": "error", "message": "Failed to write config"}
 
@@ -174,8 +208,7 @@ async def get_disabled_symbols(
     _user: dict = Depends(get_current_user),
 ) -> dict:
     """Get list of disabled symbols."""
-    config = read_json(CONFIG_PATH) or {}
-    return {"disabled_symbols": config.get("DISABLED_SYMBOLS", [])}
+    return {"disabled_symbols": _read_disabled_symbols()}
 
 
 @router.post("/sync")

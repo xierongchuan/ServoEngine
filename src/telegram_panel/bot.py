@@ -43,7 +43,7 @@ def get_project_root() -> Path:
 PROJECT_ROOT: Path = get_project_root()
 DATA_DIR: Path = Path(os.environ.get("PANEL_DATA_DIR", str(PROJECT_ROOT / "data")))
 CHARTS_DIR: Path = Path(os.environ.get("PANEL_CHARTS_DIR", str(PROJECT_ROOT / "charts")))
-CONFIG_PATH: Path = Path(os.environ.get("PANEL_CONFIG_PATH", str(PROJECT_ROOT / "bot_config.json")))
+CONFIG_PATH: Path = Path(os.environ.get("PANEL_CONFIG_PATH", str(PROJECT_ROOT / "config" / "active.json")))
 
 ACTIVE_TRADES_PATH: Path = DATA_DIR / "active_trades.json"
 TRADE_HISTORY_PATH: Path = DATA_DIR / "trade_history.json"
@@ -251,20 +251,30 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 @allowed_users_only
 async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show current configuration summary."""
-    config = read_json(CONFIG_PATH) or {}
+    config_dir = CONFIG_PATH.parent if CONFIG_PATH.name == "active.json" else CONFIG_PATH.parent / "config"
 
-    strategy = config.get("STRATEGY_STYLE", "N/A")
-    pos_size = config.get("POSITION_SIZE_PERCENT", "N/A")
-    confidence = config.get("MIN_CONFIDENCE_THRESHOLD", "N/A")
+    # Read from new config system
+    active = read_json(config_dir / "active.json") or {}
+    trading = read_json(config_dir / "trading.json") or {}
+    base = read_json(config_dir / "base.json") or {}
 
-    ai = config.get("AI_SETTINGS", {})
+    strategy = active.get("strategy", "N/A")
+    pos = trading.get("position", {})
+    risk = trading.get("risk", {})
+    ai = base.get("ai", {})
+
+    pos_size = pos.get("size_percent", "N/A")
+    confidence = risk.get("min_confidence_threshold", "N/A")
     model = ai.get("model", "N/A")
 
-    style_presets = config.get("STYLE_PRESETS", {})
-    preset = style_presets.get(strategy, {})
-    leverage = preset.get("leverage", "N/A")
+    # Get leverage from strategy preset
+    leverage = "N/A"
+    strat_path = config_dir / "strategies" / f"{strategy.lower()}.json"
+    strat = read_json(strat_path) or {}
+    leverage = strat.get("preset", {}).get("leverage", "N/A")
 
-    exchange_symbols = config.get("EXCHANGE_SYMBOLS", {})
+    # Symbols
+    exchange_symbols = active.get("symbols", {})
     all_symbols: list[str] = []
     for syms in exchange_symbols.values():
         if isinstance(syms, list):
@@ -284,7 +294,7 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 @allowed_users_only
 async def cmd_reload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Force config reload by touching bot_config.json."""
+    """Force config reload by touching active.json."""
     try:
         CONFIG_PATH.touch()
         await update.message.reply_text(  # type: ignore[union-attr]

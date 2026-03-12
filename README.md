@@ -49,7 +49,7 @@
 ### Высокая производительность
 - **True Multiprocessing**: Каждый торговый актив работает в отдельном изолированном процессе ОС.
 - **WebSocket Cache**: Опциональный реальном-время кэш свечей через WebSocket с автоматическим fallback на REST.
-- **Hot-Reload Config**: `bot_config.json` проверяется каждые 30 секунд, изменения применяются без перезапуска.
+- **Hot-Reload Config**: `config/active.json` и `config/trading.json` проверяются каждые 30 секунд, изменения применяются без перезапуска.
 - **Dynamic Loop**: Частота анализа адаптируется под стиль (1.5s SCALP → 60s AISCALP → 4h SWING).
 
 ### Продвинутый риск-менеджмент
@@ -67,7 +67,7 @@
 
 ## <a id="strategies"></a>Стратегии торговли
 
-Переключение стиля одной строкой в `bot_config.json` → `STRATEGY_STYLE`:
+Переключение стиля в `config/active.json` → `strategy`:
 
 | Стиль | Таймфрейм | Цикл | Плечо | Описание |
 |-------|-----------|------|-------|----------|
@@ -185,49 +185,53 @@ python3 src/core/plotter.py 1W    # за 1 неделю
 
 ---
 
-## <a id="configuration"></a>Конфигурация (`bot_config.json`)
+## <a id="configuration"></a>Конфигурация (`config/`)
 
-### Основные параметры
+Система использует модульную структуру конфигурации:
 
-| Параметр | Тип | Описание | По умолчанию |
-|----------|-----|----------|:------------:|
-| `STRATEGY_STYLE` | String | Стиль торговли | `MACDX` |
-| `EXCHANGE_SYMBOLS` | Dict | Торговые пары по биржам | `{"bingx": ["BTCUSDT"]}` |
-| `DISABLED_SYMBOLS` | List | Заблокированные символы | `[]` |
-| `POSITION_SIZE_PERCENT` | Float | % баланса на сделку | `10` |
-| `MIN_RISK_REWARD_RATIO` | Float | Мин. R/R для входа | `1.2` |
-| `MIN_CONFIDENCE_THRESHOLD` | Float | Мин. AI confidence | `0.55` |
-| `AGGRESSIVE_MODE` | Bool | Агрессивная стратегия | `false` |
+```
+config/
+  base.json           # Инфраструктура (биржа, AI, чарты) — редко меняется
+  trading.json        # Торговые параметры (позиция, риски, фичи)
+  strategies/         # Настройки стратегий
+    scalp.json, aiscalp.json, swing.json, grid.json, hybrid.json, macdx.json
+  profiles/           # Per-symbol переопределения
+    default.json, btc_aggressive.json, eth_conservative.json
+  active.json         # Активная стратегия + символы + профили
+```
 
-### AI Настройки (`AI_SETTINGS`)
+### `config/active.json` — Текущие настройки
+
+```json
+{
+  "strategy": "MACDX",
+  "symbols": { "bingx": ["BTC-USDT", "ETH-USDT"] },
+  "disabled_symbols": []
+}
+```
+
+### `config/trading.json` — Торговые параметры
+
+| Параметр | Путь | Описание | По умолчанию |
+|----------|------|----------|:------------:|
+| Position size | `position.size_percent` | % баланса на сделку | `10` |
+| Min trade | `position.min_trade_amount_usdt` | Мин. сумма USDT | `10` |
+| Confidence | `risk.min_confidence_threshold` | Мин. AI confidence | `0.55` |
+| R/R ratio | `risk.min_risk_reward_ratio` | Мин. Risk/Reward | `1.2` |
+| Take profit | `risk.take_profit_percent` | TP в % | `2.5` |
+| Stop loss | `risk.stop_loss_percent` | SL в % | `1.0` |
+
+### `config/base.json` — AI Настройки (`ai`)
 
 ```json
 {
   "provider": "openrouter",
   "model": "google/gemini-3-flash-preview",
-  "base_url": "https://openrouter.ai/api/v1/chat/completions",
   "temperature": 0.3,
   "max_tokens": 4096,
-  "reasoning": {
-    "enabled": true,
-    "effort": "high",
-    "exclude": true
-  },
-  "retry_count": 3,
-  "request_timeout": 60,
-  "provider_routing": { "allow_fallbacks": true },
-  "fallback_models": []
+  "reasoning": { "enabled": true, "effort": "medium", "exclude": true }
 }
 ```
-
-| Параметр | Описание |
-|----------|----------|
-| `model` | ID модели OpenRouter: `google/gemini-3-flash-preview`, `anthropic/claude-sonnet-4` и др. |
-| `temperature` | Креативность ответа (0.0-1.0). Для трейдинга: 0.2-0.4 |
-| `reasoning.enabled` | Включить reasoning-модели |
-| `reasoning.effort` | Глубина рассуждений: `low`, `medium`, `high` |
-| `reasoning.exclude` | `true` — рассуждения не попадают в ответ (рекомендуется) |
-| `fallback_models` | Запасные модели при недоступности основной |
 
 > [!TIP]
 > Укажите `OPENROUTER_API_KEY` в файле `.env`.
@@ -235,7 +239,7 @@ python3 src/core/plotter.py 1W    # за 1 неделю
 > [!WARNING]
 > Для reasoning-моделей **обязательно** ставьте `"exclude": true`. Иначе рассуждения попадут в content вместо JSON-ответа и парсинг сломается.
 
-### Стилевые пресеты (`STYLE_PRESETS`)
+### Стилевые пресеты (`config/strategies/*.json`)
 
 Каждый стиль автоматически настраивает: `timeframe`, `loop_interval`, `position_check_interval`, `atr_sl_mult`, `atr_tp_mult`, `leverage`.
 
@@ -244,7 +248,11 @@ python3 src/core/plotter.py 1W    # за 1 неделю
 - **AISCALP**: `htf_timeframe` (1h), session-based filtering, `pre_filter` (skip dead markets)
 - **SWING**: `min_hold_hours` (24), `cooldown_after_close_hours` (6)
 - **GRID**: `grid_levels` (5), `grid_spacing_pct` (0.3%), `inventory_limit`, `emergency_stop_loss_pct`
-- **MACDX**: `MACDX_SETTINGS.signal_rules` — веса индикаторов, пороги RSI, min_score, min_confirmations
+- **MACDX**: `signal_rules` — веса индикаторов, пороги RSI, min_score, min_confirmations
+
+### Hot-Reload
+
+Изменения в `config/active.json` и `config/trading.json` подхватываются автоматически каждые 30 секунд. Для `config/base.json` и файлов стратегий требуется перезапуск.
 
 ---
 

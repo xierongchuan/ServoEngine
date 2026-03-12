@@ -10,7 +10,6 @@ services:
     volumes:
       - ./data:/app/data:rw
       - ./charts:/app/charts:ro
-      - ./bot_config.json:/app/bot_config.json:rw
       - ./config:/app/config:rw
       - ./src:/app/src:ro
       - ./.env:/app/.env:ro
@@ -19,6 +18,6 @@ services:
       - PANEL_PORT=8080
       - PANEL_DATA_DIR=/app/data
       - PANEL_CHARTS_DIR=/app/charts
-      - PANEL_CONFIG_PATH=/app/bot_config.json
+      - PANEL_CONFIG_PATH=/app/config/active.json
       - TELEGRAM_PANEL_URL=${TELEGRAM_PANEL_URL:-}
     restart: unless-stopped

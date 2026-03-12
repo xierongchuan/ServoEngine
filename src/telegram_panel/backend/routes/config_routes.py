@@ -1,11 +1,12 @@
 """
-Configuration API routes with support for new structured config system.
+Configuration API routes for the modular config system.
 
 Provides endpoints for:
-- Legacy config (bot_config.json) read/write
-- New config system (config/) with strategies and profiles
-- Strategy management
-- Profile management per symbol
+- Config read/write (merged from config/ directory)
+- Strategy management (config/strategies/)
+- Profile management per symbol (config/profiles/)
+- Active config (config/active.json)
+- Trading config (config/trading.json)
 """
 
 import json
@@ -26,9 +27,8 @@ logger = logging.getLogger("panel.config")
 router = APIRouter(prefix="/api/config", tags=["config"])
 reader = DataReader()
 
-# Paths for new config system
-# Derive from CONFIG_PATH to work correctly in container environments
-# where bot_config.json and config/ are both mounted to /app/
+# Paths for config system
+# Derive from CONFIG_PATH parent to work in container (/app/config/)
 CONFIG_DIR = CONFIG_PATH.parent / "config"
 STRATEGIES_DIR = CONFIG_DIR / "strategies"
 PROFILES_DIR = CONFIG_DIR / "profiles"
@@ -162,12 +162,68 @@ def classify_changes(old_config: dict, new_config: dict) -> dict:
 
 
 # ============================================================================
-# Legacy Config Endpoints (bot_config.json)
+# Config Endpoints (merged from config/ directory)
 # ============================================================================
+
+def _build_merged_config() -> dict:
+    """Build a merged config dict from new config system files."""
+    if _use_new_config_system():
+        merged = {}
+        # Load base, trading, active configs
+        base = _load_json(CONFIG_DIR / "base.json")
+        trading = _load_json(CONFIG_DIR / "trading.json")
+        active = _load_json(CONFIG_DIR / "active.json")
+
+        # Map new config keys to legacy format for backward compat
+        merged["STRATEGY_STYLE"] = active.get("strategy", "MACDX")
+        merged["EXCHANGE_SYMBOLS"] = active.get("symbols", {})
+        merged["DISABLED_SYMBOLS"] = active.get("disabled_symbols", [])
+
+        # Trading params
+        pos = trading.get("position", {})
+        risk = trading.get("risk", {})
+        features = trading.get("features", {})
+        merged["POSITION_SIZE_PERCENT"] = pos.get("size_percent", 10)
+        merged["MIN_TRADE_AMOUNT_USDT"] = pos.get("min_trade_amount_usdt", 10)
+        merged["MIN_CONFIDENCE_THRESHOLD"] = risk.get("min_confidence_threshold", 0.55)
+        merged["MIN_RISK_REWARD_RATIO"] = risk.get("min_risk_reward_ratio", 1.2)
+        merged["TAKE_PROFIT_PERCENT"] = risk.get("take_profit_percent", 2.5)
+        merged["STOP_LOSS_PERCENT"] = risk.get("stop_loss_percent", 1.0)
+        merged["ENABLE_NEWS"] = features.get("enable_news", False)
+        merged["AGGRESSIVE_MODE"] = features.get("aggressive_mode", False)
+
+        # Base config sections
+        merged["EXCHANGE_FEES"] = base.get("exchange", {}).get("fees", {})
+        merged["AI_SETTINGS"] = base.get("ai", {})
+        merged["CHART_RANGES"] = base.get("chart_ranges", {})
+        merged["PLOTTER_RANGES"] = base.get("plotter_ranges", {})
+        merged["TECHNICAL_ANALYSIS"] = base.get("technical_analysis", {})
+        merged["CHART_SETTINGS"] = base.get("chart_settings", {})
+        merged["POSITION_LIMITS"] = base.get("position_limits", {})
+        merged["NEWS_SETTINGS"] = base.get("news", {})
+        merged["CLEANUP_SETTINGS"] = base.get("cleanup_settings", {})
+        merged["DECISION_JOURNAL"] = base.get("decision_journal", {})
+
+        # Build style presets from strategy files
+        presets = {}
+        if STRATEGIES_DIR.exists():
+            for path in STRATEGIES_DIR.glob("*.json"):
+                name = path.stem.upper()
+                strat = _load_json(path)
+                presets[name] = strat.get("preset", {})
+                presets[name]["description"] = strat.get("_description", "")
+        merged["STYLE_PRESETS"] = presets
+
+        return merged
+
+    # Legacy fallback
+    return reader.read_config()
+
 
 @router.get("")
 async def get_config(_user: dict = Depends(get_current_user)) -> dict:
-    return reader.read_config()
+    """Get merged config from config/ directory."""
+    return _build_merged_config()
 
 
 @router.get("/meta")
@@ -193,7 +249,7 @@ async def validate_config(request: Request, _user: dict = Depends(get_current_us
         raise HTTPException(status_code=400, detail="Config must be a JSON object")
 
     errors = validate_config_values(new_config)
-    current_config = reader.read_config()
+    current_config = _build_merged_config()
     changes = classify_changes(current_config, new_config)
 
     return {
@@ -205,6 +261,7 @@ async def validate_config(request: Request, _user: dict = Depends(get_current_us
 
 @router.put("")
 async def update_config(request: Request, _user: dict = Depends(get_current_user)) -> dict:
+    """Update config — routes to appropriate config file in new system."""
     try:
         body = await request.body()
         new_config = json.loads(body)
@@ -214,7 +271,6 @@ async def update_config(request: Request, _user: dict = Depends(get_current_user
     if not isinstance(new_config, dict):
         raise HTTPException(status_code=400, detail="Config must be a JSON object")
 
-    # Validate before saving
     errors = validate_config_values(new_config)
     if errors:
         logger.warning("Config validation failed: %s", errors)
@@ -223,15 +279,68 @@ async def update_config(request: Request, _user: dict = Depends(get_current_user
             content={"detail": "Validation failed", "validation_errors": errors},
         )
 
-    current_config = reader.read_config()
+    current_config = _build_merged_config()
     changes = classify_changes(current_config, new_config)
 
-    try:
-        reader.write_config(new_config)
-        logger.info("Config saved successfully. Changes: %s", changes)
-    except OSError as e:
-        logger.error("Failed to write config: %s", e)
-        raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+    if _use_new_config_system():
+        try:
+            # Route changes to appropriate config files
+            active_keys = {"STRATEGY_STYLE", "EXCHANGE_SYMBOLS", "DISABLED_SYMBOLS"}
+            trading_keys = {
+                "POSITION_SIZE_PERCENT", "MIN_TRADE_AMOUNT_USDT",
+                "MIN_CONFIDENCE_THRESHOLD", "MIN_RISK_REWARD_RATIO",
+                "TAKE_PROFIT_PERCENT", "STOP_LOSS_PERCENT",
+                "ENABLE_NEWS", "AGGRESSIVE_MODE",
+            }
+
+            # Update active.json
+            active_changes = {k: v for k, v in new_config.items() if k in active_keys}
+            if active_changes:
+                active = _load_json(CONFIG_DIR / "active.json")
+                if "STRATEGY_STYLE" in active_changes:
+                    active["strategy"] = active_changes["STRATEGY_STYLE"]
+                if "EXCHANGE_SYMBOLS" in active_changes:
+                    active["symbols"] = active_changes["EXCHANGE_SYMBOLS"]
+                if "DISABLED_SYMBOLS" in active_changes:
+                    active["disabled_symbols"] = active_changes["DISABLED_SYMBOLS"]
+                _save_json(CONFIG_DIR / "active.json", active)
+
+            # Update trading.json
+            trading_changes = {k: v for k, v in new_config.items() if k in trading_keys}
+            if trading_changes:
+                trading = _load_json(CONFIG_DIR / "trading.json")
+                pos = trading.setdefault("position", {})
+                risk = trading.setdefault("risk", {})
+                features = trading.setdefault("features", {})
+                if "POSITION_SIZE_PERCENT" in trading_changes:
+                    pos["size_percent"] = trading_changes["POSITION_SIZE_PERCENT"]
+                if "MIN_TRADE_AMOUNT_USDT" in trading_changes:
+                    pos["min_trade_amount_usdt"] = trading_changes["MIN_TRADE_AMOUNT_USDT"]
+                if "MIN_CONFIDENCE_THRESHOLD" in trading_changes:
+                    risk["min_confidence_threshold"] = trading_changes["MIN_CONFIDENCE_THRESHOLD"]
+                if "MIN_RISK_REWARD_RATIO" in trading_changes:
+                    risk["min_risk_reward_ratio"] = trading_changes["MIN_RISK_REWARD_RATIO"]
+                if "TAKE_PROFIT_PERCENT" in trading_changes:
+                    risk["take_profit_percent"] = trading_changes["TAKE_PROFIT_PERCENT"]
+                if "STOP_LOSS_PERCENT" in trading_changes:
+                    risk["stop_loss_percent"] = trading_changes["STOP_LOSS_PERCENT"]
+                if "ENABLE_NEWS" in trading_changes:
+                    features["enable_news"] = trading_changes["ENABLE_NEWS"]
+                if "AGGRESSIVE_MODE" in trading_changes:
+                    features["aggressive_mode"] = trading_changes["AGGRESSIVE_MODE"]
+                _save_json(CONFIG_DIR / "trading.json", trading)
+
+            logger.info("Config saved to new config system. Changes: %s", changes)
+        except OSError as e:
+            logger.error("Failed to write config: %s", e)
+            raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+    else:
+        try:
+            reader.write_config(new_config)
+            logger.info("Config saved to legacy file. Changes: %s", changes)
+        except OSError as e:
+            logger.error("Failed to write config: %s", e)
+            raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
 
     return {
         "status": "ok",
@@ -410,6 +519,14 @@ async def list_strategies(_user: dict = Depends(get_current_user)) -> dict:
                 "preset": preset,
                 "has_ai": name not in ["MACDX", "GRID"],
             }
+
+    if "MACDX" not in strategies:
+        strategies["MACDX"] = {
+            "name": "MACDX",
+            "description": "No-AI MACD crossover strategy with 3-5 confirmations.",
+            "preset": {},
+            "has_ai": False,
+        }
 
     logger.info("list_strategies: returning %d strategies: %s", len(strategies), list(strategies.keys()))
     return {"strategies": strategies, "available": list(strategies.keys())}

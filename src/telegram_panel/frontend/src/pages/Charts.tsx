@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { getChartData, getConfig, getActiveTrades } from '../api/client';
+import { getChartData, getDashboard, getActiveTrades } from '../api/client';
 import type { ChartData } from '../api/types';
 import { InteractiveChart } from '../components/InteractiveChart';
 import { Spinner } from '../components/Spinner';
@@ -16,17 +16,12 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
   const [symbolsWithPositions, setSymbolsWithPositions] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    getConfig().then((cfg) => {
-      const exchangeSymbols = cfg.EXCHANGE_SYMBOLS as Record<string, string[]> | undefined;
-      if (exchangeSymbols) {
-        const all: string[] = [];
-        for (const syms of Object.values(exchangeSymbols)) {
-          all.push(...syms);
-        }
-        setSymbols(all);
-        if (all.length > 0) {
-          setSelectedSymbol((prev) => prev || all[0]);
-        }
+    // Use dashboard API which reads from new config system (active.json)
+    getDashboard().then((dash) => {
+      const all = dash.symbols || [];
+      setSymbols(all);
+      if (all.length > 0) {
+        setSelectedSymbol((prev) => prev || all[0]);
       }
     }).catch(() => {});
 

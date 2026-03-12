@@ -56,7 +56,7 @@ class _Handler(FileSystemEventHandler):
             if p.parent.name == "logs":
                 return "log_symbol"
             return "log_line"
-        if name == "bot_config.json":
+        if name == "bot_config.json" or name == "active.json" or name == "trading.json":
             return "config_changed"
         if name == "decision_journal.json":
             return "journal_update"

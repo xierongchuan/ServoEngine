@@ -127,7 +127,7 @@ Management UI — does NOT affect trading bot functionality. Runs in a separate 
 
 ## Configuration
 
-**Loading order:** `.env` / env vars → hardcoded defaults (`src/config.py`) + `bot_config.json` deep merge → dynamic `STRATEGY_STYLE` preset overrides. Hot-reload: `bot_config.json` checked every 30s for modifications.
+**Loading order:** `.env` / env vars → hardcoded defaults (`src/config.py`) + `config/` directory (`base.json` + `trading.json` + `active.json` + `strategies/*.json`) deep merge → dynamic strategy preset overrides. Hot-reload: `config/active.json` and `config/trading.json` checked every 30s for modifications.
 
 ### Strategy styles
 
@@ -151,33 +151,24 @@ Management UI — does NOT affect trading bot functionality. Runs in a separate 
 - `ENABLE_NEWS` — `true`/`false`
 - `NEWSAPI_KEY`, `ALPHAVANTAGE_KEY`, `FINNHUB_KEY` — news provider API keys (when `ENABLE_NEWS=true`)
 
-### Key bot_config.json sections
-- `EXCHANGE_SYMBOLS` — active trading pairs per exchange
-- `DISABLED_SYMBOLS` — symbols blocked from new position entry
-- `EXCHANGE_FEES` — per-exchange maker/taker fee percentages
-- `STRATEGY_STYLE` — active style (SCALP/AISCALP/SWING/GRID/HYBRID)
-- `POSITION_SIZE_PERCENT` — % of balance per trade (default 10)
-- `MIN_RISK_REWARD_RATIO` — R/R validation threshold (default 1.2)
-- `MIN_CONFIDENCE_THRESHOLD` — minimum AI confidence to execute (default 0.55)
-- `AI_SETTINGS` — model, temperature (0.3), max_tokens (4096), retry count (3), reasoning config, provider_routing, fallback_models
-- `STYLE_PRESETS` — per-style overrides (timeframe, loop_interval, leverage, ATR multipliers, position_check_interval, min_hold_hours, cooldown_after_close_hours)
-- `HYBRID_SETTINGS` — signal scoring rules, weights, interaction bonuses, AI filter config (auto_approve_quality, invoke_on_borderline)
-- `AISCALP_SETTINGS` — signal scoring (HTF trend weight 3), session config (ASIAN/EUROPEAN/US, dead zones), multi-timeframe config, pre-filter rules, AI filter, interaction rules (counter_htf_trend_penalty -3)
-- `SCALP_SETTINGS` — signal rules (EMA 5/13, RSI 7, MACD 6/13/5, OB imbalance), SL/TP (trailing mode), breakeven, time exits, risk limits (max trades/hour, daily loss limit), dual loops, regime overrides, AI integration (regime + veto)
-- `REGIME_SETTINGS` — market regime detection params, per-regime min_score/SL/TP/sizing factors
-- `PERFORMANCE_TRACKING` — performance analysis (enabled, min_trades, win_rate_floor)
-- `DYNAMIC_SIZING` — adaptive position sizing (min/max size 3-20%, quality/streak weights)
-- `GRID_SETTINGS` — grid levels, spacing, order size, inventory limit, emergency stop
-- `MOMENTUM_STRATEGY` — volume thresholds, momentum entry config
-- `TECHNICAL_ANALYSIS` — indicator parameters (sr_window, ema_periods, seb_length, etc.)
-- `CHART_RANGES` — data fetch params per time window (candle count, interval, ai_context_candles)
-- `PLOTTER_RANGES` — chart rendering presets (12 time ranges from 15m to 14D)
-- `SMART_SAMPLING` — AI context compression (recent_candles, history_step)
-- `CHART_SETTINGS` — chart rendering config (update_interval, sma_periods, dpi)
-- `POSITION_LIMITS` — max positions, precision, balance safety margin
-- `DECISION_JOURNAL` — journal config (enabled, max_entries per style)
-- `AGGRESSIVE_MODE` / `AGGRESSIVE_SETTINGS` — aggressive trading mode RSI thresholds
-- `NEWS_SETTINGS` — news provider config (provider, max items, timeout)
+### Config directory structure (`config/`)
+
+```
+config/
+  base.json           # Infrastructure (exchange fees, AI, charts, TA params) — rarely changed
+  trading.json        # Trading params (position, risk, features, regime, sizing)
+  strategies/         # Per-strategy configs (preset, signal_rules, AI filter)
+    scalp.json, aiscalp.json, swing.json, grid.json, hybrid.json, macdx.json
+  profiles/           # Per-symbol overrides (inherits from strategy defaults)
+    default.json, btc_aggressive.json, eth_conservative.json
+  active.json         # Runtime: active strategy + symbols + profile mapping + disabled_symbols
+```
+
+- `active.json` — `strategy` (SCALP/AISCALP/SWING/GRID/HYBRID/MACDX), `symbols` ({exchange: [pairs]}), `disabled_symbols`, `symbol_profiles`
+- `trading.json` — `position` (size_percent, min_trade_amount_usdt), `risk` (confidence, R/R, TP/SL), `features` (news, aggressive, parallel), `regime`, `dynamic_sizing`, `performance_tracking`, `smart_sampling`, `momentum`
+- `base.json` — `exchange` (fees), `ai` (model, temperature, reasoning, retry, fallback_models), `chart_ranges`, `plotter_ranges`, `technical_analysis`, `chart_settings`, `position_limits`, `news`, `decision_journal`, `cleanup_settings`
+- `strategies/*.json` — `preset` (timeframe, loop_interval, leverage, atr_sl/tp_mult), `signal_rules` (weights, thresholds), `ai_filter`, `interactions`, `exit_rules`
+- `profiles/*.json` — minimal overrides per symbol, `_inherits` for profile inheritance
 
 ## Data files (data/)
 

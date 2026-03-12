@@ -1,12 +1,43 @@
+import json
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..services.auth import get_current_user
 from ..services.data_reader import DataReader
+from ..config import CONFIG_PATH
 
 router = APIRouter(prefix="/api/journal", tags=["journal"])
 reader = DataReader()
+
+_CONFIG_DIR = CONFIG_PATH.parent / "config"
+
+
+def _get_strategy_cooldown() -> tuple[str, float]:
+    """Get active strategy name and cooldown hours from config."""
+    active_path = _CONFIG_DIR / "active.json"
+    if active_path.exists():
+        try:
+            with open(active_path, "r", encoding="utf-8") as f:
+                active = json.load(f)
+            strategy = active.get("strategy", "MACDX")
+            # Read preset from strategy file
+            strat_path = _CONFIG_DIR / "strategies" / f"{strategy.lower()}.json"
+            if strat_path.exists():
+                with open(strat_path, "r", encoding="utf-8") as f:
+                    strat = json.load(f)
+                cooldown = strat.get("preset", {}).get("cooldown_after_close_hours", 0)
+                return strategy, cooldown
+            return strategy, 0
+        except Exception:
+            pass
+    # Legacy fallback
+    config = reader.read_config()
+    strategy = config.get("STRATEGY_STYLE", "AISCALP")
+    presets = config.get("STYLE_PRESETS", {})
+    cooldown = presets.get(strategy, {}).get("cooldown_after_close_hours", 0)
+    return strategy, cooldown
 
 
 @router.get("")
@@ -17,12 +48,7 @@ async def get_journal(_user: dict = Depends(get_current_user)) -> dict:
 @router.get("/stats")
 async def get_journal_stats(_user: dict = Depends(get_current_user)) -> dict:
     journal = reader.read_journal()
-    config = reader.read_config()
-
-    strategy_style = config.get("STRATEGY_STYLE", "AISCALP")
-    style_presets = config.get("STYLE_PRESETS", {})
-    current_preset = style_presets.get(strategy_style, {})
-    cooldown_hours = current_preset.get("cooldown_after_close_hours", 0)
+    _, cooldown_hours = _get_strategy_cooldown()
 
     now = datetime.now()
     symbols_stats = {}
