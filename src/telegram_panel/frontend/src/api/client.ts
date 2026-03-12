@@ -110,6 +110,11 @@ export function getConfigMeta() {
 export interface ConfigSystemInfo {
   use_new_system: boolean;
   config_dir: string | null;
+  config_dir_exists: boolean;
+  active_json_exists: boolean;
+  strategies_dir_exists: boolean;
+  strategy_files: string[];
+  legacy_strategies: string[];
   available_strategies: string[];
   legacy_config_path: string;
 }

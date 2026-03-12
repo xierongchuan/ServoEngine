@@ -248,9 +248,27 @@ async def update_config(request: Request, _user: dict = Depends(get_current_user
 async def get_config_system_info(_user: dict = Depends(get_current_user)) -> dict:
     """Get info about the configuration system in use."""
     use_new = _use_new_config_system()
+
+    # Diagnostic info for debugging strategy loading issues
+    strategy_files = []
+    if STRATEGIES_DIR.exists():
+        strategy_files = [f.name for f in STRATEGIES_DIR.glob("*.json")]
+
+    legacy_strategies = []
+    try:
+        legacy = reader.read_config()
+        legacy_strategies = list(legacy.get("STYLE_PRESETS", {}).keys())
+    except Exception as e:
+        logger.warning("Failed to read legacy config for diagnostics: %s", e)
+
     return {
         "use_new_system": use_new,
         "config_dir": str(CONFIG_DIR) if use_new else None,
+        "config_dir_exists": CONFIG_DIR.is_dir(),
+        "active_json_exists": (CONFIG_DIR / "active.json").exists(),
+        "strategies_dir_exists": STRATEGIES_DIR.exists(),
+        "strategy_files": strategy_files,
+        "legacy_strategies": legacy_strategies,
         "available_strategies": AVAILABLE_STRATEGIES,
         "legacy_config_path": str(reader.config_path),
     }

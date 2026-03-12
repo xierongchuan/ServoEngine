@@ -57,6 +57,11 @@ export function Settings() {
         getProfiles(),
         getSymbolProfiles(),
       ]);
+      // Debug logging for strategy loading issues
+      console.log('[Settings] Config system info:', sysInfo);
+      console.log('[Settings] Strategies response:', strats);
+      console.log('[Settings] Available strategies:', strats?.available);
+
       setSystemInfo(sysInfo);
       setActiveConfig(active);
       setTradingConfig(trading);
@@ -112,11 +117,17 @@ export function Settings() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <span className="text-lg font-semibold text-tg-text">Settings</span>
-        {systemInfo.use_new_system && (
-          <span className="text-[10px] px-2 py-1 rounded bg-green-500/20 text-green-400">
-            new config
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {systemInfo.use_new_system ? (
+            <span className="text-[10px] px-2 py-1 rounded bg-green-500/20 text-green-400">
+              new config
+            </span>
+          ) : (
+            <span className="text-[10px] px-2 py-1 rounded bg-amber-500/20 text-amber-400">
+              legacy
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Message */}
@@ -241,35 +252,45 @@ function StrategyTab({
     <div className="flex flex-col gap-4">
       {/* Strategy Selector */}
       <Section title="Active Strategy" badge="hot-reload">
-        <div className="grid grid-cols-2 gap-2">
-          {strategies.available.map((name) => {
-            const strat = strategies.strategies[name];
-            const isActive = name === selectedStrategy;
-            return (
-              <button
-                key={name}
-                onClick={() => setSelectedStrategy(name)}
-                className={`flex flex-col items-start p-3 rounded-xl border transition-all ${
-                  isActive
-                    ? 'border-tg-button bg-tg-button/10'
-                    : 'border-white/10 bg-tg-bg hover:border-white/20'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <span className={`text-sm font-medium ${isActive ? 'text-tg-button' : 'text-tg-text'}`}>
-                    {name}
+        {strategies.available.length === 0 ? (
+          <div className="text-sm text-amber-400 p-3 bg-amber-500/10 rounded-lg">
+            No strategies found. Check if config/ directory is mounted correctly.
+            <br />
+            <span className="text-xs text-tg-hint">
+              Expected: SCALP, AISCALP, SWING, GRID, HYBRID, MACDX
+            </span>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {strategies.available.map((name) => {
+              const strat = strategies.strategies[name];
+              const isActive = name === selectedStrategy;
+              return (
+                <button
+                  key={name}
+                  onClick={() => setSelectedStrategy(name)}
+                  className={`flex flex-col items-start p-3 rounded-xl border transition-all ${
+                    isActive
+                      ? 'border-tg-button bg-tg-button/10'
+                      : 'border-white/10 bg-tg-bg hover:border-white/20'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-medium ${isActive ? 'text-tg-button' : 'text-tg-text'}`}>
+                      {name}
+                    </span>
+                    {strat?.has_ai && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">AI</span>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-tg-hint mt-1 text-left line-clamp-2">
+                    {strat?.description || 'No description'}
                   </span>
-                  {strat?.has_ai && (
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">AI</span>
-                  )}
-                </div>
-                <span className="text-[10px] text-tg-hint mt-1 text-left line-clamp-2">
-                  {strat?.description || 'No description'}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </Section>
 
       {/* Strategy Details */}
