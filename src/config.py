@@ -137,7 +137,7 @@ def reload_bot_config() -> dict:
     global SMART_SAMPLING, ENABLE_AI_SKIP_ON_RSI
     global DECISION_JOURNAL, POSITION_LIMITS, VALIDATION
     global TECHNICAL_ANALYSIS, CHART_SETTINGS, ERROR_HANDLING, MOMENTUM_STRATEGY
-    global STRATEGY_STYLE, STYLE_PRESETS, SCALP_SETTINGS
+    global STRATEGY_STYLE, STYLE_PRESETS, SCALP_SETTINGS, MACDX_SETTINGS
     global AI_SETTINGS, AI_MODEL, AI_TEMPERATURE, AI_MAX_TOKENS
     global AI_REASONING, AI_RETRY_COUNT, AI_PROVIDER_ROUTING
     global AI_FALLBACK_MODELS, AI_REQUEST_TIMEOUT, AI_RETRY_BACKOFF_BASE, AI_BASE_URL
@@ -187,6 +187,7 @@ def reload_bot_config() -> dict:
     STRATEGY_STYLE = BOT_CONFIG.get("STRATEGY_STYLE", "AISCALP")
     STYLE_PRESETS = BOT_CONFIG.get("STYLE_PRESETS", DEFAULT_STYLE_PRESETS)
     SCALP_SETTINGS = BOT_CONFIG.get("SCALP_SETTINGS", SCALP_SETTINGS)
+    MACDX_SETTINGS = BOT_CONFIG.get("MACDX_SETTINGS", MACDX_SETTINGS)
 
     # Reload fee rates
     _exchange_fees = BOT_CONFIG.get("EXCHANGE_FEES", {"bingx": {"maker": 0.02, "taker": 0.05}})
@@ -346,7 +347,30 @@ SCALP_SETTINGS = BOT_CONFIG.get("SCALP_SETTINGS", {
     "ai_integration": {"regime_enabled": True, "veto_enabled": True}
 })
 
-# Trading Style Settings (Scalp / AiScalp / Swing)
+# MACDX Settings (No-AI MACD Crossover strategy)
+MACDX_SETTINGS = BOT_CONFIG.get("MACDX_SETTINGS", {
+    "enabled": True,
+    "signal_rules": {
+        "macd_cross_weight": 2,
+        "rsi_zone_weight": 2,
+        "ema_alignment_weight": 2,
+        "not_sideways_weight": 1,
+        "no_exhaustion_weight": 1,
+        "volume_weight": 1,
+        "min_score_for_signal": 4,
+        "min_confirmations": 3,
+        "min_volume_ratio": 0.5,
+        "min_atr_ratio": 0.3,
+        "rsi_long_max": 65,
+        "rsi_long_min": 25,
+        "rsi_short_max": 75,
+        "rsi_short_min": 35,
+        "bb_width_threshold": 0.5,
+        "adx_threshold": 20
+    }
+})
+
+# Trading Style Settings (Scalp / AiScalp / Swing / MACDX)
 STRATEGY_STYLE = BOT_CONFIG.get("STRATEGY_STYLE", "AISCALP")  # Default to AISCALP
 
 # Presets for different styles (Can be overridden by bot_config.json if keys exist there)
@@ -381,6 +405,17 @@ DEFAULT_STYLE_PRESETS = {
         "atr_sl_mult": 3.0,
         "atr_tp_mult": 6.0, # Target large moves
         "description": "Multi-day holding (Days/Weeks), wide stops, ignoring short-term noise."
+    },
+    "MACDX": {
+        "timeframe": "5m", # Configurable, default 5m
+        "chart_period": "1D",
+        "plotter_period": "6h",
+        "loop_interval": 60, # Check every minute
+        "position_check_interval": 15, # Monitor positions
+        "atr_sl_mult": 1.5,
+        "atr_tp_mult": 3.0,
+        "leverage": 10,
+        "description": "No-AI MACD crossover strategy with 3-5 confirmations."
     }
 }
 STYLE_PRESETS = BOT_CONFIG.get("STYLE_PRESETS", DEFAULT_STYLE_PRESETS)
