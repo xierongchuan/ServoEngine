@@ -1,6 +1,6 @@
 # OpenProducer — AI-Powered Algorithmic Trading System
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![License](https://img.shields.io/badge/license-Proprietary-red.svg)
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![Status](https://img.shields.io/badge/status-active-success)
 
@@ -435,4 +435,8 @@ tail -f data/trades.log          # все сделки
 
 ## Лицензия
 
-MIT License. См. файл [LICENSE](LICENSE).
+**Strict Proprietary Software License.** Все права защищены.
+
+Данное программное обеспечение является собственностью [https://github.com/xierongchuan](https://github.com/xierongchuan). Использование, копирование, модификация или распространение без письменного разрешения правообладателя запрещено.
+
+См. файл [LICENSE.md](LICENSE.md) для получения полной информации.
