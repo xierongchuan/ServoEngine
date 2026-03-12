@@ -268,12 +268,7 @@ class WebSocketDataProvider:
 
             data = json.loads(message)
 
-            # DEBUG: Логирование первых 30 сообщений любого типа
-            if not hasattr(self, '_debug_msg_count'):
-                self._debug_msg_count = 0
-            if self._debug_msg_count < 30:
-                info(f"[WS-DEBUG] Raw message #{self._debug_msg_count}: {str(data)[:300]}")
-                self._debug_msg_count += 1
+
 
             # Handle BingX ping/pong (keeps connection alive)
             if "ping" in data:
@@ -290,13 +285,6 @@ class WebSocketDataProvider:
             data_type = data.get("dataType", "")
             if "@kline_" in data_type or "market.kline." in data_type:
                 self._handle_kline_update(data)
-            else:
-                # DEBUG: Логирование прочих сообщений (подписки ACK и т.д.)
-                if not hasattr(self, '_debug_non_kline_count'):
-                    self._debug_non_kline_count = 0
-                if self._debug_non_kline_count < 30:
-                    info(f"[WS-DEBUG] Non-kline msg #{self._debug_non_kline_count}: dataType='{data_type}' keys={list(data.keys())} data={str(data)[:200]}")
-                    self._debug_non_kline_count += 1
 
         except json.JSONDecodeError:
             pass  # Ignore non-JSON messages
