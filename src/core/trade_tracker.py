@@ -30,7 +30,14 @@ class TradeTracker:
     def _load_json(self, filepath):
         try:
             with open(filepath, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+                if filepath == ACTIVE_TRADES_FILE and not isinstance(data, dict):
+                    warning(f"Invalid format in {filepath}, resetting to {{}}")
+                    return {}
+                if filepath == HISTORY_FILE and not isinstance(data, list):
+                    warning(f"Invalid format in {filepath}, resetting to []")
+                    return []
+                return data
         except Exception:
             return {} if filepath == ACTIVE_TRADES_FILE else []
 
