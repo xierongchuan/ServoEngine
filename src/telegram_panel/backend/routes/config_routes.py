@@ -639,8 +639,9 @@ async def list_strategies(_user: dict = Depends(get_current_user)) -> dict:
             "has_ai": False,
         }
 
-    logger.info("list_strategies: returning %d strategies: %s", len(strategies), list(strategies.keys()))
-    return {"strategies": strategies, "available": list(strategies.keys())}
+    available = sorted(list(strategies.keys()))
+    logger.info("list_strategies: returning %d strategies: %s", len(strategies), available)
+    return {"strategies": strategies, "available": available}
 
 
 @router.get("/strategies/{name}")

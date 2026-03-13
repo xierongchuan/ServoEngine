@@ -72,6 +72,7 @@ export function Settings() {
       console.log('[Settings] Config system info:', sysInfo);
       console.log('[Settings] Strategies response:', strats);
       console.log('[Settings] Available strategies:', strats?.available);
+      console.log('[Settings] Active strategy:', active?.strategy);
 
       setSystemInfo(sysInfo);
       setActiveConfig(active);
@@ -163,7 +164,7 @@ export function Settings() {
               tab === t ? 'bg-tg-button text-white' : 'text-tg-hint hover:text-tg-text'
             }`}
           >
-            {t === 'strategy' ? 'Strategy' : t === 'trading' ? 'Trading' : t === 'infrastructure' ? 'Infra' : t === 'profiles' ? 'Profiles' : 'Symbols'}
+            {t === 'strategy' ? 'Strategy' : t === 'trading' ? 'Position & Risk' : t === 'infrastructure' ? 'AI Settings' : t === 'profiles' ? 'Features' : 'Symbols'}
           </button>
         ))}
       </div>
@@ -308,8 +309,8 @@ function StrategyTab({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Strategy Selector */}
-      <Section title="Active Strategy" badge="hot-reload">
+      {/* Trading Style Selector */}
+      <Section title="Trading Style" badge="hot-reload">
         {strategies.available.length === 0 ? (
           <div className="text-sm text-amber-400 p-3 bg-amber-500/10 rounded-lg">
             No strategies found. Check if config/ directory is mounted correctly.
@@ -319,34 +320,53 @@ function StrategyTab({
             </span>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-2">
-            {strategies.available.map((name) => {
-              const strat = strategies.strategies[name];
-              const isActive = name === selectedStrategy;
-              return (
-                <button
-                  key={name}
-                  onClick={() => setSelectedStrategy(name)}
-                  className={`flex flex-col items-start p-3 rounded-xl border transition-all ${
-                    isActive
-                      ? 'border-tg-button bg-tg-button/10'
-                      : 'border-white/10 bg-tg-bg hover:border-white/20'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className={`text-sm font-medium ${isActive ? 'text-tg-button' : 'text-tg-text'}`}>
-                      {name}
+          <div className="flex flex-col gap-3">
+            {/* Dropdown Selector (Alternative) */}
+            {/* <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] text-tg-hint uppercase ml-1">Select Style</span>
+              <select
+                value={selectedStrategy}
+                onChange={(e) => setSelectedStrategy(e.target.value)}
+                className="w-full bg-tg-bg text-tg-text text-sm rounded-xl px-4 py-3 border border-white/10 outline-none focus:border-tg-button transition-colors appearance-none"
+                style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'%23777\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 9l-7 7-7-7\'/%3E%3C/svg%3E")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right 12px center', backgroundSize: '16px' }}
+              >
+                {strategies.available.map((name) => (
+                  <option key={name} value={name}>
+                    {name} {name === activeConfig.strategy ? '(Active)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div> */}
+
+            <div className="grid grid-cols-2 gap-2">
+              {strategies.available.map((name) => {
+                const strat = strategies.strategies[name];
+                const isActive = name === selectedStrategy;
+                return (
+                  <button
+                    key={name}
+                    onClick={() => setSelectedStrategy(name)}
+                    className={`flex flex-col items-start p-3 rounded-xl border transition-all ${
+                      isActive
+                        ? 'border-tg-button bg-tg-button/10'
+                        : 'border-white/10 bg-tg-bg hover:border-white/20'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className={`text-sm font-medium ${isActive ? 'text-tg-button' : 'text-tg-text'}`}>
+                        {name}
+                      </span>
+                      {strat?.has_ai && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">AI</span>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-tg-hint mt-1 text-left line-clamp-2">
+                      {strat?.description || 'No description'}
                     </span>
-                    {strat?.has_ai && (
-                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">AI</span>
-                    )}
-                  </div>
-                  <span className="text-[10px] text-tg-hint mt-1 text-left line-clamp-2">
-                    {strat?.description || 'No description'}
-                  </span>
-                </button>
-              );
-            })}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
       </Section>
