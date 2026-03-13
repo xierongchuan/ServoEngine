@@ -8,6 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from ..config import DATA_DIR, CONFIG_PATH
 from ..services.auth import get_current_user
 
+# Путь к base.json для получения plotter_ranges
+import os
+BASE_CONFIG_PATH = Path(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 'config', 'base.json'))
+
 router = APIRouter(prefix="/api/chart-data", tags=["chart-data"])
 
 
@@ -172,7 +176,7 @@ async def get_chart_data(
     if not raw_candles:
         raise HTTPException(status_code=404, detail="Empty price data")
 
-    config = _read_json(Path(CONFIG_PATH), default={})
+    config = _read_json(BASE_CONFIG_PATH, default={})
     plotter_ranges = config.get("PLOTTER_RANGES", {})
     range_config = plotter_ranges.get(range, {})
     if not range_config:
@@ -218,7 +222,7 @@ async def get_chart_data(
 
     # Ресемплинг
     interval_str = range_config.get("interval", "1m")
-    tf_map = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}
+    tf_map = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240, "6h": 360, "12h": 720, "1d": 1440}
     target_minutes = tf_map.get(interval_str, 1)
 
     if target_minutes > 1:
@@ -309,10 +313,16 @@ async def get_chart_data(
 
     available_ranges = list(plotter_ranges.keys())
 
+    # Определяем какой интервал показывать:
+    # - Для диапазонов-интервалов (15m, 30m, 1h и т.д.) показываем сам диапазон
+    # - Для диапазонов-периодов (1D, 2D и т.д.) показываем интервал свечей
+    range_intervals = {"15m", "30m", "1h", "2h", "4h", "6h", "12h"}
+    display_interval = range if range in range_intervals else interval_str
+
     return {
         "symbol": symbol,
         "range": range,
-        "interval": interval_str,
+        "interval": display_interval,
         "candles": candles,
         "indicators": indicators,
         "position": position,
