@@ -1,10 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import {
   createChart,
   ColorType,
   CrosshairMode,
   LineStyle,
   type IChartApi,
+  type ISeriesApi,
   type Time,
 } from 'lightweight-charts';
 import type { ChartData } from '../api/types';
@@ -22,21 +23,202 @@ const CHART_BG = 'transparent';
 const TEXT_COLOR = '#8b8b8b';
 const GRID_COLOR = 'rgba(255,255,255,0.04)';
 
+interface SeriesRefs {
+  candleSeries?: ISeriesApi<'Candlestick'>;
+  volumeSeries?: ISeriesApi<'Histogram'>;
+  ema12Series?: ISeriesApi<'Line'>;
+  sma26Series?: ISeriesApi<'Line'>;
+  rsiSeries?: ISeriesApi<'Line'>;
+  macdSeries?: ISeriesApi<'Line'>;
+  signalSeries?: ISeriesApi<'Line'>;
+  histSeries?: ISeriesApi<'Histogram'>;
+  zeroSeries?: ISeriesApi<'Line'>;
+}
+
+interface ViewportState {
+  visibleRange: { from: Time; to: Time } | null;
+  scrollPosition: number;
+}
+
 export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: InteractiveChartProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const seriesRefs = useRef<SeriesRefs>({});
+  const lastDataRef = useRef<ChartData | null>(null);
+  const viewportRef = useRef<ViewportState | null>(null);
+  const isFirstRender = useRef(true);
 
-  useEffect(() => {
-    if (!containerRef.current || data.candles.length === 0) return;
+  // Функция для сохранения viewport
+  const saveViewport = useCallback(() => {
+    if (!chartRef.current) return null;
+    const timeScale = chartRef.current.timeScale();
+    return {
+      visibleRange: timeScale.getVisibleRange(),
+      scrollPosition: timeScale.scrollPosition(),
+    };
+  }, []);
 
-    // Cleanup previous chart
-    chartRef.current?.remove();
-    chartRef.current = null;
+  // Функция для восстановления viewport
+  const restoreViewport = useCallback((viewport: ViewportState | null) => {
+    if (!chartRef.current || !viewport) return;
+    const timeScale = chartRef.current.timeScale();
+    if (viewport.visibleRange) {
+      try {
+        timeScale.setVisibleRange(viewport.visibleRange as any);
+      } catch {
+        // Игнорируем ошибки, если диапазон уже невалиден
+      }
+    }
+  }, []);
+
+  // Функция для инкрементального обновления данных
+  const updateSeriesData = useCallback((newData: ChartData, series: SeriesRefs) => {
+    if (!chartRef.current) return;
+
+    const newCandles = newData.candles;
+    const oldCandles = lastDataRef.current?.candles || [];
+
+    // Находим новые свечи (которых нет в старых данных)
+    const oldTimes = new Set(oldCandles.map(c => c.time));
+    const newCandlesOnly = newCandles.filter(c => !oldTimes.has(c.time));
+
+    // Находим обновленные свечи (существующие, но с изменившимися значениями)
+    const oldCandleMap = new Map(oldCandles.map(c => [c.time, c]));
+    const updatedCandles = newCandles.filter(c => {
+      const oldC = oldCandleMap.get(c.time);
+      if (!oldC) return false;
+      return oldC.high !== c.high || oldC.low !== c.low || oldC.close !== c.close || oldC.open !== c.open;
+    });
+
+    // Обновляем новые свечи
+    if (series.candleSeries && newCandlesOnly.length > 0) {
+      for (const c of newCandlesOnly) {
+        series.candleSeries.update({
+          time: c.time as Time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        });
+      }
+    }
+
+    // Обновляем изменившиеся свечи
+    if (series.candleSeries && updatedCandles.length > 0) {
+      for (const c of updatedCandles) {
+        series.candleSeries.update({
+          time: c.time as Time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        });
+      }
+    }
+
+    // Обновляем объемы для новых свечей
+    if (series.volumeSeries && newCandlesOnly.length > 0) {
+      for (const c of newCandlesOnly) {
+        series.volumeSeries.update({
+          time: c.time as Time,
+          value: c.volume,
+          color: c.close >= c.open ? 'rgba(38,166,154,0.25)' : 'rgba(239,83,80,0.25)',
+        });
+      }
+    }
+
+    // Обновляем объемы для изменившихся свечей
+    if (series.volumeSeries && updatedCandles.length > 0) {
+      for (const c of updatedCandles) {
+        series.volumeSeries.update({
+          time: c.time as Time,
+          value: c.volume,
+          color: c.close >= c.open ? 'rgba(38,166,154,0.25)' : 'rgba(239,83,80,0.25)',
+        });
+      }
+    }
+
+    // Обновляем EMA12
+    const newEma12 = newData.indicators.ema12 || [];
+    const oldEma12 = lastDataRef.current?.indicators.ema12 || [];
+    if (series.ema12Series) {
+      const oldEma12Times = new Set(oldEma12.map(e => e.time));
+      for (const p of newEma12.filter(e => !oldEma12Times.has(e.time))) {
+        series.ema12Series.update({ time: p.time as Time, value: p.value });
+      }
+    }
+
+    // Обновляем SMA26
+    const newSma26 = newData.indicators.sma26 || [];
+    const oldSma26 = lastDataRef.current?.indicators.sma26 || [];
+    if (series.sma26Series) {
+      const oldSma26Times = new Set(oldSma26.map(s => s.time));
+      for (const p of newSma26.filter(s => !oldSma26Times.has(s.time))) {
+        series.sma26Series.update({ time: p.time as Time, value: p.value });
+      }
+    }
+
+    // Обновляем RSI
+    const newRsi = newData.indicators.rsi || [];
+    const oldRsi = lastDataRef.current?.indicators.rsi || [];
+    if (series.rsiSeries) {
+      const oldRsiTimes = new Set(oldRsi.map(r => r.time));
+      for (const p of newRsi.filter(r => !oldRsiTimes.has(r.time))) {
+        series.rsiSeries.update({ time: p.time as Time, value: p.value });
+      }
+    }
+
+    // Обновляем MACD
+    const newMacd = newData.indicators.macd || [];
+    const oldMacd = lastDataRef.current?.indicators.macd || [];
+    if (series.macdSeries) {
+      const oldMacdTimes = new Set(oldMacd.map(m => m.time));
+      for (const p of newMacd.filter(m => !oldMacdTimes.has(m.time))) {
+        series.macdSeries.update({ time: p.time as Time, value: p.value });
+      }
+    }
+
+    // Обновляем MACD Signal
+    const newSignal = newData.indicators.macd_signal || [];
+    const oldSignal = lastDataRef.current?.indicators.macd_signal || [];
+    if (series.signalSeries) {
+      const oldSignalTimes = new Set(oldSignal.map(s => s.time));
+      for (const p of newSignal.filter(s => !oldSignalTimes.has(s.time))) {
+        series.signalSeries.update({ time: p.time as Time, value: p.value });
+      }
+    }
+
+    // Обновляем MACD Histogram
+    const newHist = newData.indicators.macd_histogram || [];
+    const oldHist = lastDataRef.current?.indicators.macd_histogram || [];
+    if (series.histSeries) {
+      const oldHistTimes = new Set(oldHist.map(h => h.time));
+      for (const p of newHist.filter(h => !oldHistTimes.has(h.time))) {
+        series.histSeries.update({
+          time: p.time as Time,
+          value: p.value,
+          color: p.value >= 0 ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)',
+        });
+      }
+    }
+  }, []);
+
+  // Функция для полного создания графика
+  const createFullChart = useCallback((chartData: ChartData) => {
+    if (!containerRef.current || chartData.candles.length === 0) return;
+
+    // Очищаем предыдущий график
+    if (chartRef.current) {
+      viewportRef.current = saveViewport();
+      chartRef.current.remove();
+      chartRef.current = null;
+      seriesRefs.current = {};
+    }
 
     const chartHeight = fullscreen ? 640 : 480;
 
-    // ===== SINGLE CHART =====
+    // Создаем новый график
     const chart = createChart(containerRef.current, {
       layout: {
         background: { type: ColorType.Solid as const, color: CHART_BG },
@@ -56,6 +238,8 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
       height: chartHeight,
     });
     chartRef.current = chart;
+    const series: SeriesRefs = {};
+    seriesRefs.current = series;
 
     // ===== PRICE ZONE (top 60%) =====
     const candleSeries = chart.addCandlestickSeries({
@@ -67,7 +251,7 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
       wickDownColor: '#ef5350',
     });
     candleSeries.setData(
-      data.candles.map((c) => ({
+      chartData.candles.map((c) => ({
         time: c.time as Time,
         open: c.open,
         high: c.high,
@@ -75,8 +259,9 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
         close: c.close,
       }))
     );
+    series.candleSeries = candleSeries;
 
-    // Volume (overlaps bottom of price zone)
+    // Volume
     const volumeSeries = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
@@ -85,15 +270,16 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
       scaleMargins: { top: 0.48, bottom: 0.4 },
     });
     volumeSeries.setData(
-      data.candles.map((c) => ({
+      chartData.candles.map((c) => ({
         time: c.time as Time,
         value: c.volume,
         color: c.close >= c.open ? 'rgba(38,166,154,0.25)' : 'rgba(239,83,80,0.25)',
       }))
     );
+    series.volumeSeries = volumeSeries;
 
     // EMA 12
-    const ema12Data = data.indicators.ema12 || [];
+    const ema12Data = chartData.indicators.ema12 || [];
     if (ema12Data.length > 0) {
       const ema12Series = chart.addLineSeries({
         color: EMA12_COLOR,
@@ -103,10 +289,11 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
         lastValueVisible: false,
       });
       ema12Series.setData(ema12Data.map((p) => ({ time: p.time as Time, value: p.value })));
+      series.ema12Series = ema12Series;
     }
 
     // SMA 26
-    const sma26Data = data.indicators.sma26 || [];
+    const sma26Data = chartData.indicators.sma26 || [];
     if (sma26Data.length > 0) {
       const sma26Series = chart.addLineSeries({
         color: SMA26_COLOR,
@@ -116,11 +303,12 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
         lastValueVisible: false,
       });
       sma26Series.setData(sma26Data.map((p) => ({ time: p.time as Time, value: p.value })));
+      series.sma26Series = sma26Series;
     }
 
     // Position markers
-    if (data.position && data.position.entry_price > 0) {
-      const pos = data.position;
+    if (chartData.position && chartData.position.entry_price > 0) {
+      const pos = chartData.position;
       const posColor = pos.side === 'LONG' ? '#00e676' : '#ff1744';
 
       candleSeries.createPriceLine({
@@ -154,7 +342,7 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
     }
 
     // ===== RSI ZONE (middle ~18%) =====
-    const rsiData = data.indicators.rsi || [];
+    const rsiData = chartData.indicators.rsi || [];
     if (rsiData.length > 0) {
       const rsiSeries = chart.addLineSeries({
         color: '#2ca02c',
@@ -186,12 +374,13 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
         axisLabelVisible: false,
         title: '',
       });
+      series.rsiSeries = rsiSeries;
     }
 
     // ===== MACD ZONE (bottom ~18%) =====
-    const macdData = data.indicators.macd || [];
-    const signalData = data.indicators.macd_signal || [];
-    const histData = data.indicators.macd_histogram || [];
+    const macdData = chartData.indicators.macd || [];
+    const signalData = chartData.indicators.macd_signal || [];
+    const histData = chartData.indicators.macd_histogram || [];
 
     if (macdData.length > 0) {
       // Histogram
@@ -209,6 +398,7 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
             color: p.value >= 0 ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)',
           }))
         );
+        series.histSeries = histSeries;
       }
 
       // MACD line
@@ -225,6 +415,7 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
         borderVisible: false,
       });
       macdSeries.setData(macdData.map((p) => ({ time: p.time as Time, value: p.value })));
+      series.macdSeries = macdSeries;
 
       // Signal line
       if (signalData.length > 0) {
@@ -237,6 +428,7 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
           lastValueVisible: true,
         });
         signalSeries.setData(signalData.map((p) => ({ time: p.time as Time, value: p.value })));
+        series.signalSeries = signalSeries;
       }
 
       // Zero line
@@ -253,13 +445,11 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
           { time: macdData[0].time as Time, value: 0 },
           { time: macdData[macdData.length - 1].time as Time, value: 0 },
         ]);
+        series.zeroSeries = zeroSeries;
       }
     }
 
-    // ===== FIT =====
-    chart.timeScale().fitContent();
-
-    // Resize
+    // Resize observer
     const resizeObserver = new ResizeObserver(() => {
       const w = wrapperRef.current?.clientWidth;
       if (!w) return;
@@ -267,12 +457,64 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
     });
     if (wrapperRef.current) resizeObserver.observe(wrapperRef.current);
 
+    // Сохраняем cleanup функцию
+    chartRef.current = chart;
+
     return () => {
       resizeObserver.disconnect();
-      chart.remove();
-      chartRef.current = null;
     };
-  }, [data, fullscreen]);
+  }, [fullscreen, saveViewport]);
+
+  useEffect(() => {
+    if (!containerRef.current || data.candles.length === 0) return;
+
+    // Проверяем, нужно ли полностью пересоздать график или можно обновить инкрементально
+    const lastData = lastDataRef.current;
+
+    // Если это первый рендер или изменился символ - создаем график с нуля
+    if (isFirstRender.current || !lastData || lastData.symbol !== data.symbol || lastData.range !== data.range) {
+      isFirstRender.current = false;
+      lastDataRef.current = data;
+      createFullChart(data);
+
+      // Восстанавливаем viewport после первого рендера
+      if (viewportRef.current) {
+        restoreViewport(viewportRef.current);
+        viewportRef.current = null;
+      } else {
+        // Fit content только при первой загрузке
+        chartRef.current?.timeScale().fitContent();
+      }
+      return;
+    }
+
+    // Если данные изменились - пробуем инкрементальное обновление
+    if (lastData && lastData.symbol === data.symbol && lastData.range === data.range) {
+      // Сохраняем viewport перед обновлением
+      const savedViewport = saveViewport();
+
+      // Инкрементальное обновление
+      updateSeriesData(data, seriesRefs.current);
+
+      // Восстанавливаем viewport
+      restoreViewport(savedViewport);
+    } else {
+      // Символ или диапазон изменился - пересоздаем
+      createFullChart(data);
+    }
+
+    lastDataRef.current = data;
+  }, [data, fullscreen, createFullChart, updateSeriesData, saveViewport, restoreViewport]);
+
+  // Cleanup при размонтировании
+  useEffect(() => {
+    return () => {
+      if (chartRef.current) {
+        chartRef.current.remove();
+        chartRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <div ref={wrapperRef} className="relative w-full">

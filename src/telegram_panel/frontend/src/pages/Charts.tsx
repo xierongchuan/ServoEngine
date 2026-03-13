@@ -15,6 +15,7 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
   const fsContainerRef = useRef<HTMLDivElement>(null);
   const [symbolsWithPositions, setSymbolsWithPositions] = useState<Set<string>>(new Set());
 
+
   useEffect(() => {
     // Use dashboard API which reads from new config system (active.json)
     getDashboard().then((dash) => {
@@ -33,9 +34,11 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
     }).catch(() => {});
   }, []);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (showLoading = true) => {
     if (!selectedSymbol) return;
-    setLoading(true);
+    if (showLoading) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const data = await getChartData(selectedSymbol, selectedRange);
@@ -43,7 +46,9 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load chart');
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   }, [selectedSymbol, selectedRange]);
 
@@ -52,10 +57,25 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
   }, [fetchData]);
 
   useEffect(() => {
-    const unsub1 = subscribe('trade_update', () => fetchData());
-    const unsub2 = subscribe('data_update', () => fetchData());
+    const unsub1 = subscribe('trade_update', () => fetchData(true));
+
+    // Обработка data_update - только для текущего символа, без спиннера
+    const handleDataUpdate = (eventData: Record<string, unknown>) => {
+      const changedFile = eventData.path as string | undefined;
+      if (!changedFile) return;
+
+      // Извлекаем символ из имени файла (например, BTCUSDT.json -> BTC-USDT)
+      const fileSymbol = changedFile.replace('.json', '').replace('_', '-');
+
+      // Проверяем: это текущий выбранный символ?
+      if (fileSymbol === selectedSymbol) {
+        fetchData(false); // false = без спиннера загрузки
+      }
+    };
+
+    const unsub2 = subscribe('data_update', handleDataUpdate);
     return () => { unsub1(); unsub2(); };
-  }, [subscribe, fetchData]);
+  }, [subscribe, fetchData, selectedSymbol]);
 
   // Слушаем выход из fullscreen через браузерное событие (Escape / жест)
   useEffect(() => {
