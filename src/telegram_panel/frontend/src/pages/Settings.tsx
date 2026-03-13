@@ -137,15 +137,6 @@ export function Settings() {
       <div className="flex items-center justify-between">
         <span className="text-lg font-semibold text-tg-text">Settings</span>
         <div className="flex items-center gap-2">
-          {systemInfo.use_new_system ? (
-            <span className="text-[10px] px-2 py-1 rounded bg-green-500/20 text-green-400">
-              new config
-            </span>
-          ) : (
-            <span className="text-[10px] px-2 py-1 rounded bg-amber-500/20 text-amber-400">
-              legacy
-            </span>
-          )}
         </div>
       </div>
 
