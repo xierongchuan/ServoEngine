@@ -462,14 +462,18 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                         hold_score = details.get('potential_score', signal_data.get('score', 0))
                         max_score = details.get('max_potential_score', 8)
                         max_confirmations = details.get('max_confirmations', 6)
-                        indicator_details = details.get('indicator_details', [])
+                        indicators_ok = details.get('indicators_ok', [])
+                        indicators_fail = details.get('indicators_fail', [])
 
                         # Рассчитываем confidence на основе score
                         confidence = hold_score / max_score if max_score > 0 else 0.0
 
-                        # Формируем строку с деталями индикаторов
-                        indicators_str = ", ".join(indicator_details) if indicator_details else "None"
-                        info(f"🔧 [{symbol}] MACDX: No signal (score: {hold_score}/{max_score}, conf: {confirmations}/{max_confirmations}) [{regime_label}] - [{indicators_str}]")
+                        # Формируем детальную строку с индикаторами
+                        ok_str = "; ".join(indicators_ok) if indicators_ok else "Нет"
+                        fail_str = ". ".join(indicators_fail) if indicators_fail else "Нет"
+                        detail_str = f"ПОДТВЕРЖДЕНЫ: {ok_str}. ОТКЛОНЕНЫ: {fail_str}" if indicators_ok or indicators_fail else ""
+
+                        info(f"🔧 [{symbol}] MACDX: No MACD cross (score: {hold_score}/{max_score}, conf: {confirmations}/{max_confirmations}) [{regime_label}]")
                         prediction = {
                             "symbol": symbol,
                             "action": "hold",
@@ -478,7 +482,7 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                             "max_score": max_score,
                             "confirmations": confirmations,
                             "max_confirmations": max_confirmations,
-                            "reason": f"[MACDX] No MACD cross (score: {hold_score}/{max_score}, conf: {confirmations}/{max_confirmations}) - Indicators: {indicators_str} [{regime_label}]",
+                            "reason": f"[MACDX] Нет пересечения MACD (score: {hold_score}/{max_score}). {detail_str} [{regime_label}]",
                             "current_price": current_price
                         }
                     else:
