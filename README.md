@@ -206,9 +206,15 @@ config/
 {
   "strategy": "MACDX",
   "symbols": { "bingx": ["BTC-USDT", "ETH-USDT"] },
+  "symbol_profiles": {
+    "BTC-USDT": "default",
+    "ETH-USDT": "eth_conservative"
+  },
   "disabled_symbols": []
 }
 ```
+
+> **Примечание:** `symbol_profiles` связывает каждый символ с профилем. Профиль должен быть совместим со стратегией (`_strategy`).
 
 ### `config/trading.json` — Торговые параметры
 
@@ -253,6 +259,31 @@ config/
 ### Hot-Reload
 
 Изменения в `config/active.json` и `config/trading.json` подхватываются автоматически каждые 30 секунд. Для `config/base.json` и файлов стратегий требуется перезапуск.
+
+### Профиль-стратегия Привязка
+
+Каждый профиль (`config/profiles/*.json`) теперь имеет поле `_strategy`, указывающее к какой стратегии он относится:
+
+```json
+// config/profiles/btc_aggressive.json
+{
+  "_strategy": "SCALP",
+  "preset": { "leverage": 15 }
+}
+
+// config/profiles/eth_conservative.json
+{
+  "_strategy": "MACDX",
+  "preset": { "leverage": 5 }
+}
+```
+
+**Почему это важно:** Разные стратегии используют несовместимые системы параметров. Например, `min_score_for_signal` означает порог баллов в SCALP, но уровень уверенности (0-1) в HYBRID.
+
+**Правила:**
+- Профиль `default` с `_strategy: null` — универсальный, работает с любой стратегией
+- Символьные профили должны указывать `_strategy`
+- При загрузке конфигурации система проверяет совместимость профиля со стратегией
 
 ---
 
