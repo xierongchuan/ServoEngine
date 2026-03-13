@@ -182,154 +182,62 @@ class MACDXSignalGenerator:
             if macd_hist_prev >= 0 or macd_hist < macd_hist_prev:
                 macd_cross_short = True
 
-        # Fallback: If MACD is zero/unavailable, use EMA crossover
-        # Используем ТОЛЬКО EMA пересечение без OR условия - иначе получаем ложные сигналы
-        # Примечание: analyzer.py выводит "STRONG UP", "STRONG DOWN" (с пробелом)
-        if macd_hist == 0 and ema9 > 0 and ema21 > 0:
-            debug(f"[MACDX] EMA fallback check: macd_hist={macd_hist}, ema9={ema9}, ema21={ema21}, last_5={analysis.get('last_5_direction', 'N/A')}")
-            # LONG: EMA бычий И свечи бычьи
-            if ema9 > ema21 and analysis.get('last_5_direction', '') in ['UP', 'STRONG UP']:
-                macd_cross_long = True
-                debug("[MACDX] Using EMA fallback: LONG signal")
-            # SHORT: EMA медвежий И свечи медвежьи
-            elif ema9 < ema21 and analysis.get('last_5_direction', '') in ['DOWN', 'STRONG DOWN']:
-                macd_cross_short = True
-                debug("[MACDX] Using EMA fallback: SHORT signal")
-        elif ema9 <= 0 or ema21 <= 0:
-            debug(f"[MACDX] EMA values unavailable: ema9={ema9}, ema21={ema21}")
+        # No EMA fallback! Strategy requires MACD crossover (12,26,9) ONLY
+        # Если нет MACD пересечения - это HOLD
 
-        # No MACD signal - HOLD
+        # No MACD signal - HOLD (strategy requires MACD crossover ONLY)
         if not macd_cross_long and not macd_cross_short:
-            info(f"📊 [MACDX] HOLD | No MACD crossover (hist: {macd_hist:.4f})")
-            # Рассчитываем потенциальный score на основе доступных индикаторов
-            # Примечание: analyzer.py выводит "STRONG UP", "STRONG DOWN" (с пробелом)
-            potential_score = 0
-            potential_confirmations = 0
+            info(f"📊 [MACDX] HOLD | No MACD crossover (hist: {macd_hist:.4f}, line: {macd_line:.4f}, signal: {macd_signal_line:.4f})")
 
-            # Детальный список: что сработало, а что нет
-            indicators_ok = []      # Индикаторы которые подтвердили направление
-            indicators_fail = []    # Индикаторы которые НЕ подтвердили
+            # Собираем детальную информацию об индикаторах для отображения (но НЕ используем для сигнала)
+            indicators_ok = []
+            indicators_fail = []
 
-            # Обработка None и пустых значений last_5_direction
-            last_5_dir = last_5_direction if last_5_direction else "MIXED"
-
-            # Проверяем какие индикаторы доступны
-            has_ema_data = ema9 > 0 and ema21 > 0
-            has_rsi_data = 0 < rsi <= 100
-            has_volume_data = volume_ratio > 0
-
-            # Определяем потенциальное направление
-            is_bullish_ema = has_ema_data and ema9 > ema21
-            is_bearish_ema = has_ema_data and ema9 < ema21
-            is_bullish_candles = last_5_dir in ['UP', 'STRONG UP']
-            is_bearish_candles = last_5_dir in ['DOWN', 'STRONG DOWN']
-
-            # Анализ EMA
-            if has_ema_data:
+            # EMA
+            if ema9 > 0 and ema21 > 0:
                 if ema9 > ema21:
                     indicators_ok.append(f"EMA: 9>{21} (бычий)\n")
-                elif ema9 < ema21:
-                    indicators_ok.append(f"EMA: 9<{21} (медвежий)\n")
                 else:
-                    indicators_fail.append(f"EMA: 9={21} (флэт)\n")
+                    indicators_ok.append(f"EMA: 9<{21} (медвежий)\n")
             else:
-                indicators_fail.append(f"EMA: нет данных (ema9={ema9}, ema21={ema21})\n")
+                indicators_fail.append(f"EMA: нет данных\n")
 
-            # Анализ свечей
-            if is_bullish_candles:
+            # Свечи
+            last_5_dir = analysis.get('last_5_direction', 'MIXED')
+            if last_5_dir in ['UP', 'STRONG UP']:
                 indicators_ok.append(f"Свечи: {last_5_dir} (бычий)\n")
-            elif is_bearish_candles:
+            elif last_5_dir in ['DOWN', 'STRONG DOWN']:
                 indicators_ok.append(f"Свечи: {last_5_dir} (медвежий)\n")
             else:
-                indicators_fail.append(f"Свечи: {last_5_dir} (нейтрально)\n")
+                indicators_fail.append(f"Свечи: {last_5_dir}\n")
 
-            # Анализ RSI
-            if has_rsi_data:
-                if rsi <= 65 and rsi >= 35:
-                    if rsi < 45:
-                        indicators_ok.append(f"RSI: {rsi:.1f} (перепроданность)\n")
-                    elif rsi > 55:
-                        indicators_ok.append(f"RSI: {rsi:.1f} (перекупленность)\n")
-                    else:
-                        indicators_ok.append(f"RSI: {rsi:.1f} (нейтрально)\n")
+            # RSI
+            if 0 < rsi <= 100:
+                if rsi < 35:
+                    indicators_fail.append(f"RSI: {rsi:.1f} (перепродан)\n")
                 elif rsi > 65:
-                    indicators_fail.append(f"RSI: {rsi:.1f} > 65 (перекуплен - НЕ входить)\n")
-                elif rsi < 35:
-                    indicators_fail.append(f"RSI: {rsi:.1f} < 35 (перепродан - НЕ входить)\n")
+                    indicators_fail.append(f"RSI: {rsi:.1f} (перекуплен)")
+                else:
+                    indicators_ok.append(f"RSI: {rsi:.1f}\n")
             else:
-                indicators_fail.append(f"RSI: нет данных (rsi={rsi})\n")
+                indicators_fail.append(f"RSI: нет данных\n")
 
-            # Анализ объёма
-            if has_volume_data:
+            # Объём
+            if volume_ratio > 0:
                 if volume_ratio >= 0.8:
-                    indicators_ok.append(f"Объём: {volume_ratio:.1f} (нормальный)\n")
+                    indicators_ok.append(f"Объём: {volume_ratio:.1f}x\n")
                 else:
-                    indicators_fail.append(f"Объём: {volume_ratio:.1f} < 0.8 (слабый)\n")
-            else:
-                indicators_fail.append(f"Объём: нет данных (vol={volume_ratio})\n")
+                    indicators_fail.append(f"Объём: {volume_ratio:.1f}x (слабый)\n")
 
-            # Рассчитываем подтверждения для бычьего сигнала
-            if is_bullish_ema:
-                potential_confirmations += 2
-            if is_bullish_candles:
-                potential_confirmations += 1
-            if has_rsi_data and rsi <= 65:
-                potential_confirmations += 1
-            if has_volume_data and volume_ratio >= 0.8:
-                potential_confirmations += 1
-
-            # Рассчитываем подтверждения для медвежьего сигнала
-            short_confirmations = 0
-            if is_bearish_ema:
-                short_confirmations += 2
-            if is_bearish_candles:
-                short_confirmations += 1
-            if has_rsi_data and rsi >= 35:
-                short_confirmations += 1
-            if has_volume_data and volume_ratio >= 0.8:
-                short_confirmations += 1
-
-            # Выбираем максимальное количество подтверждений
-            if short_confirmations > potential_confirmations:
-                potential_confirmations = short_confirmations
-
-            # Рассчитываем score на основе подтверждений
-            if potential_confirmations >= 4:
-                potential_score = 8
-            elif potential_confirmations >= 3:
-                potential_score = 6
-            elif potential_confirmations >= 2:
-                potential_score = 4
-            elif potential_confirmations >= 1:
-                potential_score = 2
-
-            # Fallback: если нет данных об EMA, но есть направление свечей
-            if not has_ema_data and (is_bullish_candles or is_bearish_candles):
-                if last_5_dir in ['STRONG_UP', 'STRONG_DOWN']:
-                    potential_score = max(potential_score, 5)
-                else:
-                    potential_score = max(potential_score, 3)
-
-            # Формируем детальную строку с результатами
             ok_str = "; ".join(indicators_ok) if indicators_ok else "Нет"
             fail_str = "; ".join(indicators_fail) if indicators_fail else "Нет"
+            reason = f"[MACDX] Нет пересечения MACD. ПОДТВЕРЖДЕНЫ: {ok_str}.\nОТКЛОНЕНЫ: {fail_str}"
 
-            # Краткая строка для логов
-            indicators_summary = f"OK[{len(indicators_ok)}]: {ok_str} | FAIL[{len(indicators_fail)}]: {fail_str}"
-
-            return self._hold_result(max_score, [f"No MACD crossover. {indicators_summary}"],
+            # При отсутствии MACD пересечения - сразу HOLD без расчёта потенциального score
+            return self._hold_result(max_score, [reason],
                                      {"macd_hist": macd_hist, "filter": "no_macd_cross",
-                                      "potential_score": potential_score,
-                                      "max_potential_score": 8,
-                                      "confirmations": potential_confirmations,
-                                      "max_confirmations": 6,
-                                      "last_5_dir": last_5_dir,
-                                      "ema_data": has_ema_data,
-                                      "rsi_data": has_rsi_data,
-                                      "volume_data": has_volume_data,
-                                      "indicators_ok": indicators_ok,
-                                      "indicators_fail": indicators_fail,
-                                      "indicators_summary": indicators_summary}, regime)
+                                      "potential_score": 0, "confirmations": 0,
+                                      "indicators_ok": indicators_ok, "indicators_fail": indicators_fail}, regime)
 
         # === SCORE CONFIRMATIONS ===
         long_score = 0
@@ -342,11 +250,11 @@ class MACDXSignalGenerator:
         # 1. MACD Crossover (Required, already confirmed)
         if macd_cross_long:
             long_score += macd_cross_weight
-            long_reasons.append(f"MACD↑ cross +{macd_cross_weight}")
+            long_reasons.append(f"MACD↑ cross +{macd_cross_weight}\n")
             long_confirmations += 1
         if macd_cross_short:
             short_score += macd_cross_weight
-            short_reasons.append(f"MACD↓ cross +{macd_cross_weight}")
+            short_reasons.append(f"MACD↓ cross +{macd_cross_weight}\n")
             short_confirmations += 1
 
         # 2. RSI Zone (+2)
@@ -360,22 +268,22 @@ class MACDXSignalGenerator:
 
         if macd_cross_long and rsi_long_ok:
             long_score += rsi_weight
-            long_reasons.append(f"RSI {rsi:.0f} in zone +{rsi_weight}")
+            long_reasons.append(f"RSI {rsi:.0f} in zone +{rsi_weight}\n")
             long_confirmations += 1
         elif macd_cross_long and not rsi_long_ok:
-            long_reasons.append(f"RSI {rsi:.0f} outside zone (need {rsi_long_min}-{rsi_long_max})")
+            long_reasons.append(f"RSI {rsi:.0f} outside zone (need {rsi_long_min}-{rsi_long_max})\n")
 
         if macd_cross_short and rsi_short_ok:
             # Блокируем SELL при экстремальной перепроданности
             if rsi_extreme_oversold:
-                short_reasons.append(f"RSI {rsi:.0f} EXTREME OVERSOLD - блокируем SELL")
+                short_reasons.append(f"RSI {rsi:.0f} EXTREME OVERSOLD - блокируем SELL\n")
                 short_score = 0  # Блокируем сигнал
             else:
                 short_score += rsi_weight
-                short_reasons.append(f"RSI {rsi:.0f} in zone +{rsi_weight}")
+                short_reasons.append(f"RSI {rsi:.0f} in zone +{rsi_weight}\n")
                 short_confirmations += 1
         elif macd_cross_short and not rsi_short_ok:
-            short_reasons.append(f"RSI {rsi:.0f} outside zone (need {rsi_short_min}-{rsi_short_max})")
+            short_reasons.append(f"RSI {rsi:.0f} outside zone (need {rsi_short_min}-{rsi_short_max})\n")
 
         # 3. EMA Alignment (+2)
         ema_long = False
@@ -386,20 +294,20 @@ class MACDXSignalGenerator:
                 ema_long = True
                 if macd_cross_long:
                     long_score += ema_weight
-                    long_reasons.append(f"EMA↑ ({ema_diff_pct:.1f}%) +{ema_weight}")
+                    long_reasons.append(f"EMA↑ ({ema_diff_pct:.1f}%) +{ema_weight}\n")
                     long_confirmations += 1
             elif ema9 < ema21:
                 ema_short = True
                 if macd_cross_short:
                     short_score += ema_weight
-                    short_reasons.append(f"EMA↓ ({ema_diff_pct:.1f}%) +{ema_weight}")
+                    short_reasons.append(f"EMA↓ ({ema_diff_pct:.1f}%) +{ema_weight}\n")
                     short_confirmations += 1
 
         # Penalty for counter-trend MACD signals
         if macd_cross_long and ema_short:
-            long_reasons.append("EMA counter-trend (caution)")
+            long_reasons.append("EMA counter-trend (caution)\n")
         if macd_cross_short and ema_long:
-            short_reasons.append("EMA counter-trend (caution)")
+            short_reasons.append("EMA counter-trend (caution)\n")
 
         # 4. Not Sideways (+1) - BB width or ADX check
         is_sideways = False
@@ -413,17 +321,17 @@ class MACDXSignalGenerator:
         if not is_sideways:
             if macd_cross_long:
                 long_score += not_sideways_weight
-                long_reasons.append(f"Not sideways (BB:{bb_width:.1f}% ADX:{adx:.0f}) +{not_sideways_weight}")
+                long_reasons.append(f"Not sideways (BB:{bb_width:.1f}% ADX:{adx:.0f}) +{not_sideways_weight}\n")
                 long_confirmations += 1
             if macd_cross_short:
                 short_score += not_sideways_weight
-                short_reasons.append(f"Not sideways (BB:{bb_width:.1f}% ADX:{adx:.0f}) +{not_sideways_weight}")
+                short_reasons.append(f"Not sideways (BB:{bb_width:.1f}% ADX:{adx:.0f}) +{not_sideways_weight}\n")
                 short_confirmations += 1
         else:
             if macd_cross_long:
-                long_reasons.append(f"Sideways market (BB:{bb_width:.1f}% ADX:{adx:.0f})")
+                long_reasons.append(f"Sideways market (BB:{bb_width:.1f}% ADX:{adx:.0f})\n")
             if macd_cross_short:
-                short_reasons.append(f"Sideways market (BB:{bb_width:.1f}% ADX:{adx:.0f})")
+                short_reasons.append(f"Sideways market (BB:{bb_width:.1f}% ADX:{adx:.0f})\n")
 
         # 5. No Exhaustion (+1) - Check for RSI divergence
         close_prices = analysis.get("close_prices", [])
@@ -434,32 +342,32 @@ class MACDXSignalGenerator:
         if macd_cross_long:
             if not bearish_div:
                 long_score += no_exhaustion_weight
-                long_reasons.append(f"No bearish divergence +{no_exhaustion_weight}")
+                long_reasons.append(f"No bearish divergence +{no_exhaustion_weight}\n")
                 long_confirmations += 1
             else:
                 long_score -= 1  # Penalty for divergence
-                long_reasons.append("Bearish RSI divergence (exhaustion warning) -1")
+                long_reasons.append("Bearish RSI divergence (exhaustion warning) -1\n")
 
         # For short: no bullish divergence
         if macd_cross_short:
             if not bullish_div:
                 short_score += no_exhaustion_weight
-                short_reasons.append(f"No bullish divergence +{no_exhaustion_weight}")
+                short_reasons.append(f"No bullish divergence +{no_exhaustion_weight}\n")
                 short_confirmations += 1
             else:
                 short_score -= 1  # Penalty for divergence
-                short_reasons.append("Bullish RSI divergence (exhaustion warning) -1")
+                short_reasons.append("Bullish RSI divergence (exhaustion warning) -1\n")
 
         # 6. Volume (+1)
         volume_ok = volume_ratio >= 0.8
         if volume_ok:
             if macd_cross_long:
                 long_score += volume_weight
-                long_reasons.append(f"Volume {volume_ratio:.1f}x +{volume_weight}")
+                long_reasons.append(f"Volume {volume_ratio:.1f}x +{volume_weight}\n")
                 long_confirmations += 1
             if macd_cross_short:
                 short_score += volume_weight
-                short_reasons.append(f"Volume {volume_ratio:.1f}x +{volume_weight}")
+                short_reasons.append(f"Volume {volume_ratio:.1f}x +{volume_weight}\n")
                 short_confirmations += 1
 
         # === DETERMINE FINAL SIGNAL ===
