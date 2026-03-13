@@ -79,6 +79,16 @@ def main():
         except Exception as e:
             print(f"❌ Error clearing steps.log: {e}")
 
+    # 2c. steps.log
+    trades_log = data_dir / 'trades.log'
+    if trades_log.exists():
+        try:
+            with open(trades_log, 'w', encoding='utf-8') as f:
+                f.write('')
+            print("✅ Cleared trades.log")
+        except Exception as e:
+            print(f"❌ Error clearing trades.log: {e}")
+
     print("\n🎉 Cleanup completed successfully!")
 
 if __name__ == "__main__":
