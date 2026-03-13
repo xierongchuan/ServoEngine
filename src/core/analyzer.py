@@ -29,10 +29,10 @@ def calculate_ema(prices, period):
 def calculate_macd(prices, fast=12, slow=26, signal=9):
     """
     Рассчитывает MACD (Moving Average Convergence Divergence)
-    Returns: (macd_line, signal_line, histogram)
+    Returns: (macd_line, signal_line, histogram, histogram_prev)
     """
     if len(prices) < slow + signal:
-        return 0, 0, 0
+        return 0, 0, 0, 0
 
     ema_fast = calculate_ema(prices, fast)
     ema_slow = calculate_ema(prices, slow)
@@ -52,7 +52,22 @@ def calculate_macd(prices, fast=12, slow=26, signal=9):
         signal_line = macd_line
 
     histogram = macd_line - signal_line
-    return round(macd_line, 6), round(signal_line, 6), round(histogram, 6)
+
+    # Calculate previous histogram for crossover detection
+    if len(macd_history) >= 2:
+        # Previous MACD line (from before current)
+        macd_line_prev = macd_history[-2] if len(macd_history) >= 2 else macd_line
+        # Previous signal line - approximate using previous values
+        if len(macd_history) >= signal + 1:
+            macd_history_prev = macd_history[:-1]
+            signal_line_prev = calculate_ema(macd_history_prev, signal)
+        else:
+            signal_line_prev = signal_line
+        histogram_prev = macd_line_prev - signal_line_prev
+    else:
+        histogram_prev = histogram
+
+    return round(macd_line, 6), round(signal_line, 6), round(histogram, 6), round(histogram_prev, 6)
 
 
 def calculate_bollinger_bands(prices, period=20, std_mult=2.0):
@@ -542,7 +557,7 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         atr_ratio = 1.0
 
     # MACD calculation
-    macd_line, macd_signal, macd_hist = calculate_macd(close_prices)
+    macd_line, macd_signal, macd_hist, macd_hist_prev = calculate_macd(close_prices)
 
     # Bollinger Bands calculation
     bb_upper, bb_middle, bb_lower, bb_width = calculate_bollinger_bands(close_prices)
@@ -911,6 +926,7 @@ def analyze_symbol(symbol, position=None, decision_context=""):
             "macd_line": macd_line,
             "macd_signal": macd_signal,
             "macd_hist": macd_hist,
+            "macd_hist_prev": macd_hist_prev,
             "bb_upper": bb_upper,
             "bb_lower": bb_lower,
             "bb_width": bb_width,
@@ -970,6 +986,7 @@ def analyze_symbol(symbol, position=None, decision_context=""):
             "macd_line": macd_line,
             "macd_signal": macd_signal,
             "macd_hist": macd_hist,
+            "macd_hist_prev": macd_hist_prev,
             "bb_upper": bb_upper,
             "bb_lower": bb_lower,
             "bb_width": bb_width,

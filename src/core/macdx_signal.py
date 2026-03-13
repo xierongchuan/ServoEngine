@@ -97,6 +97,44 @@ class MACDXSignalGenerator:
             return self._hold_result(max_score, [f"Low volume ({volume_ratio:.2f}x)"],
                                      {"volume_ratio": volume_ratio, "filter": "volume"}, regime)
 
+        # === CONSECUTIVE CANDLE FILTER (Momentum Protection) ===
+        # Get config for this filter
+        consecutive_red_filter = self.rules.get("consecutive_red_filter", True)
+        min_consecutive_for_block = self.rules.get("min_consecutive_for_block", 3)
+        enable_counter_trend_filter = self.rules.get("enable_counter_trend_filter", True)
+        counter_trend_ema_threshold = self.rules.get("counter_trend_ema_threshold", 1.0)
+
+        last_5_direction = analysis.get("last_5_direction", "MIXED")
+
+        # Detect potential crossover for filter use
+        potential_long = macd_line > macd_signal_line and macd_hist > 0 and (macd_hist_prev <= 0 or macd_hist > macd_hist_prev)
+        potential_short = macd_line < macd_signal_line and macd_hist < 0 and (macd_hist_prev >= 0 or macd_hist < macd_hist_prev)
+
+        # Filter 1: Block LONG when strong down momentum
+        if consecutive_red_filter and potential_long and last_5_direction in ["STRONG_DOWN", "DOWN"]:
+            if min_consecutive_for_block == 2:
+                info(f"📊 [MACDX] HOLD | {last_5_direction} momentum blocks LONG")
+                return self._hold_result(max_score, [f"{last_5_direction} momentum blocks LONG"],
+                                         {"last_5_direction": last_5_direction, "filter": "consecutive_red"}, regime)
+            elif min_consecutive_for_block == 3 and last_5_direction == "STRONG_DOWN":
+                info(f"📊 [MACDX] HOLD | {last_5_direction} (3+ reds) blocks LONG")
+                return self._hold_result(max_score, [f"{last_5_direction} (3+ reds) blocks LONG"],
+                                         {"last_5_direction": last_5_direction, "filter": "consecutive_red"}, regime)
+
+        # Filter 2: Counter-trend protection (EMA vs MACD)
+        if enable_counter_trend_filter and ema9 > 0 and ema21 > 0:
+            ema_diff_pct = abs(ema9 - ema21) / ema21 * 100
+
+            if ema9 < ema21 and ema_diff_pct > counter_trend_ema_threshold and potential_long and macd_hist > 0 and macd_hist_prev <= 0:
+                info(f"📊 [MACDX] HOLD | Counter-trend: EMA down {ema_diff_pct:.1f}%")
+                return self._hold_result(max_score, [f"Counter-trend: EMA below by {ema_diff_pct:.1f}%"],
+                                         {"ema_diff_pct": ema_diff_pct, "filter": "counter_trend"}, regime)
+
+            if ema9 > ema21 and ema_diff_pct > counter_trend_ema_threshold and potential_short and macd_hist < 0 and macd_hist_prev >= 0:
+                info(f"📊 [MACDX] HOLD | Counter-trend: EMA up {ema_diff_pct:.1f}%")
+                return self._hold_result(max_score, [f"Counter-trend: EMA above by {ema_diff_pct:.1f}%"],
+                                         {"ema_diff_pct": ema_diff_pct, "filter": "counter_trend"}, regime)
+
         # === DETECT MACD CROSSOVER (PRIMARY SIGNAL) ===
         macd_cross_long = False
         macd_cross_short = False

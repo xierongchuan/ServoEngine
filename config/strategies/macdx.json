@@ -29,6 +29,10 @@
     "rsi_short_max": 75,
     "rsi_short_min": 35,
     "bb_width_threshold": 0.5,
-    "adx_threshold": 20
+    "adx_threshold": 20,
+    "consecutive_red_filter": true,
+    "min_consecutive_for_block": 3,
+    "enable_counter_trend_filter": true,
+    "counter_trend_ema_threshold": 1.0
   }
 }
