@@ -12,5 +12,4 @@ This file provides coding-specific guidance for this repository.
 - **Retry patterns** - BingX API uses 3 retries (1s→2s→4s), LLM uses exponential backoff; always wrap API calls in retry logic
 - **File path resolution** - Always use `os.path.join(os.path.dirname(os.path.dirname(__file__)), 'file')` for project-relative paths
 - **Symbol format** - Exchange symbols must use hyphen format "BTC-USDT", never "BTCUSDT" or "BTC_USDT"
-- **Import order** - Standard library → third-party → local (`from src.core import ...`)
 - **Error handling** - Log with emoji prefixes (✅, ❌, ⚠️) before raising or continuing

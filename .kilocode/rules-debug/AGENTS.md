@@ -7,9 +7,8 @@ This file provides debugging-specific guidance for this repository.
 ## Non-Obvious Debug Rules
 
 - **Test isolation** - Use `reset_class_cache()` fixture in tests to clear BingXClient caches between tests
-- **Container required** - Always run tests in podman container; host system may have different Python environment
 - **Cache behavior** - BingXClient caches positions (5s) and balance (10s); stale cache can cause misleading debug output
 - **Worker process logs** - Check `data/logs/{SYMBOL}.log` for per-symbol worker process logs
-- **Trade tracking** - `data/active_trades.json` and `data/trade_history.json` contain position state
+- **Trade tracking files** - `data/active_trades.json` and `data/trade_history.json` contain position state
 - **Retry failures** - Check `data/steps.log` for retry attempts and exponential backoff timing
-- **Strategy-specific** - HYBRID vs HYBRID_VETO behave differently; check `bot_config.json` for active strategy
+- **Strategy-specific behavior** - HYBRID vs HYBRID_VETO differ significantly; check `config/active.json` for active strategy

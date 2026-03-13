@@ -12,7 +12,7 @@
   "symbol_profiles": {
     "BTCUSDT": "default",
     "SOLUSDT": "default",
-    "ETHUSDT": "default"
+    "ETHUSDT": "eth_conservative"
   },
   "disabled_symbols": []
 }
