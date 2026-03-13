@@ -110,16 +110,31 @@ class MACDXSignalGenerator:
         potential_long = macd_line > macd_signal_line and macd_hist > 0 and (macd_hist_prev <= 0 or macd_hist > macd_hist_prev)
         potential_short = macd_line < macd_signal_line and macd_hist < 0 and (macd_hist_prev >= 0 or macd_hist < macd_hist_prev)
 
-        # Filter 1: Block LONG when strong down momentum
-        if consecutive_red_filter and potential_long and last_5_direction in ["STRONG_DOWN", "DOWN"]:
-            if min_consecutive_for_block == 2:
-                info(f"📊 [MACDX] HOLD | {last_5_direction} momentum blocks LONG")
-                return self._hold_result(max_score, [f"{last_5_direction} momentum blocks LONG"],
-                                         {"last_5_direction": last_5_direction, "filter": "consecutive_red"}, regime)
-            elif min_consecutive_for_block == 3 and last_5_direction == "STRONG_DOWN":
-                info(f"📊 [MACDX] HOLD | {last_5_direction} (3+ reds) blocks LONG")
-                return self._hold_result(max_score, [f"{last_5_direction} (3+ reds) blocks LONG"],
-                                         {"last_5_direction": last_5_direction, "filter": "consecutive_red"}, regime)
+        # Filter 1: Block LONG when BOTH conditions met:
+        # 1) Consecutive red candles (momentum)
+        # 2) MACD histogram shows bearish momentum (negative or declining)
+        if consecutive_red_filter and potential_long:
+            has_bearish_momentum = macd_hist < 0 or (macd_hist_prev < macd_hist)
+            has_consecutive_reds = last_5_direction in ["STRONG_DOWN", "DOWN"]
+
+            if has_consecutive_reds and has_bearish_momentum:
+                should_block = False
+                block_reason = ""
+
+                if last_5_direction == "STRONG_DOWN":
+                    should_block = True
+                    block_reason = f"STRONG_DOWN (4+ reds) + bearish MACD momentum"
+                elif last_5_direction == "DOWN" and min_consecutive_for_block == 2:
+                    should_block = True
+                    block_reason = f"DOWN (3 reds) + bearish MACD momentum"
+                elif last_5_direction == "DOWN" and macd_hist < 0:
+                    should_block = True
+                    block_reason = f"DOWN (3 reds) + negative MACD histogram"
+
+                if should_block:
+                    info(f"📊 [MACDX] HOLD | {block_reason}")
+                    return self._hold_result(max_score, [block_reason],
+                                             {"last_5_direction": last_5_direction, "filter": "consecutive_red_momentum"}, regime)
 
         # Filter 2: Counter-trend protection (EMA vs MACD)
         if enable_counter_trend_filter and ema9 > 0 and ema21 > 0:
