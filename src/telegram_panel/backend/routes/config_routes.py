@@ -724,6 +724,7 @@ async def list_profiles(_user: dict = Depends(get_current_user)) -> dict:
                 "name": name,
                 "description": config.get("_description", ""),
                 "inherits": config.get("_inherits"),
+                "_strategy": config.get("_strategy"),
                 "preset": config.get("preset", {}),
                 "position": config.get("position", {}),
                 "signal_rules": config.get("signal_rules", {}),

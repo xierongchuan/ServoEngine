@@ -16,6 +16,8 @@ import {
   deleteProfile,
   cloneProfile,
   getProfileUsage,
+  autoCreateProfile,
+  updateProfile,
   type ConfigSystemInfo,
   type ActiveConfig,
   type TradingConfig,
@@ -168,7 +170,7 @@ export function Settings() {
               tab === t ? 'bg-tg-button text-white' : 'text-tg-hint hover:text-tg-text'
             }`}
           >
-            {t === 'strategy' ? 'Strategy' : t === 'trading' ? 'Position & Risk' : t === 'infrastructure' ? 'AI Settings' : t === 'profiles' ? 'Features' : 'Symbols'}
+            {t === 'strategy' ? 'Strategy' : t === 'trading' ? 'Position & Risk' : t === 'infrastructure' ? 'AI Settings' : t === 'profiles' ? 'Profiles' : 'Symbols'}
           </button>
         ))}
       </div>
@@ -209,9 +211,10 @@ export function Settings() {
         />
       )}
 
-      {tab === 'infrastructure' && baseConfig && (
+      {tab === 'infrastructure' && baseConfig && strategies && (
         <InfrastructureTab
           config={baseConfig}
+          strategies={strategies}
           onUpdate={async (data) => {
             try {
               const result = await updateBaseConfig(data);
@@ -298,6 +301,10 @@ function StrategyTab({
 }) {
   const [selectedStrategy, setSelectedStrategy] = useState(activeConfig.strategy);
   const [saving, setSaving] = useState(false);
+  const [createProfileModal, setCreateProfileModal] = useState<{ open: boolean; strategy: string }>({ open: false, strategy: '' });
+  const [profileName, setProfileName] = useState('');
+  const [creatingProfile, setCreatingProfile] = useState(false);
+  const [createProfileError, setCreateProfileError] = useState<string | null>(null);
 
   const currentStrategy = strategies.strategies[selectedStrategy];
 
@@ -308,6 +315,31 @@ function StrategyTab({
       await onUpdate({ strategy: selectedStrategy });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCreateProfile = async () => {
+    if (!profileName.trim()) return;
+    setCreatingProfile(true);
+    setCreateProfileError(null);
+    try {
+      const strategySettings = strategies.strategies[createProfileModal.strategy];
+      await autoCreateProfile({
+        name: profileName.trim(),
+        strategy: createProfileModal.strategy,
+        settings: {
+          preset: strategySettings?.preset || {},
+        },
+        switch_from_default: true,
+      });
+      setCreateProfileModal({ open: false, strategy: '' });
+      setProfileName('');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create profile';
+      setCreateProfileError(message);
+      console.error('Failed to create profile:', err);
+    } finally {
+      setCreatingProfile(false);
     }
   };
 
@@ -397,6 +429,55 @@ function StrategyTab({
         >
           {saving ? 'Saving...' : `Switch to ${selectedStrategy}`}
         </button>
+      )}
+
+      {/* Create Profile Button */}
+      <button
+        onClick={() => setCreateProfileModal({ open: true, strategy: selectedStrategy })}
+        className="w-full py-3 bg-tg-section-bg text-tg-text font-medium rounded-xl border border-white/10 hover:border-white/20 transition-colors"
+      >
+        + Create Profile from {selectedStrategy}
+      </button>
+
+      {/* Create Profile Modal */}
+      {createProfileModal.open && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-tg-section-bg rounded-xl p-4 w-[280px] shadow-xl">
+            <h3 className="text-sm font-medium text-tg-text mb-3">Create Profile</h3>
+            <p className="text-xs text-tg-hint mb-3">
+              Create a profile based on {createProfileModal.strategy} strategy.
+              <br />
+              <span className="text-amber-400">Symbols using "default" will be switched to this new profile.</span>
+            </p>
+            <input
+              type="text"
+              value={profileName}
+              onChange={(e) => setProfileName(e.target.value)}
+              placeholder="Enter profile name (optional)"
+              className="w-full px-3 py-2 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-sm mb-2 focus:outline-none focus:border-tg-button"
+              autoFocus
+              onKeyDown={(e) => e.key === 'Enter' && handleCreateProfile()}
+            />
+            {createProfileError && (
+              <p className="text-xs text-red-400 mb-3">{createProfileError}</p>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCreateProfileModal({ open: false, strategy: '' })}
+                className="flex-1 py-2 rounded-lg bg-tg-bg text-tg-text text-sm font-medium hover:bg-white/10"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateProfile}
+                disabled={creatingProfile}
+                className="flex-1 py-2 rounded-lg bg-tg-button text-white text-sm font-medium hover:bg-tg-button/80 disabled:opacity-50"
+              >
+                {creatingProfile ? 'Creating...' : 'Create'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -565,14 +646,21 @@ function TradingTab({
 
 function InfrastructureTab({
   config,
+  strategies,
   onUpdate,
 }: {
   config: BaseConfig;
+  strategies?: StrategiesResponse;
   onUpdate: (data: Partial<BaseConfig>) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [localConfig, setLocalConfig] = useState(config);
   const [saving, setSaving] = useState(false);
+  const [createProfileModal, setCreateProfileModal] = useState(false);
+  const [profileName, setProfileName] = useState('');
+  const [selectedStrategy, setSelectedStrategy] = useState<string>('');
+  const [creatingProfile, setCreatingProfile] = useState(false);
+  const [createProfileError, setCreateProfileError] = useState<string | null>(null);
 
   const handleSave = async () => {
     setSaving(true);
@@ -582,6 +670,38 @@ function InfrastructureTab({
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleCreateProfile = async () => {
+    if (!profileName.trim()) return;
+    setCreatingProfile(true);
+    setCreateProfileError(null);
+    try {
+      const strategySettings = strategies?.strategies[selectedStrategy];
+      await autoCreateProfile({
+        name: profileName.trim(),
+        strategy: selectedStrategy,
+        settings: {
+          preset: strategySettings?.preset || {},
+        },
+        switch_from_default: true,
+      });
+      setCreateProfileModal(false);
+      setProfileName('');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create profile';
+      setCreateProfileError(message);
+      console.error('Failed to create profile:', err);
+    } finally {
+      setCreatingProfile(false);
+    }
+  };
+
+  const openCreateProfileModal = () => {
+    setSelectedStrategy(strategies?.available[0] || '');
+    setProfileName('');
+    setCreateProfileError(null);
+    setCreateProfileModal(true);
   };
 
   const updateAI = (key: string, value: any) => {
@@ -703,6 +823,75 @@ function InfrastructureTab({
           {saving ? 'Saving...' : 'Save Infrastructure Settings'}
         </button>
       )}
+
+      {/* Create Profile Button */}
+      <button
+        onClick={openCreateProfileModal}
+        className="w-full py-3 bg-tg-section-bg text-tg-text font-medium rounded-xl border border-white/10 hover:border-white/20 transition-colors"
+      >
+        + Create Profile
+      </button>
+
+      {/* Create Profile Modal */}
+      {createProfileModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-tg-section-bg rounded-xl p-4 w-[280px] shadow-xl">
+            <h3 className="text-sm font-medium text-tg-text mb-3">Create Profile</h3>
+            <p className="text-xs text-tg-hint mb-3">
+              Create a new profile for symbol configuration.
+              <br />
+              <span className="text-amber-400">Symbols using "default" will be switched to this new profile.</span>
+            </p>
+
+            {/* Strategy Selector */}
+            {strategies && (
+              <div className="mb-3">
+                <label className="text-xs text-tg-hint mb-1 block">Strategy</label>
+                <select
+                  value={selectedStrategy}
+                  onChange={(e) => setSelectedStrategy(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-sm focus:outline-none focus:border-tg-button"
+                >
+                  {strategies.available.map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <input
+              type="text"
+              value={profileName}
+              onChange={(e) => setProfileName(e.target.value)}
+              placeholder="Enter profile name (optional)"
+              className="w-full px-3 py-2 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-sm mb-2 focus:outline-none focus:border-tg-button"
+              autoFocus
+              onKeyDown={(e) => e.key === 'Enter' && handleCreateProfile()}
+            />
+            {createProfileError && (
+              <p className="text-xs text-red-400 mb-3">{createProfileError}</p>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setCreateProfileModal(false);
+                  setCreateProfileError(null);
+                }}
+                className="flex-1 py-2 rounded-lg bg-tg-bg text-tg-text text-sm font-medium hover:bg-white/10"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateProfile}
+                disabled={creatingProfile}
+                className="flex-1 py-2 rounded-lg bg-tg-button text-white text-sm font-medium hover:bg-tg-button/80 disabled:opacity-50"
+              >
+                {creatingProfile ? 'Creating...' : 'Create'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -722,6 +911,10 @@ function ProfilesTab({
   const [cloneModal, setCloneModal] = useState<{ open: boolean; sourceName: string }>({ open: false, sourceName: '' });
   const [cloneName, setCloneName] = useState('');
   const [cloneLoading, setCloneLoading] = useState(false);
+  const [editModal, setEditModal] = useState<{ open: boolean; name: string; profile: any }>({ open: false, name: '', profile: null });
+  const [editLoading, setEditLoading] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [profileFilter, setProfileFilter] = useState<string>('all');
 
   // Load profile usages in parallel
   useEffect(() => {
@@ -744,8 +937,31 @@ function ProfilesTab({
   }, [profiles.available]);
 
   const handleEdit = async (name: string) => {
-    // TODO: Open profile editor modal
-    console.log('Edit profile:', name);
+    const profile = profiles.profiles[name];
+    setEditError(null);
+    setEditModal({ open: true, name, profile: profile || null });
+  };
+
+  const handleEditSave = async () => {
+    if (!editModal.name || !editModal.profile) return;
+    setEditLoading(true);
+    setEditError(null);
+    try {
+      // Ensure _description is set for the backend
+      const profileData = {
+        ...editModal.profile,
+        _description: editModal.profile._description || '',
+      };
+      await updateProfile(editModal.name, profileData as unknown as Record<string, unknown>);
+      setEditModal({ open: false, name: '', profile: null });
+      onRefresh();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update profile';
+      setEditError(message);
+      console.error('Failed to update profile:', err);
+    } finally {
+      setEditLoading(false);
+    }
   };
 
   const handleClone = async (name: string) => {
@@ -784,28 +1000,70 @@ function ProfilesTab({
     }
   };
 
+  // Group profiles by strategy
+  const profilesByStrategy = profiles.available.reduce<Record<string, string[]>>((acc, name) => {
+    const profile = profiles.profiles[name];
+    const strategy = profile?._strategy || 'Other';
+    if (!acc[strategy]) acc[strategy] = [];
+    acc[strategy].push(name);
+    return acc;
+  }, {});
+
+  const strategyGroups = Object.entries(profilesByStrategy).sort(([a], [b]) => {
+    // Put 'default' first, then alphabetical
+    if (a === 'default') return -1;
+    if (b === 'default') return 1;
+    return a.localeCompare(b);
+  });
+
   return (
     <div className="flex flex-col gap-4">
-      <Section title="Available Profiles">
-        <div className="flex flex-col gap-2">
-          {profiles.available.map((name) => {
-            const profile = profiles.profiles[name];
-            const usage = profileUsages[name];
-            return (
-              <ProfileCard
-                key={name}
-                name={name}
-                profile={profile}
-                isUsed={usage?.isUsed ?? false}
-                usageCount={usage?.usageCount ?? 0}
-                onEdit={() => handleEdit(name)}
-                onClone={() => handleClone(name)}
-                onDelete={() => handleDelete(name)}
-              />
-            );
-          })}
-        </div>
-      </Section>
+      {/* Profile Filter Sub-tabs */}
+      <div className="flex gap-1 bg-tg-section-bg p-1 rounded-xl overflow-x-auto no-scrollbar">
+        <button
+          onClick={() => setProfileFilter('all')}
+          className={`text-xs py-1.5 px-3 rounded-lg transition-colors whitespace-nowrap ${
+            profileFilter === 'all' ? 'bg-tg-button text-white' : 'text-tg-hint hover:text-tg-text'
+          }`}
+        >
+          All ({profiles.available.length})
+        </button>
+        {strategyGroups.map(([strategy, names]) => (
+          <button
+            key={strategy}
+            onClick={() => setProfileFilter(strategy)}
+            className={`text-xs py-1.5 px-3 rounded-lg transition-colors whitespace-nowrap ${
+              profileFilter === strategy ? 'bg-tg-button text-white' : 'text-tg-hint hover:text-tg-text'
+            }`}
+          >
+            {strategy === 'Other' ? 'Other' : strategy} ({names.length})
+          </button>
+        ))}
+      </div>
+
+      {/* Profile Sections */}
+      {(profileFilter === 'all' ? strategyGroups : strategyGroups.filter(([s]) => s === profileFilter)).map(([strategy, names]) => (
+        <Section key={strategy} title={strategy === 'Other' ? 'Other Profiles' : `${strategy} Profiles`}>
+          <div className="flex flex-col gap-2">
+            {names.map((name) => {
+              const profile = profiles.profiles[name];
+              const usage = profileUsages[name];
+              return (
+                <ProfileCard
+                  key={name}
+                  name={name}
+                  profile={profile}
+                  isUsed={usage?.isUsed ?? false}
+                  usageCount={usage?.usageCount ?? 0}
+                  onEdit={() => handleEdit(name)}
+                  onClone={() => handleClone(name)}
+                  onDelete={() => handleDelete(name)}
+                />
+              );
+            })}
+          </div>
+        </Section>
+      ))}
 
       {/* Info */}
       <div className="text-xs text-tg-hint px-3 py-2 rounded-lg bg-tg-section-bg">
@@ -842,6 +1100,100 @@ function ProfilesTab({
                 className="flex-1 py-2 rounded-lg bg-tg-button text-white text-sm font-medium hover:bg-tg-button/80 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {cloneLoading ? 'Cloning...' : 'Clone'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Profile Modal */}
+      {editModal.open && editModal.profile && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-tg-section-bg rounded-xl p-4 w-[300px] max-h-[80vh] overflow-y-auto shadow-xl">
+            <h3 className="text-sm font-medium text-tg-text mb-3">Edit Profile: {editModal.name}</h3>
+
+            {/* Description */}
+            <div className="mb-3">
+              <label className="text-xs text-tg-hint mb-1 block">Description</label>
+              <input
+                type="text"
+                value={editModal.profile._description || editModal.profile.description || ''}
+                onChange={(e) => setEditModal({
+                  ...editModal,
+                  profile: { ...editModal.profile, _description: e.target.value }
+                })}
+                className="w-full px-3 py-2 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-sm focus:outline-none focus:border-tg-button"
+              />
+            </div>
+
+            {/* Preset Settings */}
+            {editModal.profile.preset && Object.keys(editModal.profile.preset).length > 0 && (
+              <div className="mb-3">
+                <div className="text-xs text-tg-hint mb-2 uppercase">Preset Settings</div>
+                {Object.entries(editModal.profile.preset).map(([key, value]) => (
+                  <div key={key} className="flex items-center gap-2 mb-2">
+                    <span className="text-xs text-tg-text w-24 truncate">{key}</span>
+                    <input
+                      type="text"
+                      value={String(value)}
+                      onChange={(e) => setEditModal({
+                        ...editModal,
+                        profile: {
+                          ...editModal.profile,
+                          preset: { ...editModal.profile.preset, [key]: e.target.value }
+                        }
+                      })}
+                      className="flex-1 px-2 py-1 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-xs focus:outline-none focus:border-tg-button"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Position Settings */}
+            {editModal.profile.position && Object.keys(editModal.profile.position).length > 0 && (
+              <div className="mb-3">
+                <div className="text-xs text-tg-hint mb-2 uppercase">Position Settings</div>
+                {Object.entries(editModal.profile.position).map(([key, value]) => (
+                  <div key={key} className="flex items-center gap-2 mb-2">
+                    <span className="text-xs text-tg-text w-24 truncate">{key}</span>
+                    <input
+                      type="text"
+                      value={String(value)}
+                      onChange={(e) => setEditModal({
+                        ...editModal,
+                        profile: {
+                          ...editModal.profile,
+                          position: { ...editModal.profile.position, [key]: e.target.value }
+                        }
+                      })}
+                      className="flex-1 px-2 py-1 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-xs focus:outline-none focus:border-tg-button"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {editError && (
+              <p className="text-xs text-red-400 mb-3">{editError}</p>
+            )}
+
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => {
+                  setEditModal({ open: false, name: '', profile: null });
+                  setEditError(null);
+                }}
+                className="flex-1 py-2 rounded-lg bg-tg-bg text-tg-text text-sm font-medium hover:bg-white/10"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleEditSave}
+                disabled={editLoading}
+                className="flex-1 py-2 rounded-lg bg-tg-button text-white text-sm font-medium hover:bg-tg-button/80 disabled:opacity-50"
+              >
+                {editLoading ? 'Saving...' : 'Save'}
               </button>
             </div>
           </div>
