@@ -59,9 +59,16 @@
 - **Performance Tracking**: Отслеживание win rate, PnL, стриков по режимам с автоматическими рекомендациями по калибровке.
 
 ### Визуализация
-- **12 временных диапазонов**: От 15 минут до 14 дней.
-- **Параллельная генерация**: Графики создаются в отдельном процессе через ProcessPoolExecutor.
-- **Индикаторы на графиках**: Candlestick + SMA (10/20/50/100/200) + RSI + SEB + позиция + SL/TP.
+- **12 временных диапазонов**: От 15 минут до 14 дней (plotter_ranges: 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1D, 2D, 3D, 1W, 14D)
+- **Параллельная генерация**: Графики создаются в отдельном процессе через ProcessPoolExecutor
+- **Индикаторы на графиках**: Candlestick + SMA (10/20/50/100/200) + RSI + SEB + позиция + SL/TP
+- **Автообновление**: Chart worker обновляет графики каждые N секунд
+
+### Системные особенности
+- **Singleton паттерн**: `MarketRegimeDetector` и `PerformanceTracker` инициализируются один раз на процесс
+- **Кэширование на уровне класса**: `BingXClient` имеет кэширование на уровне класса (позиции 5s TTL, баланс 10s TTL)
+- **Retry логика**: BingX API использует 3 попытки (1s→2s→4s), LLM — экспоненциальный backoff
+- **Hot-reload**: config/active.json и config/trading.json проверяются каждые 30 секунд
 
 ---
 
@@ -76,6 +83,7 @@
 | **SWING** | 1h | 4h | 5x | Многодневное удержание (2-14 дней). Min hold 24h, cooldown 6h. Milestone exits. Широкие стопы (3x ATR) |
 | **GRID** | 1m | 5s | 5x | Сетка лимитных ордеров. Inventory management. ADX-based pause при сильном тренде |
 | **HYBRID** | 5m | 60s | 10x | Детерминированные сигналы (scoring 0-10) + AI подтверждение. Авто-выполнение при quality >= 0.7, AI veto для borderline |
+| **HYBRID_VETO** | 5m | 60s | 10x | Только AI veto (APPROVE/REJECT на английском). Детерминированный скоринг отключён |
 | **MACDX** | 15m | 60s | 10x | **Без AI** — чистый MACD crossover с 3-5 подтверждениями. Полностью детерминированное выполнение |
 
 ### Система скоринга сигналов (HYBRID/AISCALP)
@@ -138,6 +146,9 @@
 - **Аккаунт BingX**: Для торговли (Standard Futures)
 - **OpenRouter API key**: Для AI-анализа
 
+> [!IMPORTANT]
+> Все операции (запуск, тестирование, сборка) должны использовать **podman** контейнеры. Не запускайте Python или npm команды напрямую на хосте.
+
 ### Установка
 
 1. **Клонируйте репозиторий:**
@@ -196,7 +207,7 @@ config/
   strategies/         # Настройки стратегий
     scalp.json, aiscalp.json, swing.json, grid.json, hybrid.json, macdx.json
   profiles/           # Per-symbol переопределения
-    default.json, btc_aggressive.json, eth_conservative.json
+    default.json, btc_aggressive.json
   active.json         # Активная стратегия + символы + профили
 ```
 
@@ -205,16 +216,16 @@ config/
 ```json
 {
   "strategy": "MACDX",
-  "symbols": { "bingx": ["BTC-USDT", "ETH-USDT"] },
+  "symbols": { "bingx": ["BTCUSDT", "ETHUSDT"] },
   "symbol_profiles": {
-    "BTC-USDT": "default",
-    "ETH-USDT": "eth_conservative"
+    "BTCUSDT": "btc_aggressive",
+    "ETHUSDT": "default"
   },
   "disabled_symbols": []
 }
 ```
 
-> **Примечание:** `symbol_profiles` связывает каждый символ с профилем. Профиль должен быть совместим со стратегией (`_strategy`).
+> **Примечание:** Система использует формат символов BingX API — "BTCUSDT" (без дефиса). Код автоматически нормализует символы между форматами.
 
 ### `config/trading.json` — Торговые параметры
 
@@ -251,9 +262,27 @@ config/
 
 Дополнительные параметры:
 - **SCALP**: `loops.fast_interval` (1.5s), `loops.slow_interval` (45s), `time_exit.max_hold_minutes` (15), `breakeven`, `trailing`
+- **SCALP_VETO**: Только AI veto, отключает deterministic scoring
+- **SCALP_REGIME**: Добавляет regime-based адаптацию параметров
 - **AISCALP**: `htf_timeframe` (1h), session-based filtering, `pre_filter` (skip dead markets)
+
+#### Торговые сессии (AISCALP)
+
+Стратегия AISCALP использует временные торговые сессии для фильтрации:
+
+| Сессия | Время (UTC) | Описание |
+|--------|-------------|----------|
+| ASIAN | 00:00-08:00 | Низкая волатильность |
+| EUROPEAN | 07:00-15:00 | Средняя активность |
+| US | 13:00-21:00 | Высокая волатильность |
+| Overlap | 13:00-15:00 | Максимальная ликвидность (бонус) |
+| Dead Zone | 21:00-23:00 | Пониженная активность (штраф) |
+
 - **SWING**: `min_hold_hours` (24), `cooldown_after_close_hours` (6)
+- **SWING_VETO**: Только AI veto для долгосрочных решений
 - **GRID**: `grid_levels` (5), `grid_spacing_pct` (0.3%), `inventory_limit`, `emergency_stop_loss_pct`
+- **HYBRID**: Deterministic scoring + AI confirmation
+- **HYBRID_VETO**: AI veto only (APPROVE/REJECT English-only)
 - **MACDX**: `signal_rules` — веса индикаторов, пороги RSI, min_score, min_confirmations
 
 ### Hot-Reload
@@ -271,10 +300,10 @@ config/
   "preset": { "leverage": 15 }
 }
 
-// config/profiles/eth_conservative.json
+// config/profiles/default.json
 {
-  "_strategy": "MACDX",
-  "preset": { "leverage": 5 }
+  "_strategy": null,
+  "preset": { "leverage": 10 }
 }
 ```
 
@@ -322,11 +351,13 @@ src/
 │   ├── process_worker.py           # Оркестратор цикла (per-symbol)
 │   ├── collector.py                # Сбор OHLCV данных
 │   ├── analyzer.py                 # Технический анализ (EMA, RSI, MACD, ATR, BB, SEB, S/R)
+│   ├── lightweight_analyzer.py    # Быстрый расчёт индикаторов для fast-loop
 │   ├── signal_generator.py         # Детерминированный скоринг (HYBRID)
 │   ├── aiscalp_signal.py           # Multi-TF скоринг (AISCALP)
 │   ├── macdx_signal.py             # MACD crossover скоринг (MACDX) — без AI
 │   ├── scalp_engine.py             # Dual-loop движок (SCALP)
 │   ├── scalp_signal.py             # Скоринг с OB/VWAP (SCALP)
+│   ├── scalp_performance.py        # Отслеживание перформанса (SCALP)
 │   ├── regime.py                   # Детектор рыночного режима
 │   ├── risk_manager.py             # Dynamic SL/TP + позиционный sizing
 │   ├── predict.py                  # LLM вызовы + smart filter
@@ -338,16 +369,27 @@ src/
 │   ├── plotter.py                  # Генерация графиков (matplotlib)
 │   ├── chart_worker.py             # Параллельная генерация (ProcessPoolExecutor)
 │   ├── grid_worker.py              # Grid стратегия (воркер)
-│   └── grid_executor.py            # Grid стратегия (ордера)
+│   ├── grid_executor.py            # Grid стратегия (ордера)
+│   └── session.py                  # Управление торговыми сессиями
 ├── exchanges/                      # Слой биржи
 │   ├── exchange_client.py          # Абстрактный интерфейс
 │   ├── bingx_client.py             # BingX реализация (HMAC-SHA256)
 │   ├── exchange_factory.py         # Factory pattern
-│   └── ws_data_provider.py         # WebSocket кэш свечей
+│   └── ws_data_provider.py        # WebSocket кэш свечей
 ├── prompts/                        # AI промпт система
 │   ├── builder.py                  # Модульная сборка промптов
 │   ├── blocks/                     # Текстовые блоки (10 файлов)
-│   └── strategies/                 # 10 стратегий (Scalp/AiScalp/Swing/Grid/Hybrid/MACDX + варианты)
+│   │       role.txt, principles.txt, context_table.txt,
+│   │       decision_history.txt, market_analysis.txt,
+│   │       response_format.txt, risk_table.txt,
+│   │       position_management.txt, special_situations.txt,
+│   │       candle_history.txt
+│   └── strategies/                 # 11 стратегий промптов
+│       ├── base.py                 # Базовый класс
+│       ├── scalp.py, scalp_veto.py, scalp_regime.py
+│       ├── aiscalp.py, swing.py, swing_veto.py
+│       ├── grid.py, hybrid.py, hybrid_veto.py
+│       └── macdx.py
 ├── utils/                          # Утилиты
 │   ├── logger.py                   # Логирование (per-symbol + StageTimer)
 │   ├── helpers.py                  # Вспомогательные функции
@@ -357,7 +399,14 @@ src/
 │   ├── run_panel.py                # FastAPI + Telegram Bot
 │   ├── bot.py                      # Telegram команды + уведомления
 │   ├── backend/                    # FastAPI API (REST + WebSocket)
+│   │   ├── app.py, config.py, ws.py
+│   │   ├── routes/                 # API эндпоинты
+│   │   │   dashboard, trades, charts, logs,
+│   │   │   config_routes, journal
+│   │   └── services/               # Сервисы
+│   │       ├── auth.py, data_reader.py, file_watcher.py
 │   └── frontend/                   # React 18 + TypeScript + TailwindCSS
+│       └── src/pages/             # Dashboard, Charts, Trades, Logs, Journal, Settings
 └── config.py                       # Загрузчик конфигурации + hot-reload
 ```
 
@@ -438,14 +487,31 @@ tail -f data/logs/BTCUSDT.log
 
 ### Данные (data/)
 
-| Файл | Описание |
-|------|----------|
+| Файл/Папка | Описание |
+|------------|----------|
 | `active_trades.json` | Открытые позиции (с entry regime/score/quality) |
 | `trade_history.json` | Закрытые сделки (с net PnL и fees) |
 | `decision_journal.json` | История AI-решений, trade plans, cooldowns |
 | `calibration_suggestions.json` | Рекомендации по калибровке от PerformanceTracker |
 | `prices/{SYMBOL}.json` | Кэш OHLCV свечей |
 | `news/{SYMBOL}.json` | Кэш новостей |
+| `logs/{SYMBOL}.log` | Логи по каждому символу |
+| `charts/` | Сгенерированные PNG графики |
+| `steps.log` | Главный лог запуска/остановки процессов |
+| `trades.log` | Сводка всех сделок |
+
+### Порядок загрузки конфигурации
+
+Конфигурация загружается в следующем порядке (позже переопределяет ранее):
+```
+1. .env файл (переменные окружения)
+2. hardcoded defaults (src/config.py)
+3. config/base.json (инфраструктура)
+4. config/trading.json (торговые параметры)
+5. config/strategies/{strategy}.json (настройки стратегии)
+6. config/profiles/{profile}.json (символьные профили)
+7. config/active.json (runtime выбор стратегии и профилей)
+```
 
 ```bash
 # Мониторинг в реальном времени
@@ -476,6 +542,21 @@ tail -f data/trades.log          # все сделки
 - API недоступен или модель перегружена.
 - Проверьте `request_timeout` (по умолчанию 60 секунд).
 - Настройте `fallback_models` для автоматического переключения.
+- Проверьте `reasoning.exclude: true` для reasoning-моделей.
+
+### Бот падает с ошибкой `Singleton instance already exists`
+- Перезапустите все процессы: остановите бота и запустите заново
+- Убедитесь что нет zombie процессов: `ps aux | grep python`
+
+### Позиции не синхронизируются
+- Проверьте баланс счёта через API: `get_balance()`
+- Убедитесь что режим (demo/real) соответствует ожидаемому
+- Проверьте логи на предмет ошибок авторизации
+
+### Графики не генерируются
+- Проверьте что matplotlib установлен в контейнере
+- Проверьте права на запись в `data/charts/`
+- Убедитесь что `chart_settings.enabled: true` в config/base.json
 
 ### Проблемы с Telegram Panel
 - Убедитесь что `TELEGRAM_BOT_TOKEN` задан в `.env`.
