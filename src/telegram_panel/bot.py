@@ -7,6 +7,7 @@ and an inline button to launch the Telegram Mini App.
 import json
 import logging
 import os
+import secrets
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -309,19 +310,121 @@ async def cmd_reload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List all available commands."""
     text = (
-        "/start  - Welcome message and Mini App launcher\n"
-        "/status - Quick status overview\n"
-        "/trades - List active positions\n"
-        "/chart  - Send latest chart (optional: /chart ETHUSDT)\n"
-        "/logs   - Last 20 lines of system log\n"
-        "/config - Configuration summary\n"
-        "/stop   - Stop trading for symbol (e.g., /stop BTCUSDT)\n"
-        "/resume - Resume trading for symbol (e.g., /resume BTCUSDT)\n"
-        "/close  - Close position by symbol (e.g., /close BTCUSDT)\n"
-        "/reload - Force config reload for all workers\n"
-        "/help   - Show this help message"
+        "/start      - Welcome message and Mini App launcher\n"
+        "/status     - Quick status overview\n"
+        "/trades     - List active positions\n"
+        "/chart      - Send latest chart (optional: /chart ETHUSDT)\n"
+        "/logs       - Last 20 lines of system log\n"
+        "/config     - Configuration summary\n"
+        "/weblink    - Generate browser access link (valid 6h)\n"
+        "/revoketoken - Revoke all browser access links\n"
+        "/stop       - Stop trading for symbol (e.g., /stop BTCUSDT)\n"
+        "/resume     - Resume trading for symbol (e.g., /resume BTCUSDT)\n"
+        "/close      - Close position by symbol (e.g., /close BTCUSDT)\n"
+        "/reload     - Force config reload for all workers\n"
+        "/help       - Show this help message"
     )
     await update.message.reply_text(text)  # type: ignore[union-attr]
+
+
+@allowed_users_only
+async def cmd_weblink(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate a secure web link for browser access."""
+    if not update.effective_user:
+        return
+
+    user_id = update.effective_user.id
+
+    # Determine panel URL
+    panel_url = PANEL_URL
+    if not panel_url:
+        await update.message.reply_text(
+            "⚠️ Панель недоступна. TELEGRAM_PANEL_URL не настроен."
+        )
+        return
+
+    try:
+        # Import token store - need to handle import properly
+        import sys
+        from pathlib import Path
+
+        # Add src to path for imports
+        project_root = PROJECT_ROOT
+        src_path = project_root / "src"
+        if str(src_path) not in sys.path:
+            sys.path.insert(0, str(src_path))
+
+        # Import the token store service
+        from telegram_panel.backend.services.token_store import get_token_store
+
+        token_store = get_token_store()
+        token = token_store.generate_token(user_id)
+
+        # Build the URL
+        web_url = f"{panel_url.rstrip('/')}?token={token}"
+
+        keyboard = [
+            [InlineKeyboardButton("🔗 Open Panel in Browser", url=web_url)]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(
+            "🔗 <b>Ссылка для браузера</b>\n\n"
+            "⏱️ Действительна: 6 часов\n"
+            "🔐 Ссылка привязана к вашему аккаунту\n\n"
+            "⚠️ Не передавайте эту ссылку третьим лицам!",
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+
+    except ValueError as e:
+        # Max tokens reached
+        await update.message.reply_text(f"⚠️ {str(e)}")
+    except Exception as e:
+        logger.error("Error generating weblink: %s", e)
+        await update.message.reply_text(
+            "❌ Ошибка генерации ссылки. Попробуйте позже."
+        )
+
+
+@allowed_users_only
+async def cmd_revoketoken(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Revoke all web tokens for the current user."""
+    if not update.effective_user:
+        return
+
+    user_id = update.effective_user.id
+
+    try:
+        import sys
+        from pathlib import Path
+
+        project_root = PROJECT_ROOT
+        src_path = project_root / "src"
+        if str(src_path) not in sys.path:
+            sys.path.insert(0, str(src_path))
+
+        from telegram_panel.backend.services.token_store import get_token_store
+
+        token_store = get_token_store()
+        count = token_store.revoke_all_user_tokens(user_id)
+
+        if count > 0:
+            await update.message.reply_text(
+                f"✅ <b>Отозвано токенов:</b> {count}\n"
+                f"Все ссылки для браузера больше недействительны.",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                "ℹ️ У вас нет активных ссылок для браузера."
+            )
+
+    except Exception as e:
+        logger.error("Error revoking tokens: %s", e)
+        await update.message.reply_text(
+            "❌ Ошибка отзыва токенов. Попробуйте позже."
+        )
 
 
 @allowed_users_only
@@ -553,6 +656,8 @@ class TelegramPanelBot:
         self.app.add_handler(CommandHandler("resume", cmd_start_trading))
         self.app.add_handler(CommandHandler("close", cmd_close))
         self.app.add_handler(CommandHandler("reload", cmd_reload))
+        self.app.add_handler(CommandHandler("weblink", cmd_weblink))
+        self.app.add_handler(CommandHandler("revoketoken", cmd_revoketoken))
         self.app.add_handler(CommandHandler("help", cmd_help))
 
     def run(self) -> None:

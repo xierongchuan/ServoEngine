@@ -6,17 +6,40 @@ function getInitData(): string {
   return window.Telegram?.WebApp?.initData || '';
 }
 
+function getWebToken(): string {
+  // Проверяем URL параметр token
+  const urlParams = new URLSearchParams(window.location.search);
+  return urlParams.get('token') || '';
+}
+
+function isWebTokenMode(): boolean {
+  // Если есть токен в URL и нет Telegram initData
+  const token = getWebToken();
+  const initData = getInitData();
+  return !!token && !initData;
+}
+
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = getWebToken();
+  const initData = getInitData();
+  const useToken = isWebTokenMode();
+
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      'X-Telegram-Init-Data': getInitData(),
+      ...(useToken && token
+        ? { 'X-Web-Token': token }
+        : { 'X-Telegram-Init-Data': initData }
+      ),
       ...options?.headers,
     },
   });
   if (!res.ok) {
     if (res.status === 401) {
+      if (useToken) {
+        throw new Error('Ссылка истекла или недействительна. Используйте /weblink для новой ссылки.');
+      }
       throw new Error('Откройте панель через Telegram Mini App');
     }
     if (res.status === 403) {
@@ -65,8 +88,13 @@ export function getChartData(symbol: string, range: string = '1D') {
 }
 
 export function getChartUrl(filename: string) {
-  const auth = encodeURIComponent(getInitData());
-  return `${BASE_URL}/api/charts/${encodeURIComponent(filename)}?auth=${auth}`;
+  const token = getWebToken();
+  const initData = getInitData();
+  const useToken = isWebTokenMode();
+
+  const auth = useToken ? token : initData;
+  const authParam = useToken ? 'token' : 'auth';
+  return `${BASE_URL}/api/charts/${encodeURIComponent(filename)}?${authParam}=${encodeURIComponent(auth)}`;
 }
 
 export function getSystemLogs(lines = 200) {

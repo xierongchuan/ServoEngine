@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 import traceback
 from contextlib import asynccontextmanager
@@ -66,13 +67,19 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# CORS for Telegram WebApp
+# CORS for Telegram WebApp and direct browser access
+# Use PANEL_ALLOWED_ORIGINS env var (comma-separated) or defaults
+_allowed_origins = os.getenv(
+    "PANEL_ALLOWED_ORIGINS",
+    "https://web.telegram.org,https://telegram.org"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://web.telegram.org", "https://telegram.org", "*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*", "X-Telegram-Init-Data", "X-Web-Token"],
 )
 
 

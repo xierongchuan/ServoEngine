@@ -4,9 +4,10 @@ import json
 import logging
 from urllib.parse import parse_qs, unquote
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from ..config import BOT_TOKEN, ALLOWED_IDS
+from .token_store import get_token_store
 
 logger = logging.getLogger("panel.auth")
 
@@ -94,25 +95,127 @@ async def get_current_user(
 ) -> dict:
     """FastAPI dependency: validates Telegram initData and checks user against allowed list.
 
-    Auth flow:
-    1. No initData → 401 (must open via Telegram Mini App)
-    2. Invalid HMAC → 401
-    3. User ID not in ALLOWED_IDS → 403
-    4. All checks pass → return user data
+    This is kept for backward compatibility. For web token support, use get_current_user_with_token.
     """
-    if not x_telegram_init_data:
-        raise HTTPException(status_code=401, detail="Откройте панель через Telegram Mini App")
+    # Delegate to the combined function
+    return await get_current_user_with_token(
+        x_telegram_init_data=x_telegram_init_data,
+        x_web_token="",
+    )
 
-    if not BOT_TOKEN:
-        return {"user": {"id": 0, "first_name": "dev"}}
 
-    result = validate_init_data(x_telegram_init_data, BOT_TOKEN)
-    if result is None:
-        raise HTTPException(status_code=401, detail="Невалидные данные авторизации Telegram")
+# ---------------------------------------------------------------------------
+# Web Token Authentication (для /weblink)
+# ----------------------------------------------------------------------------
 
-    user_id = _extract_user_id(result)
-    if ALLOWED_IDS and user_id not in ALLOWED_IDS:
-        logger.warning("Доступ запрещён для user_id=%d", user_id)
-        raise HTTPException(status_code=403, detail="У вас нет доступа к этой панели")
 
-    return result
+def validate_web_token(token: str) -> dict | None:
+    """Validate a web access token from /weblink command.
+
+    Returns user data dict if valid, None if invalid/expired.
+    """
+    if not token:
+        return None
+
+    try:
+        token_store = get_token_store()
+        result = token_store.validate_token(token)
+
+        if result is None:
+            return None
+
+        user_id = result.get("user_id")
+        if user_id is None:
+            return None
+
+        # Check user is in allowed list
+        if ALLOWED_IDS and user_id not in ALLOWED_IDS:
+            logger.warning("Web token access denied for user_id=%d", user_id)
+            return None
+
+        return {
+            "user": {
+                "id": user_id,
+                "is_web_token": True,
+            },
+            "auth_method": "web_token",
+            "token_created_at": result.get("created_at"),
+            "token_expires_at": result.get("expires_at"),
+        }
+
+    except Exception as e:
+        logger.error("Web token validation error: %s", e)
+        return None
+
+
+async def get_current_user_with_token(
+    x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data"),
+    x_web_token: str = Header(default="", alias="X-Web-Token"),
+) -> dict:
+    """FastAPI dependency: supports both Telegram initData and web token auth.
+
+    Auth flow:
+    1. If X-Web-Token provided → validate web token
+    2. Else if X-Telegram-Init-Data → validate Telegram auth
+    3. Neither → 401
+    4. Invalid credentials → 401
+    5. User not in ALLOWED_IDS → 403
+    6. All checks pass → return user data
+    """
+    # Try web token first
+    if x_web_token:
+        result = validate_web_token(x_web_token)
+        if result is not None:
+            return result
+        # Invalid web token - try Telegram auth as fallback
+        if not x_telegram_init_data:
+            raise HTTPException(
+                status_code=401,
+                detail="Невалидная ссылка. Используйте /weblink для новой ссылки."
+            )
+
+    # Fall back to Telegram initData
+    if x_telegram_init_data:
+        if not x_telegram_init_data:
+            raise HTTPException(status_code=401, detail="Откройте панель через Telegram Mini App")
+
+        if not BOT_TOKEN:
+            return {"user": {"id": 0, "first_name": "dev"}}
+
+        result = validate_init_data(x_telegram_init_data, BOT_TOKEN)
+        if result is None:
+            raise HTTPException(status_code=401, detail="Невалидные данные авторизации Telegram")
+
+        user_id = _extract_user_id(result)
+        if ALLOWED_IDS and user_id not in ALLOWED_IDS:
+            logger.warning("Доступ запрещён для user_id=%d", user_id)
+            raise HTTPException(status_code=403, detail="У вас нет доступа к этой панели")
+
+        return result
+
+    # No auth provided
+    raise HTTPException(
+        status_code=401,
+        detail="Требуется авторизация: откройте панель через Telegram Mini App "
+                "или используйте ссылку от /weblink"
+    )
+
+
+def validate_auth_string(auth: str) -> None:
+    """Validate auth from query parameter (for <img src> etc.).
+
+    Supports both Telegram initData and web token.
+    """
+    if not auth:
+        raise HTTPException(status_code=401, detail="Missing auth parameter")
+
+    # Check if it's a web token (contains no hash= which is required for Telegram initData)
+    if "hash=" not in auth:
+        # Try as web token
+        result = validate_web_token(auth)
+        if result is None:
+            raise HTTPException(status_code=401, detail="Invalid auth parameter")
+        return
+
+    # Otherwise validate as Telegram initData
+    validate_init_data_string(auth)

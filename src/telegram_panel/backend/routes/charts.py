@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from ..config import CHARTS_DIR
-from ..services.auth import get_current_user, validate_init_data_string
+from ..services.auth import get_current_user, validate_auth_string
 from ..services.data_reader import DataReader
 
 router = APIRouter(prefix="/api/charts", tags=["charts"])
@@ -19,11 +19,18 @@ async def list_charts(_user: dict = Depends(get_current_user)) -> list[dict]:
 @router.get("/{filename}")
 async def get_chart(
     filename: str,
-    _auth: str = Query(alias="auth", default=""),
+    auth: str = Query(alias="auth", default=""),
+    token: str = Query(alias="token", default=""),
 ):
-    """Serve chart image. Auth is passed via query param since <img src> cannot send headers."""
+    """Serve chart image. Auth is passed via query param since <img src> cannot send headers.
+
+    Supports both Telegram initData (?auth=) and web token (?token=).
+    """
+    # Use token if provided, otherwise fall back to auth
+    auth_param = token or auth
+
     # Validate auth from query parameter
-    validate_init_data_string(_auth)
+    validate_auth_string(auth_param)
 
     # Sanitize: only allow simple filenames (no path traversal)
     if "/" in filename or "\\" in filename or ".." in filename:

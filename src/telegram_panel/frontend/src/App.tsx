@@ -12,11 +12,19 @@ import { Settings } from './pages/Settings';
 import { Journal } from './pages/Journal';
 import { getDashboard } from './api/client';
 
+// Detect if we're using web token from URL
+function isWebTokenMode(): boolean {
+  const urlParams = new URLSearchParams(window.location.search);
+  const token = urlParams.get('token');
+  return !!token;
+}
+
 export function App() {
   const [activeTab, setActiveTab] = useState<TabId>('dashboard');
   const [authError, setAuthError] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const { subscribe, isConnected } = useWebSocket();
+  const isWebMode = isWebTokenMode();
   useTelegram();
 
   // Проверка авторизации при загрузке (с retry для Telegram SDK race condition)
@@ -61,7 +69,10 @@ export function App() {
           <div className="text-5xl">🔒</div>
           <p className="text-base font-semibold text-red-400">{authError}</p>
           <p className="text-sm text-tg-text/70">
-            Используйте кнопку «Open Panel» в Telegram-боте
+            {isWebMode
+              ? "Ссылка истекла. Напишите /weblink боту для новой ссылки."
+              : "Используйте кнопку «Open Panel» в Telegram-боте"
+            }
           </p>
           <button
             onClick={() => window.location.reload()}
