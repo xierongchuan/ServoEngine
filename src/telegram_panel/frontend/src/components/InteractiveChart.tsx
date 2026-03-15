@@ -223,8 +223,6 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
       seriesRefs.current = {};
     }
 
-    const chartHeight = fullscreen ? 640 : 480;
-
     // Создаем новый график
     const chart = createChart(containerRef.current, {
       layout: {
@@ -242,7 +240,7 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
       timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
       crosshair: { mode: CrosshairMode.Magnet },
       handleScroll: { vertTouchDrag: false },
-      height: chartHeight,
+      height: 480,
     });
     chartRef.current = chart;
     const series: SeriesRefs = {};
@@ -456,13 +454,28 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
       }
     }
 
-    // Resize observer
-    const resizeObserver = new ResizeObserver(() => {
-      const w = wrapperRef.current?.clientWidth;
-      if (!w) return;
-      chart.applyOptions({ width: w });
+    // ResizeObserver на wrapperRef — он срабатывает после flex-вёрстки и даёт реальные px-размеры
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (fullscreen && height > 0) {
+          chart.applyOptions({ width, height });
+        } else if (!fullscreen && width > 0) {
+          chart.applyOptions({ width, height: 480 });
+        }
+      }
     });
     if (wrapperRef.current) resizeObserver.observe(wrapperRef.current);
+
+    // requestAnimationFrame: ждём пока flex просчитает высоту, затем форсим правильный размер
+    if (fullscreen) {
+      requestAnimationFrame(() => {
+        const el = wrapperRef.current;
+        if (el && chartRef.current && el.clientHeight > 0) {
+          chartRef.current.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+        }
+      });
+    }
 
     // Сохраняем cleanup функцию
     chartRef.current = chart;
@@ -524,7 +537,7 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
   }, []);
 
   return (
-    <div ref={wrapperRef} className="relative w-full">
+    <div ref={wrapperRef} className={`relative w-full ${fullscreen ? 'flex-1 min-h-0' : ''}`}>
       {/* Fullscreen toggle */}
       <button
         onClick={onToggleFullscreen}
@@ -533,7 +546,8 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
         {fullscreen ? 'Exit' : 'Fullscreen'}
       </button>
 
-      <div ref={containerRef} />
+      {/* В fullscreen containerRef простой block-элемент; размер управляется через chart.applyOptions */}
+      <div ref={containerRef} className="w-full" />
     </div>
   );
 }

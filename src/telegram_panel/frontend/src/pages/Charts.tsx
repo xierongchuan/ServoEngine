@@ -81,42 +81,23 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
 
   // Слушаем выход из fullscreen через браузерное событие (Escape / жест)
   useEffect(() => {
-    const onFsChange = () => {
-      if (!document.fullscreenElement) {
-        setFullscreen(false);
-      }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFullscreen(false);
     };
-    document.addEventListener('fullscreenchange', onFsChange);
-    return () => document.removeEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
   }, []);
 
   const toggleFullscreen = useCallback(() => {
-    if (!fullscreen) {
-      // Входим в настоящий полноэкранный режим
-      const el = fsContainerRef.current;
-      if (el?.requestFullscreen) {
-        el.requestFullscreen().then(() => setFullscreen(true)).catch(() => {
-          // Fallback если API недоступен — просто ставим state
-          setFullscreen(true);
-        });
-      } else {
-        setFullscreen(true);
-      }
-    } else {
-      // Выходим
-      if (document.fullscreenElement) {
-        document.exitFullscreen().catch(() => {});
-      }
-      setFullscreen(false);
-    }
-  }, [fullscreen]);
+    setFullscreen((prev) => !prev);
+  }, []);
 
   return (
     <div
       ref={fsContainerRef}
       className={`flex flex-col gap-3 ${
         fullscreen
-          ? 'bg-tg-bg overflow-auto p-3 w-full h-full'
+          ? 'fixed inset-0 z-40 bg-tg-bg p-3 pb-20 md:pb-3 md:pl-[5.5rem] w-full h-[100dvh]'
           : 'p-4'
       }`}
     >
@@ -159,7 +140,7 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
       )}
 
       {!loading && !error && chartData && (
-        <>
+        <div className={`flex flex-col gap-2 ${fullscreen ? 'flex-1 min-h-0' : ''}`}>
           {chartData.position && (
             <div className={`text-xs px-2 py-1 rounded inline-flex self-start ${
               chartData.position.side === 'LONG'
@@ -176,10 +157,12 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
             onToggleFullscreen={toggleFullscreen}
           />
 
-          <div className="text-xs text-tg-hint text-center">
-            {chartData.candles.length} candles | {chartData.interval} | {chartData.range}
-          </div>
-        </>
+          {!fullscreen && (
+            <div className="text-xs text-tg-hint text-center">
+              {chartData.candles.length} candles | {chartData.interval} | {chartData.range}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
