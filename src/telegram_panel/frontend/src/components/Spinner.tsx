@@ -19,9 +19,10 @@ export function Spinner({ size = 24 }: { size?: number }) {
         />
         <path
           d="M12 2a10 10 0 0 1 10 10"
-          stroke="var(--tg-theme-button-color, #3b82f6)"
+          stroke="currentColor"
           strokeWidth="3"
           strokeLinecap="round"
+          className="text-tg-button"
         />
       </svg>
     </div>

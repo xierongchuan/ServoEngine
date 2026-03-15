@@ -83,20 +83,25 @@ export function TabBar({ activeTab, onTabChange }: TabBarProps) {
   };
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-tg-bg border-t border-white/5 px-1 pb-safe z-50">
-      <div className="flex items-center justify-around h-14">
+    <nav className="fixed z-50 bg-tg-bg transition-all
+      bottom-0 left-0 right-0 border-t border-white/5 pb-safe
+      md:top-0 md:bottom-0 md:w-20 md:right-auto md:border-t-0 md:border-r md:pb-0
+    ">
+      <div className="flex items-center justify-between h-14 w-full px-2 gap-1
+        md:flex-col md:justify-center md:h-full md:gap-8 md:px-0 md:w-auto
+      ">
         {tabs.map((tab) => {
           const isActive = activeTab === tab.id;
           return (
             <button
               key={tab.id}
               onClick={() => handleClick(tab.id)}
-              className={`flex flex-col items-center gap-0.5 py-1 px-2 transition-colors ${
-                isActive ? 'text-tg-button' : 'text-tg-hint'
-              }`}
+              className={`flex flex-1 flex-col items-center justify-center gap-1 py-1.5 transition-all rounded-xl ${
+                isActive ? 'text-tg-button bg-tg-button/10' : 'text-tg-hint hover:text-tg-text hover:bg-white/5'
+              } md:flex-none md:w-14 md:h-14`}
             >
               {tab.icon}
-              <span className="text-[10px]">{tab.label}</span>
+              <span className="text-[10px] md:text-[9px] font-medium">{tab.label}</span>
             </button>
           );
         })}

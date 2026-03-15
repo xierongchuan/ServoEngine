@@ -132,7 +132,7 @@ export function App() {
       )}
 
       {/* Page content */}
-      <div className="flex-1 overflow-y-auto pb-16">
+      <div className="flex-1 overflow-y-auto pb-16 w-full max-w-4xl mx-auto md:pb-0 md:pl-20">
         {renderPage()}
       </div>
 

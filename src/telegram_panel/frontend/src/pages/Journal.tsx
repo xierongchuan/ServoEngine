@@ -3,6 +3,8 @@ import { getJournal, getJournalStats, getDashboard } from '../api/client';
 import type { JournalStats, JournalSymbolStats } from '../api/types';
 import { StatsCard } from '../components/StatsCard';
 import { Spinner } from '../components/Spinner';
+import { Tabs } from '../components/ui/Tabs';
+import { StatusDot } from '../components/ui/StatusDot';
 
 interface JournalEntryData {
   time?: string;
@@ -172,23 +174,19 @@ export function Journal({ subscribe }: { subscribe: (type: string, cb: (data: Re
       )}
 
       {/* Symbol selector */}
-      <div className="flex flex-wrap gap-1.5">
-        {allSymbols.map((s) => {
-          const hasActivePlan = stats?.symbols?.[s]?.has_active_plan ?? false;
-          return (
-            <button
-              key={s}
-              onClick={() => { setSelected(s); setExpandedEntry(null); setActionFilter('ALL'); }}
-              className={`text-xs px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 ${
-                selected === s ? 'bg-tg-button text-white' : 'bg-tg-section-bg text-tg-hint'
-              }`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${hasActivePlan ? 'bg-green-400' : 'bg-gray-500'}`} />
+      <Tabs
+        value={selected}
+        onChange={(s) => { setSelected(s); setExpandedEntry(null); setActionFilter('ALL'); }}
+        options={allSymbols.map((s) => ({
+          value: s,
+          label: (
+            <>
+              <StatusDot active={stats?.symbols?.[s]?.has_active_plan ?? false} />
               {s}
-            </button>
-          );
-        })}
-      </div>
+            </>
+          ),
+        }))}
+      />
 
       {!data ? (
         <div className="flex flex-col items-center gap-2 py-12 text-tg-hint">
@@ -258,19 +256,11 @@ export function Journal({ subscribe }: { subscribe: (type: string, cb: (data: Re
             <span className="text-sm font-medium text-tg-hint">
               Decisions ({filteredEntries.length})
             </span>
-            <div className="flex gap-1">
-              {ACTION_FILTERS.map((f) => (
-                <button
-                  key={f}
-                  onClick={() => { setActionFilter(f); setExpandedEntry(null); }}
-                  className={`text-[10px] px-2 py-1 rounded transition-colors ${
-                    actionFilter === f ? 'bg-tg-button text-white' : 'bg-tg-section-bg text-tg-hint'
-                  }`}
-                >
-                  {f}
-                </button>
-              ))}
-            </div>
+            <Tabs
+              value={actionFilter}
+              onChange={(f) => { setActionFilter(f); setExpandedEntry(null); }}
+              options={ACTION_FILTERS.map(f => ({ value: f, label: f }))}
+            />
           </div>
 
           {/* Decision entries */}

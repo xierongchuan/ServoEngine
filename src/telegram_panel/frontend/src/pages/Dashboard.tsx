@@ -4,6 +4,8 @@ import type { Trade, TradeStats } from '../api/types';
 import { StatsCard } from '../components/StatsCard';
 import { TradeCard } from '../components/TradeCard';
 import { Spinner } from '../components/Spinner';
+import { Card } from '../components/ui/Card';
+import { StatusDot } from '../components/ui/StatusDot';
 
 interface DashboardState {
   strategy: string;
@@ -101,7 +103,7 @@ export function Dashboard({ subscribe }: { subscribe: (type: string, cb: (data: 
         <div className="flex flex-wrap gap-1.5">
           {dashboard.symbols.map((s) => (
             <span key={s} className="text-xs bg-tg-section-bg px-2 py-1 rounded text-tg-text/70 flex items-center gap-1.5">
-              <span className={`w-1.5 h-1.5 rounded-full ${symbolsWithPositions.has(s) ? 'bg-green-400' : 'bg-gray-500'}`} />
+              <StatusDot active={symbolsWithPositions.has(s)} />
               {s}
             </span>
           ))}
@@ -109,14 +111,13 @@ export function Dashboard({ subscribe }: { subscribe: (type: string, cb: (data: 
       )}
 
       {/* Active trades */}
-      <div className="flex flex-col gap-2">
-        <span className="text-sm font-medium text-tg-hint">Active Positions</span>
+      <Card title="Active Positions">
         {trades.length === 0 ? (
           <div className="text-center py-8 text-tg-hint text-sm">No active positions</div>
         ) : (
           trades.map((trade) => <TradeCard key={trade.symbol} trade={trade} onUpdate={fetchData} />)
         )}
-      </div>
+      </Card>
     </div>
   );
 }

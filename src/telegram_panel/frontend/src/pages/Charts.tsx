@@ -3,6 +3,8 @@ import { getChartData, getDashboard, getActiveTrades } from '../api/client';
 import type { ChartData } from '../api/types';
 import { InteractiveChart } from '../components/InteractiveChart';
 import { Spinner } from '../components/Spinner';
+import { Tabs } from '../components/ui/Tabs';
+import { StatusDot } from '../components/ui/StatusDot';
 
 export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Record<string, unknown>) => void) => () => void }) {
   const [symbols, setSymbols] = useState<string[]>([]);
@@ -122,41 +124,28 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
 
       {/* Symbol selector */}
       {symbols.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {symbols.map((sym) => (
-            <button
-              key={sym}
-              onClick={() => setSelectedSymbol(sym)}
-              className={`text-xs px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 ${
-                selectedSymbol === sym
-                  ? 'bg-tg-button text-white'
-                  : 'bg-tg-section-bg text-tg-hint'
-              }`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${symbolsWithPositions.has(sym) ? 'bg-green-400' : 'bg-gray-500'}`} />
-              {sym}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          value={selectedSymbol}
+          onChange={setSelectedSymbol}
+          options={symbols.map((sym) => ({
+            value: sym,
+            label: (
+              <>
+                <StatusDot active={symbolsWithPositions.has(sym)} />
+                {sym}
+              </>
+            ),
+          }))}
+        />
       )}
 
       {/* Range selector */}
       {chartData?.available_ranges && (
-        <div className="flex flex-wrap gap-1">
-          {chartData.available_ranges.map((r) => (
-            <button
-              key={r}
-              onClick={() => setSelectedRange(r)}
-              className={`text-[10px] px-2 py-1 rounded transition-colors ${
-                selectedRange === r
-                  ? 'bg-tg-button text-white'
-                  : 'bg-tg-section-bg text-tg-hint'
-              }`}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          value={selectedRange}
+          onChange={setSelectedRange}
+          options={chartData.available_ranges.map((r) => ({ value: r, label: r }))}
+        />
       )}
 
       {loading && (

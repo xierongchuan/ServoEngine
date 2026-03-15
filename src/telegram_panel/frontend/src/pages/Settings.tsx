@@ -28,6 +28,10 @@ import {
 } from '../api/client';
 import { ProfileCard } from '../components/ProfileCard';
 import { Spinner } from '../components/Spinner';
+import { Button } from '../components/ui/Button';
+import { Card as Section } from '../components/ui/Card';
+import { ListRow as InfoRow, ListInputRow as SettingRow, ListToggleRow as ToggleRow } from '../components/ui/List';
+import { Tabs } from '../components/ui/Tabs';
 
 type Tab = 'strategy' | 'trading' | 'infrastructure' | 'profiles' | 'symbols';
 
@@ -124,9 +128,9 @@ export function Settings() {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3">
         <span className="text-sm text-red-400">{error || 'Failed to load settings'}</span>
-        <button onClick={fetchAll} className="text-xs px-4 py-2 bg-tg-section-bg text-tg-hint rounded-lg">
+        <Button onClick={fetchAll} variant="secondary" size="sm">
           Retry
-        </button>
+        </Button>
       </div>
     );
   }
@@ -152,19 +156,17 @@ export function Settings() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-tg-section-bg p-1 rounded-xl overflow-x-auto no-scrollbar">
-        {(['strategy', 'trading', 'infrastructure', 'profiles', 'symbols'] as Tab[]).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`flex-1 text-xs py-2 px-2 rounded-lg transition-colors capitalize ${
-              tab === t ? 'bg-tg-button text-white' : 'text-tg-hint hover:text-tg-text'
-            }`}
-          >
-            {t === 'strategy' ? 'Strategy' : t === 'trading' ? 'Position & Risk' : t === 'infrastructure' ? 'AI Settings' : t === 'profiles' ? 'Profiles' : 'Symbols'}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        value={tab}
+        onChange={(v) => setTab(v as Tab)}
+        options={[
+          { value: 'strategy', label: 'Strategy' },
+          { value: 'trading', label: 'Position & Risk' },
+          { value: 'infrastructure', label: 'AI Settings' },
+          { value: 'profiles', label: 'Profiles' },
+          { value: 'symbols', label: 'Symbols' },
+        ]}
+      />
 
       {/* Content */}
       {tab === 'strategy' && activeConfig && strategies && (
@@ -413,22 +415,24 @@ function StrategyTab({
 
       {/* Save Button */}
       {selectedStrategy !== activeConfig.strategy && (
-        <button
+        <Button
+          fullWidth
           onClick={handleSave}
           disabled={saving}
-          className="w-full py-3 bg-tg-button text-white font-medium rounded-xl disabled:opacity-50 transition-opacity"
+          isLoading={saving}
         >
           {saving ? 'Saving...' : `Switch to ${selectedStrategy}`}
-        </button>
+        </Button>
       )}
 
       {/* Create Profile Button */}
-      <button
+      <Button
+        fullWidth
+        variant="outline"
         onClick={() => setCreateProfileModal({ open: true, strategy: selectedStrategy })}
-        className="w-full py-3 bg-tg-section-bg text-tg-text font-medium rounded-xl border border-white/10 hover:border-white/20 transition-colors"
       >
         + Create Profile from {selectedStrategy}
-      </button>
+      </Button>
 
       {/* Create Profile Modal */}
       {createProfileModal.open && (
@@ -452,20 +456,22 @@ function StrategyTab({
             {createProfileError && (
               <p className="text-xs text-red-400 mb-3">{createProfileError}</p>
             )}
-            <div className="flex gap-2">
-              <button
+            <div className="flex gap-2 pt-2">
+              <Button
+                fullWidth
+                variant="ghost"
                 onClick={() => setCreateProfileModal({ open: false, strategy: '' })}
-                className="flex-1 py-2 rounded-lg bg-tg-bg text-tg-text text-sm font-medium hover:bg-white/10"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                fullWidth
                 onClick={handleCreateProfile}
                 disabled={creatingProfile}
-                className="flex-1 py-2 rounded-lg bg-tg-button text-white text-sm font-medium hover:bg-tg-button/80 disabled:opacity-50"
+                isLoading={creatingProfile}
               >
-                {creatingProfile ? 'Creating...' : 'Create'}
-              </button>
+                Create
+              </Button>
             </div>
           </div>
         </div>
@@ -524,19 +530,18 @@ function TradingTab({
     <div className="flex flex-col gap-4">
       {/* Edit Toggle */}
       <div className="flex justify-end">
-        <button
+        <Button
           onClick={() => {
             if (editing) {
               setLocalConfig(config); // Reset on cancel
             }
             setEditing(!editing);
           }}
-          className={`text-xs px-3 py-1.5 rounded-lg ${
-            editing ? 'bg-amber-500/20 text-amber-400' : 'bg-tg-section-bg text-tg-hint'
-          }`}
+          variant={editing ? 'secondary' : 'ghost'}
+          size="sm"
         >
           {editing ? 'Cancel' : 'Edit'}
-        </button>
+        </Button>
       </div>
 
       {/* Position Settings */}
@@ -619,13 +624,14 @@ function TradingTab({
 
       {/* Save Button */}
       {editing && (
-        <button
+        <Button
+          fullWidth
           onClick={handleSave}
           disabled={saving}
-          className="w-full py-3 bg-tg-button text-white font-medium rounded-xl disabled:opacity-50 transition-opacity"
+          isLoading={saving}
         >
-          {saving ? 'Saving...' : 'Save Trading Settings'}
-        </button>
+          Save Trading Settings
+        </Button>
       )}
     </div>
   );
@@ -705,17 +711,16 @@ function InfrastructureTab({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex justify-end">
-        <button
+        <Button
           onClick={() => {
             if (editing) setLocalConfig(config);
             setEditing(!editing);
           }}
-          className={`text-xs px-3 py-1.5 rounded-lg ${
-            editing ? 'bg-amber-500/20 text-amber-400' : 'bg-tg-section-bg text-tg-hint'
-          }`}
+          variant={editing ? 'secondary' : 'ghost'}
+          size="sm"
         >
           {editing ? 'Cancel' : 'Edit'}
-        </button>
+        </Button>
       </div>
 
       <Section title="AI Infrastructure" badge="restart">
@@ -806,22 +811,24 @@ function InfrastructureTab({
       </Section>
 
       {editing && (
-        <button
+        <Button
+          fullWidth
           onClick={handleSave}
           disabled={saving}
-          className="w-full py-3 bg-tg-button text-white font-medium rounded-xl disabled:opacity-50 transition-opacity"
+          isLoading={saving}
         >
-          {saving ? 'Saving...' : 'Save Infrastructure Settings'}
-        </button>
+          Save Infrastructure Settings
+        </Button>
       )}
 
       {/* Create Profile Button */}
-      <button
+      <Button
+        fullWidth
+        variant="outline"
         onClick={openCreateProfileModal}
-        className="w-full py-3 bg-tg-section-bg text-tg-text font-medium rounded-xl border border-white/10 hover:border-white/20 transition-colors"
       >
         + Create Profile
-      </button>
+      </Button>
 
       {/* Create Profile Modal */}
       {createProfileModal && (
@@ -862,23 +869,25 @@ function InfrastructureTab({
             {createProfileError && (
               <p className="text-xs text-red-400 mb-3">{createProfileError}</p>
             )}
-            <div className="flex gap-2">
-              <button
+            <div className="flex gap-2 pt-2">
+              <Button
+                fullWidth
+                variant="ghost"
                 onClick={() => {
                   setCreateProfileModal(false);
                   setCreateProfileError(null);
                 }}
-                className="flex-1 py-2 rounded-lg bg-tg-bg text-tg-text text-sm font-medium hover:bg-white/10"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                fullWidth
                 onClick={handleCreateProfile}
                 disabled={creatingProfile}
-                className="flex-1 py-2 rounded-lg bg-tg-button text-white text-sm font-medium hover:bg-tg-button/80 disabled:opacity-50"
+                isLoading={creatingProfile}
               >
-                {creatingProfile ? 'Creating...' : 'Create'}
-              </button>
+                Create
+              </Button>
             </div>
           </div>
         </div>
@@ -1010,27 +1019,17 @@ function ProfilesTab({
   return (
     <div className="flex flex-col gap-4">
       {/* Profile Filter Sub-tabs */}
-      <div className="flex gap-1 bg-tg-section-bg p-1 rounded-xl overflow-x-auto no-scrollbar">
-        <button
-          onClick={() => setProfileFilter('all')}
-          className={`text-xs py-1.5 px-3 rounded-lg transition-colors whitespace-nowrap ${
-            profileFilter === 'all' ? 'bg-tg-button text-white' : 'text-tg-hint hover:text-tg-text'
-          }`}
-        >
-          All ({profiles.available.length})
-        </button>
-        {strategyGroups.map(([strategy, names]) => (
-          <button
-            key={strategy}
-            onClick={() => setProfileFilter(strategy)}
-            className={`text-xs py-1.5 px-3 rounded-lg transition-colors whitespace-nowrap ${
-              profileFilter === strategy ? 'bg-tg-button text-white' : 'text-tg-hint hover:text-tg-text'
-            }`}
-          >
-            {strategy === 'Other' ? 'Other' : strategy} ({names.length})
-          </button>
-        ))}
-      </div>
+      <Tabs
+        value={profileFilter}
+        onChange={setProfileFilter}
+        options={[
+          { value: 'all', label: `All (${profiles.available.length})` },
+          ...strategyGroups.map(([strategy, names]) => ({
+            value: strategy,
+            label: `${strategy === 'Other' ? 'Other' : strategy} (${names.length})`
+          }))
+        ]}
+      />
 
       {/* Profile Sections */}
       {(profileFilter === 'all' ? strategyGroups : strategyGroups.filter(([s]) => s === profileFilter)).map(([strategy, names]) => (
@@ -1078,20 +1077,22 @@ function ProfilesTab({
               autoFocus
               onKeyDown={(e) => e.key === 'Enter' && handleCloneSubmit()}
             />
-            <div className="flex gap-2">
-              <button
+            <div className="flex gap-2 pt-2">
+              <Button
+                fullWidth
+                variant="ghost"
                 onClick={() => setCloneModal({ open: false, sourceName: '' })}
-                className="flex-1 py-2 rounded-lg bg-tg-bg text-tg-text text-sm font-medium hover:bg-white/10"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                fullWidth
                 onClick={handleCloneSubmit}
-                disabled={!cloneName.trim() || cloneLoading}
-                className="flex-1 py-2 rounded-lg bg-tg-button text-white text-sm font-medium hover:bg-tg-button/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={!cloneName.trim()}
+                isLoading={cloneLoading}
               >
-                {cloneLoading ? 'Cloning...' : 'Clone'}
-              </button>
+                Clone
+              </Button>
             </div>
           </div>
         </div>
@@ -1170,22 +1171,24 @@ function ProfilesTab({
             )}
 
             <div className="flex gap-2 mt-4">
-              <button
+              <Button
+                fullWidth
+                variant="ghost"
                 onClick={() => {
                   setEditModal({ open: false, name: '', profile: null });
                   setEditError(null);
                 }}
-                className="flex-1 py-2 rounded-lg bg-tg-bg text-tg-text text-sm font-medium hover:bg-white/10"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                fullWidth
                 onClick={handleEditSave}
                 disabled={editLoading}
-                className="flex-1 py-2 rounded-lg bg-tg-button text-white text-sm font-medium hover:bg-tg-button/80 disabled:opacity-50"
+                isLoading={editLoading}
               >
-                {editLoading ? 'Saving...' : 'Save'}
-              </button>
+                Save
+              </Button>
             </div>
           </div>
         </div>
@@ -1246,13 +1249,12 @@ function SymbolsTab({
           placeholder="BTC-USDT"
           className="flex-1 bg-tg-section-bg text-tg-text text-sm rounded-xl px-4 py-3 border border-white/10 outline-none focus:border-tg-button transition-colors"
         />
-        <button
+        <Button
           onClick={handleAddSymbol}
           disabled={adding || !newSymbol.trim()}
-          className="px-6 py-3 bg-tg-button text-white text-sm font-medium rounded-xl disabled:opacity-50"
         >
           Add
-        </button>
+        </Button>
       </div>
 
       <Section title="Active Symbols" badge="hot-reload">
@@ -1319,90 +1321,4 @@ function SymbolsTab({
   );
 }
 
-// ============================================================================
-// Shared Components
-// ============================================================================
-
-function Section({ title, badge, children }: {
-  title: string;
-  badge?: 'hot-reload' | 'restart';
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
-        <h3 className="text-sm font-medium text-tg-hint">{title}</h3>
-        {badge === 'hot-reload' && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/20 text-green-400">live</span>
-        )}
-        {badge === 'restart' && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">restart</span>
-        )}
-      </div>
-      <div className="bg-tg-section-bg rounded-xl p-3 flex flex-col gap-3">
-        {children}
-      </div>
-    </section>
-  );
-}
-
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-sm text-tg-text">{label}</span>
-      <span className="text-sm text-tg-hint">{value}</span>
-    </div>
-  );
-}
-
-function SettingRow({ label, value, editing, onChange, step = 1 }: {
-  label: string;
-  value: number | undefined;
-  editing: boolean;
-  step?: number;
-  onChange: (v: number) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-sm text-tg-text">{label}</span>
-      {editing ? (
-        <input
-          type="number"
-          step={step}
-          value={value ?? ''}
-          onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-          className="bg-tg-bg text-tg-text text-sm rounded px-2 py-1 w-24 text-right border border-white/10"
-        />
-      ) : (
-        <span className="text-sm text-tg-hint">{value ?? 'N/A'}</span>
-      )}
-    </div>
-  );
-}
-
-function ToggleRow({ label, value, editing, onChange }: {
-  label: string;
-  value: boolean;
-  editing: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-sm text-tg-text">{label}</span>
-      {editing ? (
-        <button
-          onClick={() => onChange(!value)}
-          className={`text-xs px-3 py-1 rounded-lg transition-colors ${
-            value ? 'bg-green-500/20 text-green-400' : 'bg-tg-bg text-tg-hint'
-          }`}
-        >
-          {value ? 'ON' : 'OFF'}
-        </button>
-      ) : (
-        <span className={`text-sm ${value ? 'text-green-400' : 'text-tg-hint'}`}>
-          {value ? 'ON' : 'OFF'}
-        </span>
-      )}
-    </div>
-  );
-}
+// Removed shared components

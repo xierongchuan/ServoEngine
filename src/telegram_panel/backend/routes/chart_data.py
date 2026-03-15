@@ -176,16 +176,18 @@ async def get_chart_data(
     if not raw_candles:
         raise HTTPException(status_code=404, detail="Empty price data")
 
-    # time_range параметр теперь используется только для определения временного диапазона (количество дней),
-    # а таймфрейм определяется по фактическим свечам
-    range_days = 1  # По умолчанию 1 день
+    # time_range параметр теперь используется только для определения временного диапазона
+    range_seconds = 86400  # По умолчанию 1 день (86400 секунд)
     if time_range:
-        # Парсим time_range типа "1D", "2D", "1W" и т.д.
-        range_str = time_range.upper().replace("H", "").replace("M", "")
+        range_str = time_range.upper()
         if range_str.endswith("D"):
-            range_days = int(range_str[:-1])
+            range_seconds = int(range_str[:-1]) * 86400
         elif range_str.endswith("W"):
-            range_days = int(range_str[:-1]) * 7
+            range_seconds = int(range_str[:-1]) * 7 * 86400
+        elif range_str.endswith("H"):
+            range_seconds = int(range_str[:-1]) * 3600
+        elif range_str.endswith("M"):
+            range_seconds = int(range_str[:-1]) * 60
 
     # Парсинг свечей (тот же формат что в plotter.py)
     candles = []
@@ -262,11 +264,9 @@ async def get_chart_data(
     # Графики показывают ровно то, что есть в данных
     target_minutes = detected_tf_minutes
 
-    # Фильтр по временному диапазону
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(days=range_days)
-
-    cutoff_ts = int(cutoff.timestamp())
+    # Фильтр по временному диапазону (отталкиваемся от последней свечи)
+    latest_ts = candles[-1]["time"]
+    cutoff_ts = latest_ts - range_seconds
     candles = [c for c in candles if c["time"] >= cutoff_ts]
 
     if not candles:

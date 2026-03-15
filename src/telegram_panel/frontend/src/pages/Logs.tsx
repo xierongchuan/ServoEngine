@@ -2,6 +2,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { getSystemLogs, getSymbolLogs, getDashboard, getActiveTrades } from '../api/client';
 import { LogViewer } from '../components/LogViewer';
 import { Spinner } from '../components/Spinner';
+import { Button } from '../components/ui/Button';
+import { Tabs } from '../components/ui/Tabs';
+import { StatusDot } from '../components/ui/StatusDot';
 
 type LogSource = 'system' | string;
 
@@ -83,39 +86,32 @@ export function Logs({ subscribe }: { subscribe: (type: string, cb: (data: Recor
     <div className="flex flex-col gap-3 p-4">
       <div className="flex items-center justify-between">
         <span className="text-lg font-semibold text-tg-text">Logs</span>
-        <button
+        <Button
           onClick={() => setAutoScroll(!autoScroll)}
-          className={`text-xs px-2 py-1 rounded ${
-            autoScroll ? 'bg-tg-button/20 text-tg-button' : 'bg-tg-section-bg text-tg-hint'
-          }`}
+          variant={autoScroll ? 'secondary' : 'ghost'}
+          size="sm"
         >
           Auto-scroll {autoScroll ? 'ON' : 'OFF'}
-        </button>
+        </Button>
       </div>
 
       {/* Source selector */}
-      <div className="flex flex-wrap gap-1.5">
-        <button
-          onClick={() => setSource('system')}
-          className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${
-            source === 'system' ? 'bg-tg-button text-white' : 'bg-tg-section-bg text-tg-hint'
-          }`}
-        >
-          System
-        </button>
-        {symbols.map((s) => (
-          <button
-            key={s}
-            onClick={() => setSource(s)}
-            className={`text-xs px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 ${
-              source === s ? 'bg-tg-button text-white' : 'bg-tg-section-bg text-tg-hint'
-            }`}
-          >
-            <span className={`w-2.5 h-2.5 rounded-full ${symbolsWithPositions.has(s) ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.9)]' : 'bg-gray-500'}`} />
-            {s}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        value={source}
+        onChange={setSource}
+        options={[
+          { value: 'system', label: 'System' },
+          ...symbols.map((s) => ({
+            value: s,
+            label: (
+              <>
+                <StatusDot active={symbolsWithPositions.has(s)} />
+                {s}
+              </>
+            ),
+          })),
+        ]}
+      />
 
       {loading ? (
         <div className="flex items-center justify-center h-40">

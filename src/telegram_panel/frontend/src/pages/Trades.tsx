@@ -4,6 +4,8 @@ import type { Trade, TradeStats } from '../api/types';
 import { TradeCard } from '../components/TradeCard';
 import { StatsCard } from '../components/StatsCard';
 import { Spinner } from '../components/Spinner';
+import { Button } from '../components/ui/Button';
+import { Tabs } from '../components/ui/Tabs';
 import { calcRoePct, formatDollar, formatPct } from '../utils/pnl';
 
 type SubTab = 'active' | 'history';
@@ -93,13 +95,14 @@ export function Trades({ subscribe }: { subscribe: (type: string, cb: (data: Rec
     <div className="flex flex-col gap-4 p-4">
       <div className="flex items-center justify-between">
         <span className="text-lg font-semibold text-tg-text">Trades</span>
-        <button
+        <Button
           onClick={handleSync}
           disabled={syncing}
-          className="text-xs px-3 py-1.5 rounded-lg bg-tg-button/20 text-tg-button hover:bg-tg-button/30 disabled:opacity-50 transition-colors"
+          variant="secondary"
+          size="sm"
         >
           {syncing ? '⏳ Syncing…' : '🔄 Sync'}
-        </button>
+        </Button>
       </div>
 
       {/* Stats */}
@@ -113,24 +116,14 @@ export function Trades({ subscribe }: { subscribe: (type: string, cb: (data: Rec
       )}
 
       {/* Sub-tabs */}
-      <div className="flex gap-2">
-        <button
-          onClick={() => setSubTab('active')}
-          className={`text-sm px-4 py-1.5 rounded-lg transition-colors ${
-            subTab === 'active' ? 'bg-tg-button text-white' : 'bg-tg-section-bg text-tg-hint'
-          }`}
-        >
-          Active ({activeTrades.length})
-        </button>
-        <button
-          onClick={() => setSubTab('history')}
-          className={`text-sm px-4 py-1.5 rounded-lg transition-colors ${
-            subTab === 'history' ? 'bg-tg-button text-white' : 'bg-tg-section-bg text-tg-hint'
-          }`}
-        >
-          History ({historyTotal})
-        </button>
-      </div>
+      <Tabs
+        value={subTab}
+        onChange={(v) => setSubTab(v as SubTab)}
+        options={[
+          { value: 'active', label: `Active (${activeTrades.length})` },
+          { value: 'history', label: `History (${historyTotal})` },
+        ]}
+      />
 
       {/* Content */}
       <div className="flex flex-col gap-2">
