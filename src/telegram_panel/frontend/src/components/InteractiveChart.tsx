@@ -474,41 +474,46 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
     };
   }, [fullscreen, saveViewport]);
 
+  const lastFullscreenRef = useRef(fullscreen);
+
   useEffect(() => {
     if (!containerRef.current || data.candles.length === 0) return;
 
-    // Проверяем, нужно ли полностью пересоздать график или можно обновить инкрементально
     const lastData = lastDataRef.current;
+    const fullscreenChanged = lastFullscreenRef.current !== fullscreen;
+    lastFullscreenRef.current = fullscreen;
 
-    // Если это первый рендер или изменился символ - создаем график с нуля
-    if (isFirstRender.current || !lastData || lastData.symbol !== data.symbol || lastData.range !== data.range) {
+    // Пересоздаём график: первый рендер, смена символа/диапазона, или смена fullscreen
+    if (isFirstRender.current || !lastData || lastData.symbol !== data.symbol || lastData.range !== data.range || fullscreenChanged) {
       isFirstRender.current = false;
       lastDataRef.current = data;
-      createFullChart(data);
 
-      // Восстанавливаем viewport после первого рендера
-      if (viewportRef.current) {
-        restoreViewport(viewportRef.current);
-        viewportRef.current = null;
+      if (fullscreenChanged) {
+        // DOM ещё не пересчитал layout с новыми классами — ждём 2 фрейма
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            createFullChart(data);
+            chartRef.current?.timeScale().fitContent();
+          });
+        });
       } else {
-        // Fit content только при первой загрузке
-        chartRef.current?.timeScale().fitContent();
+        createFullChart(data);
+        if (viewportRef.current) {
+          restoreViewport(viewportRef.current);
+          viewportRef.current = null;
+        } else {
+          chartRef.current?.timeScale().fitContent();
+        }
       }
       return;
     }
 
-    // Если данные изменились - пробуем инкрементальное обновление
+    // Инкрементальное обновление при тех же данных
     if (lastData && lastData.symbol === data.symbol && lastData.range === data.range) {
-      // Сохраняем viewport перед обновлением
       const savedViewport = saveViewport();
-
-      // Инкрементальное обновление
       updateSeriesData(data, seriesRefs.current);
-
-      // Восстанавливаем viewport
       restoreViewport(savedViewport);
     } else {
-      // Символ или диапазон изменился - пересоздаем
       createFullChart(data);
     }
 
