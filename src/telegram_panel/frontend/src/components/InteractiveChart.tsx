@@ -48,6 +48,7 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
   const lastDataRef = useRef<ChartData | null>(null);
   const viewportRef = useRef<ViewportState | null>(null);
   const isFirstRender = useRef(true);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
 
   // Функция для сохранения viewport
   const saveViewport = useCallback(() => {
@@ -215,6 +216,12 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
   const createFullChart = useCallback((chartData: ChartData) => {
     if (!containerRef.current || chartData.candles.length === 0) return;
 
+    // Очищаем предыдущий ResizeObserver
+    if (resizeCleanupRef.current) {
+      resizeCleanupRef.current();
+      resizeCleanupRef.current = null;
+    }
+
     // Очищаем предыдущий график
     if (chartRef.current) {
       viewportRef.current = saveViewport();
@@ -222,6 +229,16 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
       chartRef.current = null;
       seriesRefs.current = {};
     }
+
+    // Явно задаём высоту контейнера перед созданием графика
+    if (fullscreen) {
+      containerRef.current.style.height = '100%';
+    } else {
+      containerRef.current.style.height = '480px';
+    }
+
+    // Реальная высота контейнера после применения стиля
+    const chartHeight = containerRef.current.clientHeight || 480;
 
     // Создаем новый график
     const chart = createChart(containerRef.current, {
@@ -240,7 +257,7 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
       timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
       crosshair: { mode: CrosshairMode.Magnet },
       handleScroll: { vertTouchDrag: false },
-      height: 480,
+      height: chartHeight,
     });
     chartRef.current = chart;
     const series: SeriesRefs = {};
@@ -454,19 +471,20 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
       }
     }
 
-    // ResizeObserver на containerRef — он имеет w-full h-full внутри absolute inset-0,
-    // поэтому получает реальные px-размеры после layout
+    // ResizeObserver на containerRef
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
-        if (width > 0 && height > 0) {
-          chart.resize(width, height);
+        if (width > 0) {
+          // В обычном режиме всегда 480px, в fullscreen — реальная высота контейнера
+          chart.resize(width, fullscreen ? Math.max(height, 200) : 480);
         }
       }
     });
     if (containerRef.current) resizeObserver.observe(containerRef.current);
 
-    // Сохраняем cleanup функцию
+    // Сохраняем cleanup
+    resizeCleanupRef.current = () => resizeObserver.disconnect();
     chartRef.current = chart;
 
     return () => {
