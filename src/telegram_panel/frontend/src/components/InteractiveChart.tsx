@@ -454,28 +454,17 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
       }
     }
 
-    // ResizeObserver на wrapperRef — он срабатывает после flex-вёрстки и даёт реальные px-размеры
+    // ResizeObserver на containerRef — он имеет w-full h-full внутри absolute inset-0,
+    // поэтому получает реальные px-размеры после layout
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
-        if (fullscreen && height > 0) {
-          chart.applyOptions({ width, height });
-        } else if (!fullscreen && width > 0) {
-          chart.applyOptions({ width, height: 480 });
+        if (width > 0 && height > 0) {
+          chart.resize(width, height);
         }
       }
     });
-    if (wrapperRef.current) resizeObserver.observe(wrapperRef.current);
-
-    // requestAnimationFrame: ждём пока flex просчитает высоту, затем форсим правильный размер
-    if (fullscreen) {
-      requestAnimationFrame(() => {
-        const el = wrapperRef.current;
-        if (el && chartRef.current && el.clientHeight > 0) {
-          chartRef.current.applyOptions({ width: el.clientWidth, height: el.clientHeight });
-        }
-      });
-    }
+    if (containerRef.current) resizeObserver.observe(containerRef.current);
 
     // Сохраняем cleanup функцию
     chartRef.current = chart;
@@ -537,7 +526,7 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
   }, []);
 
   return (
-    <div ref={wrapperRef} className={`relative w-full ${fullscreen ? 'flex-1 min-h-0' : ''}`}>
+    <div ref={wrapperRef} className={`w-full ${fullscreen ? 'absolute inset-0' : 'relative'}`}>
       {/* Fullscreen toggle */}
       <button
         onClick={onToggleFullscreen}
@@ -546,8 +535,7 @@ export function InteractiveChart({ data, fullscreen, onToggleFullscreen }: Inter
         {fullscreen ? 'Exit' : 'Fullscreen'}
       </button>
 
-      {/* В fullscreen containerRef простой block-элемент; размер управляется через chart.applyOptions */}
-      <div ref={containerRef} className="w-full" />
+      <div ref={containerRef} className={fullscreen ? 'w-full h-full' : 'w-full'} />
     </div>
   );
 }

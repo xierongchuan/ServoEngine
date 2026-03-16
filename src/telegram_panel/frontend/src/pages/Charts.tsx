@@ -140,7 +140,7 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
       )}
 
       {!loading && !error && chartData && (
-        <div className={`flex flex-col gap-2 ${fullscreen ? 'flex-1 min-h-0' : ''}`}>
+        <>
           {chartData.position && (
             <div className={`text-xs px-2 py-1 rounded inline-flex self-start ${
               chartData.position.side === 'LONG'
@@ -151,18 +151,22 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
             </div>
           )}
 
-          <InteractiveChart
-            data={chartData}
-            fullscreen={fullscreen}
-            onToggleFullscreen={toggleFullscreen}
-          />
+          {/* В fullscreen: relative + flex-1 = высота от flex-родителя, НЕ от содержимого.
+              InteractiveChart внутри использует absolute inset-0 чтобы заполнить. */}
+          <div className={fullscreen ? 'relative flex-1 min-h-0' : ''}>
+            <InteractiveChart
+              data={chartData}
+              fullscreen={fullscreen}
+              onToggleFullscreen={toggleFullscreen}
+            />
+          </div>
 
           {!fullscreen && (
             <div className="text-xs text-tg-hint text-center">
               {chartData.candles.length} candles | {chartData.interval} | {chartData.range}
             </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );
