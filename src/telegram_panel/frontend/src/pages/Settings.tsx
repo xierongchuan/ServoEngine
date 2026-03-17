@@ -27,6 +27,7 @@ import {
   type SymbolProfilesResponse,
 } from '../api/client';
 import { ProfileCard } from '../components/ProfileCard';
+import { ProfileEditor } from '../components/ProfileEditor';
 import { Spinner } from '../components/Spinner';
 import { Button } from '../components/ui/Button';
 import { Card as Section } from '../components/ui/Card';
@@ -942,28 +943,6 @@ function ProfilesTab({
     setEditModal({ open: true, name, profile: profile || null });
   };
 
-  const handleEditSave = async () => {
-    if (!editModal.name || !editModal.profile) return;
-    setEditLoading(true);
-    setEditError(null);
-    try {
-      // Ensure _description is set for the backend
-      const profileData = {
-        ...editModal.profile,
-        _description: editModal.profile._description || '',
-      };
-      await updateProfile(editModal.name, profileData as unknown as Record<string, unknown>);
-      setEditModal({ open: false, name: '', profile: null });
-      onRefresh();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to update profile';
-      setEditError(message);
-      console.error('Failed to update profile:', err);
-    } finally {
-      setEditLoading(false);
-    }
-  };
-
   const handleClone = async (name: string) => {
     setCloneModal({ open: true, sourceName: name });
     setCloneName('');
@@ -1002,8 +981,8 @@ function ProfilesTab({
 
   // Group profiles by strategy
   const profilesByStrategy = profiles.available.reduce<Record<string, string[]>>((acc, name) => {
-    const profile = profiles.profiles[name];
-    const strategy = profile?._strategy || 'Other';
+    const profile = profiles.profiles[name] as Record<string, unknown> | undefined;
+    const strategy = (profile?._strategy as string) || 'Other';
     if (!acc[strategy]) acc[strategy] = [];
     acc[strategy].push(name);
     return acc;
@@ -1098,100 +1077,33 @@ function ProfilesTab({
         </div>
       )}
 
-      {/* Edit Profile Modal */}
+      {/* Edit Profile Modal - Using ProfileEditor Component */}
       {editModal.open && editModal.profile && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-tg-section-bg rounded-xl p-4 w-[300px] max-h-[80vh] overflow-y-auto shadow-xl">
-            <h3 className="text-sm font-medium text-tg-text mb-3">Edit Profile: {editModal.name}</h3>
-
-            {/* Description */}
-            <div className="mb-3">
-              <label className="text-xs text-tg-hint mb-1 block">Description</label>
-              <input
-                type="text"
-                value={editModal.profile._description || editModal.profile.description || ''}
-                onChange={(e) => setEditModal({
-                  ...editModal,
-                  profile: { ...editModal.profile, _description: e.target.value }
-                })}
-                className="w-full px-3 py-2 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-sm focus:outline-none focus:border-tg-button"
-              />
-            </div>
-
-            {/* Preset Settings */}
-            {editModal.profile.preset && Object.keys(editModal.profile.preset).length > 0 && (
-              <div className="mb-3">
-                <div className="text-xs text-tg-hint mb-2 uppercase">Preset Settings</div>
-                {Object.entries(editModal.profile.preset).map(([key, value]) => (
-                  <div key={key} className="flex items-center gap-2 mb-2">
-                    <span className="text-xs text-tg-text w-24 truncate">{key}</span>
-                    <input
-                      type="text"
-                      value={String(value)}
-                      onChange={(e) => setEditModal({
-                        ...editModal,
-                        profile: {
-                          ...editModal.profile,
-                          preset: { ...editModal.profile.preset, [key]: e.target.value }
-                        }
-                      })}
-                      className="flex-1 px-2 py-1 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-xs focus:outline-none focus:border-tg-button"
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Position Settings */}
-            {editModal.profile.position && Object.keys(editModal.profile.position).length > 0 && (
-              <div className="mb-3">
-                <div className="text-xs text-tg-hint mb-2 uppercase">Position Settings</div>
-                {Object.entries(editModal.profile.position).map(([key, value]) => (
-                  <div key={key} className="flex items-center gap-2 mb-2">
-                    <span className="text-xs text-tg-text w-24 truncate">{key}</span>
-                    <input
-                      type="text"
-                      value={String(value)}
-                      onChange={(e) => setEditModal({
-                        ...editModal,
-                        profile: {
-                          ...editModal.profile,
-                          position: { ...editModal.profile.position, [key]: e.target.value }
-                        }
-                      })}
-                      className="flex-1 px-2 py-1 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-xs focus:outline-none focus:border-tg-button"
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {editError && (
-              <p className="text-xs text-red-400 mb-3">{editError}</p>
-            )}
-
-            <div className="flex gap-2 mt-4">
-              <Button
-                fullWidth
-                variant="ghost"
-                onClick={() => {
-                  setEditModal({ open: false, name: '', profile: null });
-                  setEditError(null);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                fullWidth
-                onClick={handleEditSave}
-                disabled={editLoading}
-                isLoading={editLoading}
-              >
-                Save
-              </Button>
-            </div>
-          </div>
-        </div>
+        <ProfileEditor
+          profile={editModal.profile}
+          profileName={editModal.name}
+          onSave={async (updatedProfile) => {
+            setEditLoading(true);
+            setEditError(null);
+            try {
+              await updateProfile(editModal.name, updatedProfile as unknown as Record<string, unknown>);
+              setEditModal({ open: false, name: '', profile: null });
+              onRefresh();
+            } catch (err) {
+              const message = err instanceof Error ? err.message : 'Failed to update profile';
+              setEditError(message);
+              console.error('Failed to update profile:', err);
+            } finally {
+              setEditLoading(false);
+            }
+          }}
+          onCancel={() => {
+            setEditModal({ open: false, name: '', profile: null });
+            setEditError(null);
+          }}
+          isLoading={editLoading}
+          error={editError}
+        />
       )}
     </div>
   );

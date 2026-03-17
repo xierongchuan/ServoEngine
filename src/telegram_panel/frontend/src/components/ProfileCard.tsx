@@ -24,6 +24,11 @@ export function ProfileCard({
   const isDefault = name === 'default';
   const isAutoCreated = name.startsWith('auto-');
 
+  // Type assertion for profile properties
+  const profileObj = profile as Record<string, unknown>;
+  const profileStrategy = profileObj._strategy as string | undefined;
+  const profileDescription = (profileObj._description as string) || (profileObj.description as string) || 'No description';
+
   return (
     <div className="bg-tg-section-bg rounded-xl p-3 mb-2">
       {/* Header */}
@@ -42,9 +47,9 @@ export function ProfileCard({
               AUTO
             </span>
           )}
-          {profile._strategy && (
+          {profileStrategy && (
             <span className="text-[9px] px-1.5 py-0.5 rounded bg-tg-section-bg text-tg-hint">
-              {profile._strategy}
+              {profileStrategy}
             </span>
           )}
         </div>
@@ -63,7 +68,7 @@ export function ProfileCard({
 
       {/* Description */}
       <div className="text-[10px] text-tg-hint mt-1 text-left">
-        {profile._description || profile.description || 'No description'}
+        {profileDescription}
       </div>
 
       {/* Usage info */}
@@ -73,51 +78,57 @@ export function ProfileCard({
         </div>
       )}
 
-      {/* Settings preview */}
+      {/* Settings preview - show all sections */}
       <div className="mt-2 pt-2 border-t border-white/10">
-        {profile.preset && Object.keys(profile.preset).length > 0 && (
-          <div className="mb-2">
-            <div className="text-[9px] text-tg-hint uppercase mb-1">Preset</div>
-            <div className="flex flex-wrap gap-1">
-              {Object.entries(profile.preset).map(([k, v]) => (
-                <span key={k} className="text-[10px] px-1.5 py-0.5 rounded bg-tg-section-bg text-tg-text">
-                  {k}: {String(v)}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Dynamically render all profile sections except underscore-prefixed */}
+        {Object.entries(profileObj)
+          .filter(([key]) => !key.startsWith('_'))
+          .map(([sectionName, sectionData]) => {
+            if (typeof sectionData !== 'object' || sectionData === null || Array.isArray(sectionData)) {
+              return null;
+            }
+            const entries = Object.entries(sectionData as Record<string, unknown>);
+            if (entries.length === 0) return null;
 
-        {profile.position && Object.keys(profile.position).length > 0 && (
-          <div className="mb-2">
-            <div className="text-[9px] text-tg-hint uppercase mb-1">Position</div>
-            <div className="flex flex-wrap gap-1">
-              {Object.entries(profile.position).map(([k, v]) => (
-                <span key={k} className="text-[10px] px-1.5 py-0.5 rounded bg-tg-section-bg text-tg-text">
-                  {k}: {String(v)}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
+            // Format section name
+            const sectionLabels: Record<string, string> = {
+              preset: 'Preset',
+              position: 'Position',
+              signal_rules: 'Signal Rules',
+              sl_tp: 'SL/TP',
+              breakeven: 'Breakeven',
+              time_exit: 'Time Exit',
+              risk_limits: 'Risk Limits',
+              loops: 'Loops',
+              regime_overrides: 'Regime',
+              interaction_rules: 'Interaction',
+              ai_integration: 'AI',
+              ai_filter: 'AI Filter',
+              sessions: 'Sessions',
+              multi_timeframe: 'MTF',
+              pre_filter: 'Pre Filter',
+              grid_settings: 'Grid',
+            };
+            const label = sectionLabels[sectionName] || sectionName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
-        {profile.signal_rules && Object.keys(profile.signal_rules).length > 0 && (
-          <div>
-            <div className="text-[9px] text-tg-hint uppercase mb-1">Signal Rules</div>
-            <div className="flex flex-wrap gap-1">
-              {Object.entries(profile.signal_rules).slice(0, 4).map(([k, v]) => (
-                <span key={k} className="text-[10px] px-1.5 py-0.5 rounded bg-tg-section-bg text-tg-text">
-                  {k}: {String(v)}
-                </span>
-              ))}
-              {Object.keys(profile.signal_rules).length > 4 && (
-                <span className="text-[10px] text-tg-hint">
-                  +{Object.keys(profile.signal_rules).length - 4} more
-                </span>
-              )}
-            </div>
-          </div>
-        )}
+            return (
+              <div key={sectionName} className="mb-2">
+                <div className="text-[9px] text-tg-hint uppercase mb-1">{label}</div>
+                <div className="flex flex-wrap gap-1">
+                  {entries.slice(0, 4).map(([k, v]) => (
+                    <span key={k} className="text-[10px] px-1.5 py-0.5 rounded bg-tg-section-bg text-tg-text">
+                      {k}: {String(v)}
+                    </span>
+                  ))}
+                  {entries.length > 4 && (
+                    <span className="text-[10px] text-tg-hint">
+                      +{entries.length - 4} more
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
       </div>
 
       {/* Actions dropdown */}

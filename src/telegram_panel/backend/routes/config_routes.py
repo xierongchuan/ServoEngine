@@ -711,6 +711,132 @@ async def update_strategy(name: str, request: Request, _user: dict = Depends(get
 # Profiles Endpoints
 # ============================================================================
 
+def _get_profile_schema() -> dict:
+    """
+    Get schema of valid profile parameters by reading all strategy files.
+    Returns a dict with strategy names as keys and valid parameter sections/keys as values.
+    """
+    schema = {}
+
+    if not STRATEGIES_DIR.exists():
+        return schema
+
+    # Read all strategy files and extract valid keys
+    for strategy_file in STRATEGIES_DIR.glob("*.json"):
+        strategy_name = strategy_file.stem.upper()
+        try:
+            strategy_config = _load_json(strategy_file)
+
+            # Extract all valid keys from strategy config (these can be overridden in profile)
+            valid_sections = {}
+            for key, value in strategy_config.items():
+                if key.startswith("_"):
+                    continue  # Skip metadata keys
+                if isinstance(value, dict):
+                    # This is a section like "preset", "position", "signal_rules"
+                    # All keys in this section are valid for profiles
+                    valid_sections[key] = list(value.keys())
+                elif key in ("preset", "position", "signal_rules"):
+                    # These sections can also be in profiles
+                    valid_sections[key] = []
+
+            # Add special sections that can be in profiles
+            valid_sections["preset"] = valid_sections.get("preset", [])
+            valid_sections["position"] = valid_sections.get("position", [])
+            valid_sections["signal_rules"] = valid_sections.get("signal_rules", [])
+
+            # Add other common profile sections
+            valid_sections["sl_tp"] = []
+            valid_sections["breakeven"] = []
+            valid_sections["time_exit"] = []
+            valid_sections["risk_limits"] = []
+            valid_sections["loops"] = []
+            valid_sections["regime_overrides"] = []
+            valid_sections["interaction_rules"] = []
+            valid_sections["ai_integration"] = []
+            valid_sections["ai_filter"] = []
+            valid_sections["sessions"] = []
+            valid_sections["multi_timeframe"] = []
+            valid_sections["pre_filter"] = []
+            valid_sections["grid_settings"] = []
+
+            schema[strategy_name] = valid_sections
+        except Exception as e:
+            logger.warning(f"Failed to read strategy {strategy_file}: {e}")
+
+    return schema
+
+
+def _validate_profile_keys(profile_data: dict, strategy: str = None) -> tuple[bool, list[str]]:
+    """
+    Validate that profile only contains valid keys for the given strategy.
+    Returns (is_valid, list_of_invalid_keys).
+    """
+    schema = _get_profile_schema()
+
+    # Get strategy to validate against
+    profile_strategy = profile_data.get("_strategy", strategy)
+    if not profile_strategy:
+        # Default profile - allow any keys
+        return True, []
+
+    profile_strategy = profile_strategy.upper()
+    valid_sections = schema.get(profile_strategy, {})
+
+    if not valid_sections:
+        # Unknown strategy - be permissive but warn
+        logger.warning(f"Unknown strategy for profile validation: {profile_strategy}")
+        return True, []
+
+    invalid_keys = []
+
+    for section_name, section_data in profile_data.items():
+        if section_name.startswith("_"):
+            continue  # Metadata keys are always allowed
+
+        if section_name not in valid_sections:
+            # Unknown section
+            invalid_keys.append(section_name)
+            continue
+
+        # Check if section is a dict with keys
+        if isinstance(section_data, dict):
+            valid_keys = valid_sections[section_name]
+            if valid_keys:  # If we have a list of valid keys
+                for key in section_data.keys():
+                    if key not in valid_keys:
+                        invalid_keys.append(f"{section_name}.{key}")
+
+    return len(invalid_keys) == 0, invalid_keys
+
+
+@router.get("/profiles/schema")
+async def get_profile_schema(_user: dict = Depends(get_current_user)) -> dict:
+    """
+    Get schema of valid profile parameters for all strategies.
+    This defines which keys are allowed in profile configuration.
+    """
+    if not _use_new_config_system():
+        raise HTTPException(status_code=400, detail="New config system not available")
+
+    schema = _get_profile_schema()
+
+    # Add default profile schema (works with any strategy)
+    default_schema = {}
+    for strategy_schema in schema.values():
+        for section, keys in strategy_schema.items():
+            if section not in default_schema:
+                default_schema[section] = set()
+            default_schema[section].update(keys)
+
+    # Convert sets to lists for JSON
+    default_schema = {k: list(v) for k, v in default_schema.items()}
+
+    return {
+        "schemas": schema,
+        "default": default_schema,
+    }
+
 @router.get("/profiles")
 async def list_profiles(_user: dict = Depends(get_current_user)) -> dict:
     """List all available profiles."""
@@ -720,15 +846,7 @@ async def list_profiles(_user: dict = Depends(get_current_user)) -> dict:
         for path in PROFILES_DIR.glob("*.json"):
             name = path.stem
             config = _load_json(path)
-            profiles[name] = {
-                "name": name,
-                "description": config.get("_description", ""),
-                "inherits": config.get("_inherits"),
-                "_strategy": config.get("_strategy"),
-                "preset": config.get("preset", {}),
-                "position": config.get("position", {}),
-                "signal_rules": config.get("signal_rules", {}),
-            }
+            profiles[name] = config  # Return full JSON
 
     return {"profiles": profiles, "available": list(profiles.keys())}
 
@@ -748,7 +866,10 @@ async def get_profile(name: str, _user: dict = Depends(get_current_user)) -> dic
 
 @router.put("/profiles/{name}")
 async def update_profile(name: str, request: Request, _user: dict = Depends(get_current_user)) -> dict:
-    """Update or create profile configuration."""
+    """
+    Update or create profile configuration.
+    Validates that only allowed keys are modified (based on strategy schema).
+    """
     if not _use_new_config_system():
         raise HTTPException(status_code=400, detail="New config system not available")
 
@@ -757,6 +878,14 @@ async def update_profile(name: str, request: Request, _user: dict = Depends(get_
         new_data = json.loads(body)
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    # Validate profile keys against schema
+    is_valid, invalid_keys = _validate_profile_keys(new_data)
+    if not is_valid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid profile keys: {', '.join(invalid_keys)}. These parameters are not allowed for this strategy."
+        )
 
     # Ensure profiles directory exists
     PROFILES_DIR.mkdir(parents=True, exist_ok=True)
@@ -768,11 +897,12 @@ async def update_profile(name: str, request: Request, _user: dict = Depends(get_
         "_inherits": "default",
     }
 
-    # Merge
+    # Merge - only update values, don't add new keys to sections
     for key, value in new_data.items():
-        if key.startswith("_") and key not in ("_description", "_inherits"):
+        if key.startswith("_") and key not in ("_description", "_inherits", "_strategy"):
             continue
         if key in current and isinstance(current[key], dict) and isinstance(value, dict):
+            # For dict sections, merge but don't add new keys
             current[key] = {**current[key], **value}
         else:
             current[key] = value

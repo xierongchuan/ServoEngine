@@ -233,13 +233,7 @@ export interface StrategiesResponse {
 
 export interface ProfileInfo {
   name: string;
-  description?: string;
-  inherits?: string | null;
-  _description?: string;
-  _strategy?: string | null;
-  preset?: Record<string, unknown>;
-  position?: Record<string, unknown>;
-  signal_rules?: Record<string, unknown>;
+  [key: string]: unknown;  // Allow any keys for dynamic profile structure
 }
 
 export interface ProfilesResponse {
@@ -372,6 +366,15 @@ export function cloneProfile(sourceName: string, newName: string) {
     method: 'POST',
     body: JSON.stringify({ new_name: newName }),
   });
+}
+
+export interface ProfileSchema {
+  schemas: Record<string, Record<string, string[]>>;
+  default: Record<string, string[]>;
+}
+
+export function getProfileSchema() {
+  return fetchAPI<ProfileSchema>('/api/config/profiles/schema');
 }
 
 export interface AutoCreateProfileRequest {
