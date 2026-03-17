@@ -6,100 +6,111 @@ AI-powered cryptocurrency futures trading bot for BingX exchange. Combines techn
 
 ## Commands
 
+All operations use **podman containers** — never run Python commands directly on host.
+
 ```bash
-# Run the trading bot (in container via podman)
+# Start trading bot (interactive)
 ./scripts/run_trading_bot.sh
 
-# Run the bot directly (inside container or venv)
-python3 run.py
+# Generate chart manually (inside container/venv)
+python3 src/core/plotter.py 2H    # last 2 hours
+python3 src/core/plotter.py 1D    # last 1 day
 
-# Run tests (pytest not in main requirements — install in container)
-podman run --rm -v .:/app:Z -w /app python:3.12-slim sh -c "pip install -q requests pandas matplotlib pytest && python -m pytest tests/ -x -q"
-
-# Run a single test
-podman run --rm -v .:/app:Z -w /app python:3.12-slim sh -c "pip install -q requests pandas matplotlib pytest && python -m pytest tests/test_bingx.py -x -q"
-
-# Generate chart manually
-python3 src/core/plotter.py 2H
-
-# Monitor logs
+# Monitor logs (interactive menu)
 ./scripts/monitor_logs.sh
 
 # Telegram Panel
-./scripts/start_panel.sh [ngrok|tunnel|prod]   # start (interactive mode selector)
-./scripts/stop_panel.sh                        # stop (container + ngrok/tunnel)
-podman-compose up --build -d                   # start container only
-podman-compose down                            # stop container only
-podman-compose logs -f                         # logs
+./scripts/start_panel.sh [ngrok|tunnel|prod]  # start with mode selection
+./scripts/stop_panel.sh                        # stop panel container
+./scripts/tunnel.sh start|stop|status|restart  # manage Cloudflare tunnel
 
-# HTTPS tunnel for Telegram Mini App (SSH + cloudflared)
-./scripts/tunnel.sh start|stop|status|restart
+# Container management (raw podman-compose)
+podman-compose up --build -d   # start only
+podman-compose down            # stop only
+podman-compose logs -f         # logs
 ```
+
+**Tests** (run inside container, pytest not in main requirements):
+
+```bash
+podman run --rm -v .:/app:Z -w /app python:3.12-slim \
+  sh -c "pip install -q requests pandas matplotlib pytest && python -m pytest tests/ -x -q"
+```
+
+## Strategy Styles
+
+The bot supports multiple trading strategies. Each strategy is configured in `config/strategies/<strategy>.json` and has a corresponding prompt template in `src/prompts/strategies/`. Available strategies vary based on the active configuration.
+
+**Core strategies:**
+- **SCALP** — High-frequency 1m scalping with dual-loop engine (fast 1.5s + slow 45s), trailing stops, breakeven.
+- **AISCALP** — 1m day trading with multi-timeframe analysis (1H HTF), session awareness.
+- **SWING** — Multi-day 1h swinging with 24h minimum hold, milestone exits.
+- **GRID** — Limit order grid trading with inventory management.
+- **HYBRID** — 5m swing trading with deterministic signal scoring + AI confirmation.
+- **MACDX** — Fully deterministic MACD crossover strategy (no AI).
+
+**Variants** (different AI integration modes): Some strategies have VETO (AI veto only) or REGIME (regime-adaptive) variants available in the prompt templates.
+
+Strategy-specific parameters (weights, thresholds, loops) are defined in their respective JSON configs. The active strategy and symbol-to-profile mapping is set in `config/active.json`.
 
 ## Architecture
 
-**Multiprocessing supervisor-worker pattern.** Each trading symbol runs in its own process with an independent event loop.
+**Multiprocessing supervisor-worker pattern:** Each trading symbol runs in its own isolated process with an independent event loop. The main process (`run.py` → `src/main.py`) spawns the Chart Worker and WebSocket Provider.
 
 ```
 run.py → src/main.py (spawns processes)
-  ├── Worker per symbol (src/core/process_worker.py) — infinite loop:
-  │   HYBRID: Collector → Analyzer → TradeTracker → DecisionJournal → SignalGenerator →
-  │           RegimeDetector → RiskManager → [AI Veto conditional] → Executor → Monitor → sleep
-  │   AISCALP: Collector → Analyzer → HTF Analysis → Session → TradeTracker →
-  │            DecisionJournal → SignalGenerator → RegimeDetector → RiskManager → AI → Executor → Monitor → sleep
-  │   SCALP: Delegates to ScalpEngine (dual-loop: fast 1.5s + slow 45s)
-  │   GRID: Delegates to GridWorker (limit order grid)
-  │   SWING: Collector → Analyzer → TradeTracker → DecisionJournal → AI → Executor → Monitor → sleep
+  ├── Worker per symbol (src/core/process_worker.py) — infinite loop orchestrator
   ├── Chart Worker (src/core/chart_worker.py) — parallel PNG generation via ProcessPoolExecutor
   └── WebSocket Provider (src/exchanges/ws_data_provider.py) — optional real-time kline cache
 ```
 
-### Per-symbol cycle (e.g. HYBRID 5m, 60s loop)
+### Strategy-specific Pipelines
 
-```
- 1. collector.process_symbol()          — fetch OHLCV candles + news → data/prices/{SYMBOL}.json
- 2. analyzer.analyze_symbol_with_position() — indicators, trends, market context, signal scoring
- 3. trade_tracker.sync_position()       — detect new/closed/updated positions
- 4. decision_journal.get_context()      — previous AI decisions for prompt context
- 5. signal_generator.generate()         — deterministic signal scoring (HYBRID/AISCALP)
- 6. regime.detect()                     — classify market regime (TRENDING/RANGING/VOLATILE/TRANSITIONAL)
- 7. risk_manager.calculate_dynamic_sl_tp() — ATR+S/R based SL/TP with regime adjustments
- 8. risk_manager.calculate_position_size() — dynamic sizing based on quality/regime/streak
- 9. predict.main()                      — build prompt → call LLM → parse JSON (conditional: high-quality signals auto-execute, borderline/conflicting go through AI veto)
-10. executor.main()                     — calculate size, place orders with SL/TP
-11. monitor.main()                      — log open positions, PnL tracking
-12. performance.check_calibration()     — periodic calibration suggestions (every 50 cycles)
-13. sleep(loop_interval)                — style-dependent (1.5s SCALP, 60s AISCALP, 4h SWING)
-```
+The `process_worker` selects the pipeline based on the active strategy:
 
-### Pipeline modules (src/core/)
-- **process_worker.py** — per-symbol infinite loop orchestrator. Hot-reload config every 30s. Dynamic sleep (position_check_interval vs base_interval with ±20% jitter). Disabled symbols check, funding rate logging
-- **collector.py** — fetches OHLCV candles from BingX API, optionally news. For AISCALP: also fetches HTF (1H) candles
-- **analyzer.py** — calculates indicators (EMA, RSI, MACD, ATR, BB, SEB, S/R levels), detects market context (trend, volume), smart sampling for AI context. `analyze_htf()` for multi-timeframe analysis (AISCALP)
-- **signal_generator.py** — deterministic scoring system for HYBRID mode (max base score 10, regime-adaptive min: default 5). Weights: EMA(2), RSI(2), S/R(2), MACD(1), Momentum(1), BB(1), Volume(1). Tiered system (Tier 1: direction, Tier 2: confirmation), interaction bonuses/penalties, conflict friction. `should_close_position()` for exit signals
-- **aiscalp_signal.py** — AISCALP multi-timeframe signal generator. HTF trend weight (3), session awareness, counter-HTF penalty (-3). Uses `AISCALP_SETTINGS` config
-- **scalp_engine.py** — dedicated SCALP strategy engine with dual-loop (fast 1.5s signal detection + slow 45s regime/veto). Trailing stops, breakeven, time-based exits
-- **scalp_signal.py** — SCALP signal generator with OB imbalance, VWAP, momentum scoring
-- **scalp_performance.py** — SCALP-specific performance tracking, streak management, rate limiting
-- **session.py** — trading session management (ASIAN 0-8 UTC, EUROPEAN 7-15, US 13-21). Overlap bonuses, dead zone penalties (21-23 UTC)
-- **lightweight_analyzer.py** — fast indicator calculations for scalp fast loop
-- **regime.py** — `MarketRegimeDetector` (singleton). Classifies market into 4 regimes: TRENDING, RANGING, VOLATILE, TRANSITIONAL. Uses EMA spread, BB width percentiles, ATR ratio. Returns regime-specific parameters (min_score, SL/TP multipliers, position_size_factor)
-- **risk_manager.py** — `calculate_dynamic_sl_tp()` (ATR+S/R with regime/quality adjustments), `calculate_position_size()` (dynamic sizing with regime/quality/streak factors, bounds 3-20%), `validate_risk_parameters()` (fee-adjusted R/R and risk% validation)
-- **performance.py** — `PerformanceTracker` (singleton). Tracks win rate, avg PnL, hold time, streaks by regime/score. Provides `should_adjust_thresholds()` for calibration. Saves to `data/calibration_suggestions.json`
-- **predict.py** — builds prompt via PromptBuilder, calls LLM (OpenRouter), parses JSON (action, confidence, stop_loss, take_profit, reason). Retry: 3 attempts, exponential backoff. Smart filter skips low-volume neutral markets. `validate_prediction()` auto-adjusts low R/R
-- **executor.py** — calculates position size from balance %, places orders with SL/TP. Accepts dynamic `size_pct` from risk_manager. Balance overflow protection at 95%. Fee reserve deduction. Sets SL/TP separately after order placement
-- **monitor.py** — logs open positions age and PnL per symbol with fee estimates
-- **trade_tracker.py** — persists trade history to `data/active_trades.json` and `data/trade_history.json`, detects manual closes. `set_entry_context()` saves regime/score/quality at entry for performance analysis. `force_sync_all()` for startup sync. Atomic file operations with fcntl.flock
-- **decision_journal.py** — AI decision history per symbol (`data/decision_journal.json`), cooldown logic for SWING, trade plan persistence, position age tracking
-- **plotter.py** — matplotlib chart generation (candlestick + SMA/RSI/SEB overlays, S/R levels, position markers, SL/TP lines). Full-dataset indicator warmup then slice to display range
-- **chart_worker.py** — dedicated process, updates charts every N seconds with parallel processing via ProcessPoolExecutor
-- **grid_worker.py** / **grid_executor.py** — grid trading strategy (limit order grid with inventory management, ADX-based pause during strong trends, emergency stop-loss)
+- **SCALP**: Delegates to `ScalpEngine` (dual-loop: fast 1.5s + slow 45s)
+- **HYBRID**: Conditional AI veto logic (auto-approve high-quality signals, AI review for borderline)
+- **AISCALP**: Always goes through AI with multi-timeframe analysis
+- **GRID**: Delegates to `GridWorker` (limit order grid)
+- **MACDX**: Fully deterministic, no AI
+- Other strategies use linear pipeline: Collector → Analyzer → SignalGenerator → RiskManager → [AI optional] → Executor → Monitor
+
+### Core Modules (src/core/)
+
+Key components:
+- **process_worker.py** — orchestrates the per-symbol loop, hot-reloads config every 30s, handles disabled symbols, funding rate logging
+- **collector.py** — fetches OHLCV candles from BingX API, optionally news; AISCALP also fetches HTF candles
+- **analyzer.py** — calculates technical indicators (EMA, RSI, MACD, ATR, BB, SEB, S/R levels), detects market context, provides smart sampling for AI
+- **lightweight_analyzer.py** — fast indicator calculations for SCALP fast loop
+- **session.py** — trading session management (ASIAN/EUROPEAN/US) with overlap bonuses and dead zone penalties
+- **regime.py** — `MarketRegimeDetector` singleton; classifies market into TRENDING/RANGING/VOLATILE/TRANSITIONAL
+- **risk_manager.py** — dynamic SL/TP calculation (ATR+S/R), position sizing with streak and regime factors, risk validation
+- **trade_tracker.py** — persists trades (`active_trades.json`, `trade_history.json`), syncs with exchange, tracks entry context
+- **decision_journal.py** — AI decision history per symbol, cooldown logic, trade plan persistence
+- **performance.py** — `PerformanceTracker` singleton; tracks performance metrics, provides calibration suggestions every 50 cycles
+
+Strategy-specific signal generators:
+- **signal_generator.py** — HYBRID deterministic scoring (tiered system, max 10 base + interactions)
+- **aiscalp_signal.py** — AISCALP multi-timeframe scoring with HTF trend weight
+- **scalp_engine.py** — SCALP dual-loop engine with trailing stops, breakeven, time exits
+- **scalp_signal.py** — SCALP signal logic (OB imbalance, VWAP, momentum patterns)
+- **scalp_performance.py** — SCALP performance tracking and rate limiting
+- **macdx_signal.py** — MACDX MACD crossover with confirmations (no AI)
+- **grid_worker.py** / **grid_executor.py** — GRID strategy with inventory management and ADX-based pausing
+
+Support modules:
+- **predict.py** — LLM integration via OpenRouter, prompt building, JSON parsing, 3 retries with exponential backoff
+- **executor.py** — order placement with dynamic sizing and SL/TP
+- **monitor.py** — position logging and PnL tracking
+- **plotter.py** — chart generation (candlesticks + overlays, S/R, position markers)
+- **chart_worker.py** — parallel chart updates
 
 ### Exchange layer (src/exchanges/)
-- **exchange_client.py** — abstract base class: `check_prerequisites()`, `get_balance()`, `get_kline_data()`, `get_positions()`, `place_order()`, `close_position()`, `get_order_book()`, `get_ticker()`, `cancel_all_orders()`, `get_commission_rate()`, `get_funding_rate()`
-- **bingx_client.py** — BingX perpetual futures (`/openApi/swap/v2/`). HMAC-SHA256 signing. Supports demo (VST) and real modes. Class-level caching: positions 5s, balance 10s, commission 1h, funding 5min. Retry: 3 attempts (1s→2s→4s). WebSocket cache fallback for klines
-- **exchange_factory.py** — factory returning BingXClient based on `EXCHANGE` env var
-- **ws_data_provider.py** — WebSocket real-time kline cache (deque, 600 candles/symbol). Multiprocessing Manager proxy for cross-process access. Auto-reconnect with exponential backoff (1s→60s). REST backfill on startup
+
+- **exchange_client.py** — abstract base class defining the exchange interface
+- **bingx_client.py** — BingX perpetual futures implementation (HMAC-SHA256 signing, demo/real modes). Class-level caching (positions 5s, balance 10s, commission 1h). Retry: 3 attempts (1s→2s→4s). WebSocket cache integration
+- **exchange_factory.py** — factory returning the appropriate client
+- **ws_data_provider.py** — WebSocket real-time kline cache (deque, 600 candles/symbol). Multiprocessing Manager proxy for cross-process sharing. Auto-reconnect with exponential backoff (1s→60s max). REST backfill on startup. Keepalive ping every 20s
 
 ### Prompt system (src/prompts/)
 - **builder.py** — `PromptBuilder.build(style, ctx)` assembles modular prompt from blocks + strategy section. Cached block loading. Separator: `\n\n---\n\n`
@@ -107,17 +118,23 @@ run.py → src/main.py (spawns processes)
 - **strategies/** — `BaseStrategy` ABC with implementations: `ScalpStrategy`, `ScalpVetoStrategy`, `ScalpRegimeStrategy`, `AiScalpStrategy`, `SwingStrategy`, `SwingVetoStrategy`, `GridStrategy`, `HybridStrategy`, `HybridVetoStrategy`. Registry in `__init__.py` STRATEGIES dict
 
 ### Telegram Panel (src/telegram_panel/)
-Management UI — does NOT affect trading bot functionality. Runs in a separate container.
 
-- **run_panel.py** — entrypoint: launches FastAPI + Telegram bot in daemon thread (uses low-level asyncio to avoid signal handler issues in non-main thread). Retry up to 5 times with exponential backoff
-- **bot.py** — `TelegramPanelBot` with commands: `/start`, `/status`, `/trades`, `/chart`, `/logs`, `/config`, `/help`. Multi-user auth via `TELEGRAM_ALLOWED_IDS` (falls back to `TELEGRAM_ADMIN_ID`). `TradingNotifier` watches `active_trades.json` for trade open/close alerts. Mini App button integration
-- **backend/app.py** — FastAPI with lifespan, CORS for Telegram WebApp, WebSocket at `/ws`, health check at `/api/health`, serves React static from `frontend/dist/`
-- **backend/config.py** — panel-specific config (ports, tokens, paths, allowed IDs)
-- **backend/ws.py** — `ConnectionManager` for WebSocket connection management and broadcast with stale connection cleanup
-- **backend/routes/** — `dashboard.py`, `trades.py` (includes `/api/trades/stats`, disable/enable symbol endpoints), `charts.py`, `logs.py`, `config_routes.py`, `journal.py`
-- **backend/services/** — `auth.py` (Telegram HMAC initData verification via `X-Telegram-Init-Data` header, user ID whitelist), `data_reader.py` (read bot data files), `file_watcher.py` (watchdog: monitors `data/`, `charts/`, broadcasts via WebSocket)
-- **frontend/** — Vite + React 18 + TypeScript + TailwindCSS + `@twa-dev/sdk`. Pages: Dashboard, Charts, Trades, Logs, Journal, Settings. Hooks: `useTelegram()`, `useWebSocket()`. Utils: `pnl.ts` (ROE%, formatting)
-- **Dockerfile** — multi-stage: Node 20 builds React, Python 3.12 runs FastAPI+bot
+Management UI that runs in a separate container and does NOT affect trading bot functionality.
+
+**Components:**
+- **run_panel.py** — entrypoint that launches FastAPI + Telegram bot in a daemon thread with 5 retries on startup
+- **bot.py** — Telegram bot with commands: `/start` (welcome + Mini App button), `/status`, `/trades`, `/chart`, `/logs`, `/config`, `/help`, plus admin commands (`/weblink`, `/reload`, `/stop`, `/resume`, `/close`). Multi-user auth via `TELEGRAM_ALLOWED_IDS`. `TradingNotifier` emits alerts on trade open/close.
+- **backend/app.py** — FastAPI app with lifespan, CORS for WebApp, global exception handler
+- **backend/config.py** — panel paths and configuration
+- **backend/ws.py** — WebSocket `ConnectionManager` for real-time broadcasts
+- **backend/routes/** — API routers: `dashboard`, `trades` (includes `/api/trades/stats`, symbol enable/disable), `charts`, `logs`, `config_routes`, `journal`
+- **backend/services/** — `auth` (Telegram HMAC initData verification + web-token support), `data_reader`, `file_watcher` (watchdog on `data/`, `charts/`, broadcasts changes)
+- **frontend/** — React 18 + TypeScript + TailwindCSS + `@twa-dev/sdk`. Pages: Dashboard, Charts, Trades, Logs, Journal, Settings
+- **Dockerfile** — multi-stage: Node builds React, Python runs FastAPI+bot
+
+**Authentication:** Supports both Telegram Mini App initData (HMAC verification) and web-token scheme for direct browser access.
+
+**WebSocket:** Real-time updates when data files change (`/ws` endpoint).
 
 ### Utilities (src/utils/)
 - **logger.py** — `setup_symbol_logger(symbol)`, `StageTimer` context manager, `ElapsedFilter`, writes to `data/steps.log`, `data/trades.log`, `data/logs/{SYMBOL}.log`. UTC timestamps
@@ -125,50 +142,51 @@ Management UI — does NOT affect trading bot functionality. Runs in a separate 
 - **news_api.py** — news fetching from NewsAPI, Alpha Vantage, Finnhub (when `ENABLE_NEWS=true`). Sentiment analysis via TextBlob or keyword matching
 - **cleanup_cache.py** — old file cleanup
 
-## Configuration
+## Configuration System
 
-**Loading order:** `.env` / env vars → hardcoded defaults (`src/config.py`) + `config/` directory (`base.json` + `trading.json` + `active.json` + `strategies/*.json`) deep merge → dynamic strategy preset overrides. Hot-reload: `config/active.json` and `config/trading.json` checked every 30s for modifications.
-
-### Strategy styles
-
-| Style | Timeframe | Loop | Leverage | ATR SL/TP | Notes |
-|-------|-----------|------|----------|-----------|-------|
-| SCALP | 1m | 1.5s | 15x | 1.0/3.0 | Dual-loop engine (fast 1.5s + slow 45s), trailing stops, time exits |
-| AISCALP | 1m | 60s | 10x | 5.0/7.0 | Multi-TF (1m+1H), session awareness, HTF trend alignment |
-| SWING | 1h | 4h | 5x | 3.0/6.0 | Multi-day, 24h min hold, 6h cooldown, milestone-based exits |
-| GRID | 1m | 5s | 5x | — | Limit order grid, inventory management, ADX-based pausing |
-| HYBRID | 5m | 60s | 10x | 1.5/3.0 | Deterministic signals + AI confirmation (default) |
-
-### Key env vars (.env)
-- `MODE` — `demo` (VST Futures) or `real`
-- `EXCHANGE` — `bingx`
-- `OPENROUTER_API_KEY` — AI API key
-- `BINGX_API_KEY`, `BINGX_SECRET_KEY` — exchange credentials
-- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_ID`, `TELEGRAM_PANEL_URL` — panel
-- `TELEGRAM_ALLOWED_IDS` — comma-separated list of allowed Telegram user IDs (falls back to `TELEGRAM_ADMIN_ID`)
-- `PANEL_PORT` — default 8080
-- `VPS_HOST`, `VPS_USER`, `VPS_PORT`, `VPS_SSH_KEY` — tunnel config
-- `ENABLE_NEWS` — `true`/`false`
-- `NEWSAPI_KEY`, `ALPHAVANTAGE_KEY`, `FINNHUB_KEY` — news provider API keys (when `ENABLE_NEWS=true`)
-
-### Config directory structure (`config/`)
+**Modular configuration with deep inheritance:**
 
 ```
 config/
   base.json           # Infrastructure (exchange fees, AI, charts, TA params) — rarely changed
   trading.json        # Trading params (position, risk, features, regime, sizing)
-  strategies/         # Per-strategy configs (preset, signal_rules, AI filter)
+  strategies/         # Per-strategy configs (preset, signal_rules, AI filter, exit_rules)
     scalp.json, aiscalp.json, swing.json, grid.json, hybrid.json, macdx.json
-  profiles/           # Per-symbol overrides (inherits from strategy defaults)
+  profiles/           # Per-symbol overrides (inherits from base strategy)
     default.json, btc_aggressive.json, eth_conservative.json
   active.json         # Runtime: active strategy + symbols + profile mapping + disabled_symbols
 ```
 
-- `active.json` — `strategy` (SCALP/AISCALP/SWING/GRID/HYBRID/MACDX), `symbols` ({exchange: [pairs]}), `disabled_symbols`, `symbol_profiles`
-- `trading.json` — `position` (size_percent, min_trade_amount_usdt), `risk` (confidence, R/R, TP/SL), `features` (news, aggressive, parallel), `regime`, `dynamic_sizing`, `performance_tracking`, `smart_sampling`, `momentum`
-- `base.json` — `exchange` (fees), `ai` (model, temperature, reasoning, retry, fallback_models), `chart_ranges`, `plotter_ranges`, `technical_analysis`, `chart_settings`, `position_limits`, `news`, `decision_journal`, `cleanup_settings`
-- `strategies/*.json` — `preset` (timeframe, loop_interval, leverage, atr_sl/tp_mult), `signal_rules` (weights, thresholds), `ai_filter`, `interactions`, `exit_rules`
-- `profiles/*.json` — minimal overrides per symbol, `_inherits` for profile inheritance
+**Loading order:** `.env` → hardcoded defaults (`src/config.py`) → `config/` files deep merge → strategy preset overrides. Hot-reload: `config/active.json` and `config/trading.json` checked every 30s for modifications.
+
+**Profile inheritance:** Profiles support `_inherits` field to inherit from another profile, and `_strategy` for strategy-specific validation.
+
+**Config loader:** `src/config_loader.py` handles merging, inheritance, and symbol-specific resolution.
+
+### Strategy Configurations
+
+All trading strategies are configured in `config/strategies/`. Each strategy JSON defines:
+- `preset`: timeframe, loop intervals, leverage, ATR multipliers
+- `signal_rules`: indicator weights, thresholds, scoring parameters
+- `ai_filter`: AI integration settings (enabled, confidence thresholds, auto-approve quality)
+- `exit_rules`: position management rules (trailing, breakeven, time exits)
+
+The active strategy is set in `config/active.json`. Symbol-specific overrides can be applied via profiles in `config/profiles/`.
+
+Strategy-specific prompt templates are in `src/prompts/strategies/`. The `STRATEGIES` dict in `__init__.py` lists all available prompt strategies (including variants like VETO and REGIME).
+
+### Key env vars (.env)
+
+- `MODE` — `demo` (BingX VST Futures) or `real`
+- `EXCHANGE` — exchange name (currently only `bingx`)
+- `OPENROUTER_API_KEY` — AI API key for OpenRouter
+- `BINGX_API_KEY`, `BINGX_SECRET_KEY` — exchange credentials
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_ID`, `TELEGRAM_PANEL_URL` — Telegram Panel
+- `TELEGRAM_ALLOWED_IDS` — comma-separated user IDs (falls back to `TELEGRAM_ADMIN_ID`)
+- `PANEL_PORT` — default `8080`
+- `VPS_HOST`, `VPS_USER`, `VPS_PORT`, `VPS_SSH_KEY` — tunnel configuration for Cloudflare
+- `ENABLE_NEWS` — `true`/`false` to enable news fetching
+- `NEWSAPI_KEY`, `ALPHAVANTAGE_KEY`, `FINNHUB_KEY` — news provider API keys
 
 ## Data files (data/)
 

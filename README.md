@@ -8,7 +8,57 @@
 
 Система использует модели искусственного интеллекта (**Gemini**, **Claude**, **DeepSeek** и другие через **OpenRouter**) для принятия торговых решений, комбинируя детерминированный технический анализ с AI-подтверждением, адаптивным риск-менеджментом и многопроцессной архитектурой.
 
+## Команды
+
+Все операции выполняются в **podman контейнерах** — не запускайте Python/npm напрямую на хосте.
+
+```bash
+# Запуск торгового бота
+./scripts/run_trading_bot.sh
+
+# Генерация графиков (внутри контейнера или venv)
+python3 src/core/plotter.py 2H    # последние 2 часа
+python3 src/core/plotter.py 1D    # последний день
+
+# Мониторинг логов (интерактивное меню)
+./scripts/monitor_logs.sh
+
+# Telegram Panel
+./scripts/start_panel.sh [ngrok|tunnel|prod]  # запуск (выбор режима)
+./scripts/stop_panel.sh                       # остановка
+./scripts/tunnel.sh start|stop|status|restart # управление Cloudflare туннелем
+
+# Только контейнеры (без скриптов)
+podman-compose up --build -d   # запустить
+podman-compose down            # остановить
+podman-compose logs -f         # логи
+
+# Тесты (pytest не в requirements — устанавливается в контейнере)
+podman run --rm -v .:/app:Z -w /app python:3.12-slim \
+  sh -c "pip install -q requests pandas matplotlib pytest && python -m pytest tests/ -x -q"
+```
+
 ---
+
+## <a id="quick-start"></a>Быстрый старт
+
+1. **Клонируйте и настройте env:**
+```bash
+git clone <repo> && cd OpenProducerBot
+cp .env.example .env
+# отредактируйте .env: MODE, API ключи, Telegram (опционально)
+```
+
+2. **Запустите бота:**
+```bash
+./scripts/run_trading_bot.sh
+```
+
+3. *(Опционально)* **Запустите панель:** `./scripts/start_panel.sh`
+
+---
+
+## <a id="features"></a>Ключевые возможности
 
 ## Содержание
 
@@ -59,10 +109,10 @@
 - **Performance Tracking**: Отслеживание win rate, PnL, стриков по режимам с автоматическими рекомендациями по калибровке.
 
 ### Визуализация
-- **12 временных диапазонов**: От 15 минут до 14 дней (plotter_ranges: 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1D, 2D, 3D, 1W, 14D)
-- **Параллельная генерация**: Графики создаются в отдельном процессе через ProcessPoolExecutor
-- **Индикаторы на графиках**: Candlestick + SMA (10/20/50/100/200) + RSI + SEB + позиция + SL/TP
-- **Автообновление**: Chart worker обновляет графики каждые N секунд
+- **Диапазоны графиков**: Конфигурируемые временные интервалы (от 15 минут до 30 дней).
+- **Параллельная генерация**: Графики создаются в отдельном процессе (ProcessPoolExecutor).
+- **Индикаторы**: Свечи + SMA (10/20/50/100/200) + RSI + SEB + уровни S/R + маркеры позиций и SL/TP.
+- **Автообновление**: Chart worker периодически обновляет графики.
 
 ### Системные особенности
 - **Singleton паттерн**: `MarketRegimeDetector` и `PerformanceTracker` инициализируются один раз на процесс
@@ -74,66 +124,21 @@
 
 ## <a id="strategies"></a>Стратегии торговли
 
-Переключение стиля в `config/active.json` → `strategy`:
+Настройка активной стратегии: `config/active.json` → `strategy`.
 
-| Стиль | Таймфрейм | Цикл | Плечо | Описание |
-|-------|-----------|------|-------|----------|
-| **SCALP** | 1m | 1.5s | 15x | Dual-loop движок (быстрый 1.5s + медленный 45s). Trailing stops, breakeven, time exits. OB imbalance + VWAP. Max hold: 15 мин |
-| **AISCALP** | 1m | 60s | 10x | Multi-TF анализ (1m + 1H). Сессионная фильтрация (ASIAN/EUROPEAN/US). HTF trend alignment. 4-12 часов |
-| **SWING** | 1h | 4h | 5x | Многодневное удержание (2-14 дней). Min hold 24h, cooldown 6h. Milestone exits. Широкие стопы (3x ATR) |
-| **GRID** | 1m | 5s | 5x | Сетка лимитных ордеров. Inventory management. ADX-based pause при сильном тренде |
-| **HYBRID** | 5m | 60s | 10x | Детерминированные сигналы (scoring 0-10) + AI подтверждение. Авто-выполнение при quality >= 0.7, AI veto для borderline |
-| **HYBRID_VETO** | 5m | 60s | 10x | Только AI veto (APPROVE/REJECT на английском). Детерминированный скоринг отключён |
-| **MACDX** | 15m | 60s | 10x | **Без AI** — чистый MACD crossover с 3-5 подтверждениями. Полностью детерминированное выполнение |
+Стратегии реализованы как отдельные конфигурации в `config/strategies/` и промпт-шаблоны в `src/prompts/strategies/`. Полный список доступных стратегий и их вариантов (VETO, REGIME) можно увидеть в `src/prompts/strategies/__init__.py` (REGISTRY `STRATEGIES`).
 
-### Система скоринга сигналов (HYBRID/AISCALP)
+**Основные типы:**
+- **SCALP** — скальпинг (1m), dual-loop движок, трейлинг-стопы, брейкiven.
+- **AISCALP** — дейтрейдинг (1m) с multi-TF анализом (1h HTF), сессионной фильтрацией.
+- **SWING** — свинг-трейдинг (1h), многодневное удержание, milestone exits.
+- **GRID** — сетка лимитных ордеров с управлением инвентарём.
+- **HYBRID** — детерминированные сигналы + AI подтверждение.
+- **MACDX** — полностью детерминированная MACD crossover стратегия (без AI).
 
-**Tier 1 — Направление** (обязательно хотя бы один):
-- EMA alignment (+2): ema9 > ema21 → LONG, ema9 < ema21 → SHORT
-- MACD crossover (+1): линия выше сигнала + гистограмма > 0
+**AI-интеграция** варьируется: некоторые стратегии используют AI для вето (APPROVE/REJECT), другие — для генерации/подтверждения, третьи — без AI. Параметры AI-фильтра (confidence thresholds, auto-approve quality) настраиваются в конфиге стратегии.
 
-**Tier 2 — Подтверждение** (обязательно хотя бы один):
-- RSI zone (+2): Long [20-43], Short [57-80]
-- S/R proximity (+2): Поддержка/сопротивление в пределах 2-3%
-
-**Tier 3 — Поддержка** (опционально):
-- Momentum (+1), Bollinger Bands (+1), Volume (+1)
-
-**Бонусы/штрафы**: EMA+MACD confluence (+1), Reversal confluence (+2), RSI divergence (-2)
-
-### Система скоринга MACDX (без AI)
-
-Стратегия **MACDX** работает полностью без AI. Все решения принимаются детерминированно на основе MACD crossover с подтверждениями.
-
-**Обязательный сигнал** (без него — HOLD):
-- MACD Crossover (+2): Линия MACD пересекает сигнальную линию
-
-**Подтверждения** (минимум 3 из 5 для открытия):
-| Индикатор | Вес | Условие |
-|-----------|-----|---------|
-| RSI Zone | +2 | Long: RSI в [25-65], Short: RSI в [35-75] |
-| EMA Alignment | +2 | Long: EMA9 > EMA21, Short: EMA9 < EMA21 |
-| Not Sideways | +1 | BB width > 0.5% ИЛИ ADX > 20 |
-| No Exhaustion | +1 | Нет RSI-дивергенции против направления |
-| Volume | +1 | Volume ratio >= 0.5 |
-
-**Требования**: Max score = 9, Min score = 4, Min confirmations = 3
-
-**Условия выхода**:
-- MACD гистограмма разворачивается против позиции
-- RSI достигает экстремума (>80 для long, <20 для short)
-- Take profit при хорошем PnL с угасанием моментума
-
-### Рыночные режимы
-
-Автоматическая классификация на основе EMA spread, BB width percentile, ATR ratio:
-
-| Режим | Min Score | SL Mult | TP Mult | Sizing |
-|-------|-----------|---------|---------|--------|
-| TRENDING | 4 | 1.5x | 3.5x | 1.2x |
-| RANGING | 5 | 1.0x | 2.0x | 0.8x |
-| VOLATILE | 5 | 2.0x | 3.5x | 0.6x |
-| TRANSITIONAL | 5 | 2.0x | 3.0x | 0.7x |
+**Маркет-режим** (TRENDING, RANGING, VOLATILE, TRANSITIONAL) классифицируется автоматически и влияет на минимальный score, мультипликаторы SL/TP и размер позиции.
 
 ---
 
@@ -211,257 +216,104 @@ config/
   active.json         # Активная стратегия + символы + профили
 ```
 
-### `config/active.json` — Текущие настройки
+### Структура конфигурации
 
-```json
-{
-  "strategy": "MACDX",
-  "symbols": { "bingx": ["BTCUSDT", "ETHUSDT"] },
-  "symbol_profiles": {
-    "BTCUSDT": "btc_aggressive",
-    "ETHUSDT": "default"
-  },
-  "disabled_symbols": []
-}
-```
+Конфигурация хранится в `config/`:
+- `base.json` — инфраструктура (биржа, AI, графики, TA) — редко меняется
+- `trading.json` — торговые параметры (позиции, риски, режимы, динамический sizing)
+- `strategies/*.json` — настройки стратегий (preset, signal_rules, ai_filter, exit_rules)
+- `profiles/*.json` — переопределения для символов с наследованием (`_inherits`) и валидацией (`_strategy`)
+- `active.json` — активная стратегия, символы, отключённые символы
 
-> **Примечание:** Система использует формат символов BingX API — "BTCUSDT" (без дефиса). Код автоматически нормализует символы между форматами.
+**Порядок загрузки:** `.env` → defaults (`src/config.py`) → deep merge `config/` → preset overrides.
 
-### `config/trading.json` — Торговые параметры
+**Hot-reload:** `active.json` и `trading.json` проверяются каждые 30 секунд. Остальные файлы требуют перезапуска.
 
-| Параметр | Путь | Описание | По умолчанию |
-|----------|------|----------|:------------:|
-| Position size | `position.size_percent` | % баланса на сделку | `10` |
-| Min trade | `position.min_trade_amount_usdt` | Мин. сумма USDT | `10` |
-| Confidence | `risk.min_confidence_threshold` | Мин. AI confidence | `0.55` |
-| R/R ratio | `risk.min_risk_reward_ratio` | Мин. Risk/Reward | `1.2` |
-| Take profit | `risk.take_profit_percent` | TP в % | `2.5` |
-| Stop loss | `risk.stop_loss_percent` | SL в % | `1.0` |
-
-### `config/base.json` — AI Настройки (`ai`)
-
-```json
-{
-  "provider": "openrouter",
-  "model": "google/gemini-3-flash-preview",
-  "temperature": 0.3,
-  "max_tokens": 4096,
-  "reasoning": { "enabled": true, "effort": "medium", "exclude": true }
-}
-```
-
-> [!TIP]
-> Укажите `OPENROUTER_API_KEY` в файле `.env`.
-
-> [!WARNING]
-> Для reasoning-моделей **обязательно** ставьте `"exclude": true`. Иначе рассуждения попадут в content вместо JSON-ответа и парсинг сломается.
-
-### Стилевые пресеты (`config/strategies/*.json`)
-
-Каждый стиль автоматически настраивает: `timeframe`, `loop_interval`, `position_check_interval`, `atr_sl_mult`, `atr_tp_mult`, `leverage`.
-
-Дополнительные параметры:
-- **SCALP**: `loops.fast_interval` (1.5s), `loops.slow_interval` (45s), `time_exit.max_hold_minutes` (15), `breakeven`, `trailing`
-- **SCALP_VETO**: Только AI veto, отключает deterministic scoring
-- **SCALP_REGIME**: Добавляет regime-based адаптацию параметров
-- **AISCALP**: `htf_timeframe` (1h), session-based filtering, `pre_filter` (skip dead markets)
-
-#### Торговые сессии (AISCALP)
-
-Стратегия AISCALP использует временные торговые сессии для фильтрации:
-
-| Сессия | Время (UTC) | Описание |
-|--------|-------------|----------|
-| ASIAN | 00:00-08:00 | Низкая волатильность |
-| EUROPEAN | 07:00-15:00 | Средняя активность |
-| US | 13:00-21:00 | Высокая волатильность |
-| Overlap | 13:00-15:00 | Максимальная ликвидность (бонус) |
-| Dead Zone | 21:00-23:00 | Пониженная активность (штраф) |
-
-- **SWING**: `min_hold_hours` (24), `cooldown_after_close_hours` (6)
-- **SWING_VETO**: Только AI veto для долгосрочных решений
-- **GRID**: `grid_levels` (5), `grid_spacing_pct` (0.3%), `inventory_limit`, `emergency_stop_loss_pct`
-- **HYBRID**: Deterministic scoring + AI confirmation
-- **HYBRID_VETO**: AI veto only (APPROVE/REJECT English-only)
-- **MACDX**: `signal_rules` — веса индикаторов, пороги RSI, min_score, min_confirmations
-
-### Hot-Reload
-
-Изменения в `config/active.json` и `config/trading.json` подхватываются автоматически каждые 30 секунд. Для `config/base.json` и файлов стратегий требуется перезапуск.
-
-### Профиль-стратегия Привязка
-
-Каждый профиль (`config/profiles/*.json`) теперь имеет поле `_strategy`, указывающее к какой стратегии он относится:
-
-```json
-// config/profiles/btc_aggressive.json
-{
-  "_strategy": "SCALP",
-  "preset": { "leverage": 15 }
-}
-
-// config/profiles/default.json
-{
-  "_strategy": null,
-  "preset": { "leverage": 10 }
-}
-```
-
-**Почему это важно:** Разные стратегии используют несовместимые системы параметров. Например, `min_score_for_signal` означает порог баллов в SCALP, но уровень уверенности (0-1) в HYBRID.
-
-**Правила:**
-- Профиль `default` с `_strategy: null` — универсальный, работает с любой стратегией
-- Символьные профили должны указывать `_strategy`
-- При загрузке конфигурации система проверяет совместимость профиля со стратегией
+**Config loader:** `src/config_loader.py` реализует слияние, наследование, разрешение конфигурации для конкретного символа (`get_symbol_config(symbol)`).
 
 ---
 
 ## <a id="architecture"></a>Архитектура системы
 
-**Мультипроцессная архитектура** — каждый символ работает в изолированном процессе ОС.
-
-```mermaid
-graph TD
-    Launcher[run.py / main.py] -->|Spawns| Worker1[Worker-BTCUSDT]
-    Launcher -->|Spawns| Worker2[Worker-SOLUSDT]
-    Launcher -->|Spawns| Worker3[Worker-...]
-    Launcher -->|Spawns| ChartW[Chart Worker]
-    Launcher -->|Spawns| WSP[WebSocket Provider]
-
-    subgraph "Worker Process (Isolated Loop)"
-        Worker1 --> Collector1[Collector]
-        Collector1 --> Analyzer1[Analyzer]
-        Analyzer1 --> TradeTracker1[TradeTracker]
-        TradeTracker1 --> Signal1[SignalGenerator]
-        Signal1 --> Regime1[RegimeDetector]
-        Regime1 --> Risk1[RiskManager]
-        Risk1 --> Predictor1[AI Veto — conditional]
-        Predictor1 --> Executor1[Executor]
-        Executor1 --> Monitor1[Monitor]
-        Monitor1 --> Perf1[PerformanceTracker]
-        Perf1 -.->|Loop| Worker1
-    end
-```
-
-### Ключевые модули
+**Мультипроцессная архитектура:** Каждый торговый символ работает в отдельном изолированном процессе. Основной процесс (`run.py` → `src/main.py`) создаёт рабочие процессы, Chart Worker и WebSocket Provider.
 
 ```
-src/
-├── core/                           # Торговое ядро
-│   ├── process_worker.py           # Оркестратор цикла (per-symbol)
-│   ├── collector.py                # Сбор OHLCV данных
-│   ├── analyzer.py                 # Технический анализ (EMA, RSI, MACD, ATR, BB, SEB, S/R)
-│   ├── lightweight_analyzer.py    # Быстрый расчёт индикаторов для fast-loop
-│   ├── signal_generator.py         # Детерминированный скоринг (HYBRID)
-│   ├── aiscalp_signal.py           # Multi-TF скоринг (AISCALP)
-│   ├── macdx_signal.py             # MACD crossover скоринг (MACDX) — без AI
-│   ├── scalp_engine.py             # Dual-loop движок (SCALP)
-│   ├── scalp_signal.py             # Скоринг с OB/VWAP (SCALP)
-│   ├── scalp_performance.py        # Отслеживание перформанса (SCALP)
-│   ├── regime.py                   # Детектор рыночного режима
-│   ├── risk_manager.py             # Dynamic SL/TP + позиционный sizing
-│   ├── predict.py                  # LLM вызовы + smart filter
-│   ├── executor.py                 # Размещение ордеров
-│   ├── monitor.py                  # Мониторинг позиций
-│   ├── trade_tracker.py            # Персистенция сделок (JSON)
-│   ├── decision_journal.py         # Журнал AI-решений + cooldown
-│   ├── performance.py              # Отслеживание эффективности + калибровка
-│   ├── plotter.py                  # Генерация графиков (matplotlib)
-│   ├── chart_worker.py             # Параллельная генерация (ProcessPoolExecutor)
-│   ├── grid_worker.py              # Grid стратегия (воркер)
-│   ├── grid_executor.py            # Grid стратегия (ордера)
-│   └── session.py                  # Управление торговыми сессиями
-├── exchanges/                      # Слой биржи
-│   ├── exchange_client.py          # Абстрактный интерфейс
-│   ├── bingx_client.py             # BingX реализация (HMAC-SHA256)
-│   ├── exchange_factory.py         # Factory pattern
-│   └── ws_data_provider.py        # WebSocket кэш свечей
-├── prompts/                        # AI промпт система
-│   ├── builder.py                  # Модульная сборка промптов
-│   ├── blocks/                     # Текстовые блоки (10 файлов)
-│   │       role.txt, principles.txt, context_table.txt,
-│   │       decision_history.txt, market_analysis.txt,
-│   │       response_format.txt, risk_table.txt,
-│   │       position_management.txt, special_situations.txt,
-│   │       candle_history.txt
-│   └── strategies/                 # 11 стратегий промптов
-│       ├── base.py                 # Базовый класс
-│       ├── scalp.py, scalp_veto.py, scalp_regime.py
-│       ├── aiscalp.py, swing.py, swing_veto.py
-│       ├── grid.py, hybrid.py, hybrid_veto.py
-│       └── macdx.py
-├── utils/                          # Утилиты
-│   ├── logger.py                   # Логирование (per-symbol + StageTimer)
-│   ├── helpers.py                  # Вспомогательные функции
-│   ├── news_api.py                 # Новости (NewsAPI/AlphaVantage/Finnhub)
-│   └── cleanup_cache.py            # Очистка кэша
-├── telegram_panel/                 # Панель управления
-│   ├── run_panel.py                # FastAPI + Telegram Bot
-│   ├── bot.py                      # Telegram команды + уведомления
-│   ├── backend/                    # FastAPI API (REST + WebSocket)
-│   │   ├── app.py, config.py, ws.py
-│   │   ├── routes/                 # API эндпоинты
-│   │   │   dashboard, trades, charts, logs,
-│   │   │   config_routes, journal
-│   │   └── services/               # Сервисы
-│   │       ├── auth.py, data_reader.py, file_watcher.py
-│   └── frontend/                   # React 18 + TypeScript + TailwindCSS
-│       └── src/pages/             # Dashboard, Charts, Trades, Logs, Journal, Settings
-└── config.py                       # Загрузчик конфигурации + hot-reload
+run.py → src/main.py (spawns processes)
+  ├── Worker per symbol (src/core/process_worker.py)
+  ├── Chart Worker (src/core/chart_worker.py)
+  └── WebSocket Provider (src/exchanges/ws_data_provider.py)
 ```
+
+**Стратегические конвейеры:** `process_worker` выбирает конвейер на основе активной стратегии:
+- **SCALP** → `ScalpEngine` (dual-loop: fast 1.5s + slow 45s)
+- **HYBRID** → условная AI-вето (auto-approve высококачественные сигналы)
+- **AISCALP** → всегда через AI с multi-TF анализом
+- **GRID** → `GridWorker` (лимитные ордера)
+- **MACDX** → полностью детерминированный, без AI
+- Остальные → линейный пайплайн: Collector → Analyzer → SignalGenerator → RiskManager → [AI опционально] → Executor → Monitor
+
+**Ключевые модули:**
+- **Ядро (`src/core/`)**: process_worker, collector, analyzer, regime detector, risk manager, trade tracker, decision journal, performance tracker, predict, executor, monitor, plotter, chart_worker, session.Стратегические генераторы сигналов: signal_generator (HYBRID), aiscalp_signal, scalp_engine, scalp_signal, macdx_signal, grid_worker.
+- **Биржа (`src/exchanges/`)**: exchange_client, bingx_client (кэширование, ретраи), exchange_factory, ws_data_provider (WebSocket cache, REST backfill, exponential reconnect).
+- **Промпты (`src/prompts/`)**: builder (модульная сборка), blocks (текстовые шаблоны), strategies (стратегические промпты, REGISTRY).
+- **Панель (`src/telegram_panel/`)**: FastAPI backend + Telegram bot + React frontend. Запускается отдельным контейнером.
+- **Утилиты (`src/utils/`)**: logger (per-symbol логирование), helpers, news_api, cleanup_cache.
+
+**Дизайн-паттерны:** Factory, Strategy, Singleton, Template Method, Observer, Adapter.
 
 ---
 
 ## <a id="telegram-panel"></a>Telegram Panel
 
-Панель управления ботом через Telegram Mini App. Работает в отдельном контейнере и **не влияет** на работу торгового бота.
+Панель управления (отдельный контейнер) для мониторинга и базового управления ботом через Telegram Mini App или веб-браузер.
 
 ### Запуск
 
 ```bash
-# Интерактивный запуск (выбор режима: ngrok / tunnel / prod)
+# Интерактивный запуск (выбор режима)
 ./scripts/start_panel.sh
 
 # Или с указанием режима
 ./scripts/start_panel.sh ngrok     # локальная разработка через ngrok
-./scripts/start_panel.sh tunnel    # VPS tunnel через SSH + cloudflared
-./scripts/start_panel.sh prod      # URL уже задан в .env
+./scripts/start_panel.sh tunnel    # VPS tunnel (SSH + cloudflared)
+./scripts/start_panel.sh prod      # продакшен, URL задан в .env
 
 # Остановка
 ./scripts/stop_panel.sh
 ```
 
-### Возможности
+### Функции
 
-**Telegram Bot** — команды:
-- `/start` — Приветствие + кнопка Mini App
-- `/status` — Стратегия, активные позиции, символы
-- `/trades` — Список сделок с PnL, ROE%, комиссиями
-- `/chart` — Последний сгенерированный график
-- `/logs` — Последние строки системных логов
-- `/config` — Сводка конфигурации
-- `/help` — Все доступные команды
+**Telegram Bot:**
+- `/start` — приветствие + кнопка Mini App
+- `/status` — стратегия, активные позиции, символы
+- `/trades` — история сделок с PnL, ROE%, комиссиями
+- `/chart` — последний график
+- `/logs` — последние строки логов
+- `/config` — сводка конфигурации
+- `/help` — все команды
+- Админские команды: `/weblink`, `/reload`, `/stop`, `/resume`, `/close`
 
-**Web Dashboard** (React Mini App):
-- **Dashboard** — обзор активных позиций и стратегии
-- **Trades** — история сделок с фильтрами, статистика (win rate, total PnL, fees)
-- **Charts** — галерея PNG графиков (auto-update)
-- **Logs** — просмотр логов в реальном времени
-- **Journal** — журнал AI-решений
-- **Settings** — редактор конфигурации
+**Web Dashboard (React Mini App):**
+- Dashboard — обзор позиций и стратегии
+- Trades — история, фильтры, статистика (win rate, total PnL)
+- Charts — галерея PNG графиков (автообновление)
+- Logs — просмотр логов в реальном времени
+- Journal — журнал AI-решений
+- Settings — редактор конфигурации
 
-**Real-time**: WebSocket обновления при изменении файлов данных.
-**Уведомления**: Автоматические алерты при открытии/закрытии сделок.
-**Аутентификация**: Telegram HMAC initData + whitelist user IDs.
+**Real-time:** WebSocket (`/ws`) рассылает обновления при изменении файлов данных.
+**Уведомления:** Автоалерты при открытии/закрытии сделок.
+**Аутентификация:** Telegram HMAC initData + веб-токены (6h) для прямого доступа из браузера.
 
 ### Настройка
 
-Добавьте в `.env`:
+Переменные в `.env`:
 ```ini
-TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_ADMIN_ID=your_telegram_id
-TELEGRAM_ALLOWED_IDS=id1,id2,id3          # опционально
-TELEGRAM_PANEL_URL=https://your-domain.com  # для prod режима
+TELEGRAM_BOT_TOKEN=бот_токен
+TELEGRAM_ADMIN_ID=ваш_id
+TELEGRAM_ALLOWED_IDS=id1,id2,...     # опционально, иначе используется ADMIN_ID
+TELEGRAM_PANEL_URL=https://домен      # для prod режима (Mini App кнопка)
 PANEL_PORT=8080
 ```
 
