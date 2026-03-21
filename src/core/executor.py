@@ -4,6 +4,7 @@ import json
 from src.config import *
 from src.utils.logger import info, error, warning, log_trade
 from src.exchanges.exchange_factory import get_exchange_client
+from src.exchanges.dto.models import Balance, OrderType, OrderSide, PositionSide
 
 # Файл кэша для хранения данных позиций (если нужно)
 
@@ -51,7 +52,9 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
 
         # Calculate absolute TP/SL prices
         # Calculate absolute TP/SL prices
-        if direction.upper() == "BUY":
+        # Handle both string and OrderSide enum
+        direction_str = direction.value if hasattr(direction, 'value') else direction
+        if direction_str.upper() == "BUY":
             tp_price = price * (1 + TAKE_PROFIT_PERCENT / 100)
             sl_price = price * (1 - STOP_LOSS_PERCENT / 100)
         else:
@@ -76,7 +79,12 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         # Calculate quantity based on Balance Percentage
         balance_data = client.get_balance()
         info(f"🔍 [DEBUG] Raw balance_data in executor: {balance_data}")
-        info(f"🔍 [DEBUG] balance_data type: {type(balance_data)}, keys: {balance_data.keys() if isinstance(balance_data, dict) else 'N/A'}")
+        if isinstance(balance_data, dict):
+            info(f"🔍 [DEBUG] balance_data type: dict, keys: {balance_data.keys()}")
+        elif isinstance(balance_data, Balance):
+            info(f"🔍 [DEBUG] balance_data type: Balance dataclass, total={balance_data.total_balance}, available={balance_data.available_balance}")
+        else:
+            info(f"🔍 [DEBUG] balance_data type: {type(balance_data)}")
 
         # Debug: print all fields for balance data
         if isinstance(balance_data, dict):
@@ -121,6 +129,15 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
             for acc in balance_data:
                 b = float(acc.get("equity", acc.get("balance", 0.0)))
                 total_balance += b
+        elif isinstance(balance_data, Balance):
+            # Обработка dataclass Balance
+            total_balance = float(balance_data.total_balance)
+            available = float(balance_data.available_balance)
+            info(f"🔍 [DEBUG] Balance dataclass: total={total_balance}, available={available}, unrealized_pnl={balance_data.unrealized_pnl}")
+            # Если available_balance = 0, но total > 0, используем total_balance (с учётом PnL)
+            if available == 0 and total_balance > 0:
+                info(f"⚠️ Available balance is 0, using total_balance for trading")
+                total_balance = float(balance_data.total_with_pnl) if balance_data.total_with_pnl > 0 else total_balance
 
         if total_balance <= 0:
             error(f"❌ Balance is 0 or could not be retrieved. Cannot calculate position size.")
@@ -168,6 +185,9 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         info(f"   Leverage: {LEVERAGE}x | Notional: ${notional_value:.2f}")
         info(f"   Quantity: {quantity} {symbol.replace('USDT', '')}")
 
+        # Convert order_type string to OrderType enum
+        order_type_enum = OrderType.MARKET if order_type == "MARKET" else OrderType.LIMIT
+
         # Place order WITHOUT SL/TP first
         # We will set SL/TP separately using set_sl_tp to ensure reliability and correct mode handling
         order_id = client.place_order(
@@ -175,7 +195,7 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
             side=direction,
             price=price,
             quantity=quantity,
-            type=order_type,
+            order_type=order_type_enum,
             sl=None,
             tp=None
         )
@@ -188,8 +208,9 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
             if tp_price or sl_price:
                 info(f"🔄 Setting SL/TP for new order {order_id}...")
                 try:
-                    # Determine position side
-                    pos_side = "LONG" if direction.upper() == "BUY" else "SHORT"
+                    # Determine position side (use enum for new client)
+                    direction_str = direction.value if hasattr(direction, 'value') else direction
+                    pos_side = PositionSide.LONG if direction_str.upper() == "BUY" else PositionSide.SHORT
 
                     if hasattr(client, "set_sl_tp"):
                         # Don't pass quantity — let set_sl_tp fetch actual position size
@@ -275,11 +296,13 @@ def execute_prediction(prediction, all_positions=None):
 
             if prediction["confidence"] >= confidence_threshold:
                 direction = prediction["action"].upper()
+                # Convert string to OrderSide enum
+                side = OrderSide.BUY if direction == "BUY" else OrderSide.SELL
                 info(f"🚀 {symbol}: Исполнение сигнала {direction} (confidence={prediction['confidence']})")
 
                 create_order(
                     symbol,
-                    direction,
+                    side,
                     prediction["current_price"],
                     ai_sl=prediction.get("stop_loss"),
                     ai_tp=prediction.get("take_profit"),

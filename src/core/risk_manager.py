@@ -240,7 +240,7 @@ def validate_risk_parameters(
 
     # Проверка минимального R/R (using fee-adjusted value)
     if effective_rr < min_rr_ratio:
-        warning(f"❌ Валидация провалена: Gross R/R={rr}, Net R/R={effective_rr} < {min_rr_ratio} (fee={round_trip_fee_pct:.3f}%)")
+        warning(f"❌ Валидация провалена: Gross R/R={rr}, Net R/R={effective_rr} < {min_rr_ratio} (fee={round_trip_fee_pct:.3f}%, reward={reward_pct:.3f}%, risk={risk_pct:.3f}%)")
         return False
 
     # Проверка разумности риска (не более 10% от цены)

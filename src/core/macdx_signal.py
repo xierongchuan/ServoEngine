@@ -42,7 +42,7 @@ class MACDXSignalGenerator:
         # Debug: log received analysis data
         from src.utils.logger import debug, warning
         debug(f"[MACDX] Analysis keys: {list(analysis.keys())}")
-        debug(f"[MACDX] macd_line={analysis.get('macd_line')}, macd_hist={analysis.get('macd_hist')}")
+        debug(f"[MACDX] macd_line={analysis.get('macd_line')}, macd_signal={analysis.get('macd_signal')}, macd_hist={analysis.get('macd_hist')}, macd_hist_prev={analysis.get('macd_hist_prev')}")
 
         # === EXTRACT DATA ===
         current_price = analysis.get("current_price") or 0
@@ -167,88 +167,159 @@ class MACDXSignalGenerator:
                                          {"ema_diff_pct": ema_diff_pct, "filter": "counter_trend", "confirmations": 2, "potential_score": 4}, regime)
 
         # === DETECT MACD CROSSOVER (PRIMARY SIGNAL) ===
+        # Пересечение определяется по изменению знака гистограммы:
+        # - Бычье пересечение: гистограмма переходит из отрицательной в положительную
+        # - Медвежье пересечение: гистограмма переходит из положительной в отрицательную
+
         macd_cross_long = False
         macd_cross_short = False
 
-        # Bullish crossover: MACD crosses above signal line
-        # Current: MACD > Signal, Previous histogram was negative or smaller
-        if macd_line > macd_signal_line and macd_hist > 0:
-            # Confirm it's a fresh crossover or building momentum
-            if macd_hist_prev <= 0 or macd_hist > macd_hist_prev:
-                macd_cross_long = True
+        # Бычье пересечение: MACD пересекает сигнальную линию снизу вверх
+        # Условие: предыдущая гистограмма была <= 0, текущая > 0
+        if macd_hist_prev <= 0 and macd_hist > 0:
+            macd_cross_long = True
+            debug(f"[MACDX] Бычье пересечение обнаружено: hist_prev={macd_hist_prev:.6f}, hist={macd_hist:.6f}")
 
-        # Bearish crossover: MACD crosses below signal line
-        if macd_line < macd_signal_line and macd_hist < 0:
-            if macd_hist_prev >= 0 or macd_hist < macd_hist_prev:
-                macd_cross_short = True
+        # Медвежье пересечение: MACD пересекает сигнальную линию сверху вниз
+        # Условие: предыдущая гистограмма была >= 0, текущая < 0
+        if macd_hist_prev >= 0 and macd_hist < 0:
+            macd_cross_short = True
+            debug(f"[MACDX] Медвежье пересечение обнаружено: hist_prev={macd_hist_prev:.6f}, hist={macd_hist:.6f}")
 
         # No EMA fallback! Strategy requires MACD crossover (12,26,9) ONLY
         # Если нет MACD пересечения - это HOLD
 
         # No MACD signal - HOLD (strategy requires MACD crossover ONLY)
         if not macd_cross_long and not macd_cross_short:
-            info(f"📊 [MACDX] HOLD | No MACD crossover (hist: {macd_hist:.4f}, line: {macd_line:.4f}, signal: {macd_signal_line:.4f})")
+            info(f"📊 [MACDX] HOLD | No MACD crossover (hist: {macd_hist:.6f}, hist_prev: {macd_hist_prev:.6f}, line: {macd_line:.6f}, signal: {macd_signal_line:.6f})")
 
-            # Собираем детальную информацию об индикаторах для отображения
-            indicators_ok = []
-            indicators_fail = []
-            potential_confirmations = 0
+            # Вычисляем переменные которые нужны для indicators_status
+            is_sideways = False
+            bb_width = 0
+            if bb_upper > 0 and bb_lower > 0 and bb_middle > 0:
+                bb_width = (bb_upper - bb_lower) / bb_middle * 100
+                if bb_width < bb_width_threshold and adx < adx_threshold:
+                    is_sideways = True
 
-            # EMA (+2)
-            if ema9 > 0 and ema21 > 0:
-                if ema9 > ema21:
-                    indicators_ok.append(f"EMA: 9>{21} (бычий)")
-                    potential_confirmations += 2
-                else:
-                    indicators_ok.append(f"EMA: 9<{21} (медвежий)")
-                    potential_confirmations += 2
-            else:
-                indicators_fail.append(f"EMA: нет данных")
+            close_prices = analysis.get("close_prices", [])
+            rsi_values = analysis.get("rsi_values", [])
+            bearish_div, bullish_div = self._detect_rsi_divergence(close_prices, rsi_values)
 
-            # Свечи (+1)
-            last_5_dir = analysis.get('last_5_direction', 'MIXED')
-            if last_5_dir in ['UP', 'STRONG UP']:
-                indicators_ok.append(f"Свечи: {last_5_dir} (бычий)")
-                potential_confirmations += 1
-            elif last_5_dir in ['DOWN', 'STRONG DOWN']:
-                indicators_ok.append(f"Свечи: {last_5_dir} (медвежий)")
-                potential_confirmations += 1
-            else:
-                indicators_fail.append(f"Свечи: {last_5_dir}")
+            # Собираем ПОЛНУЮ информацию о ВСЕХ 6 индикаторах
+            indicators_status = []
 
-            # RSI (+1)
+            # 1. MACD Crossover (основной сигнал, +2)
+            macd_status = {
+                "name": "MACD Crossover",
+                "weight": macd_cross_weight,
+                "ok": False,
+                "value": f"hist={macd_hist:.6f}, prev={macd_hist_prev:.6f}",
+                "detail": "Нет пересечения"
+            }
+            indicators_status.append(macd_status)
+
+            # 2. RSI Zone (+2)
+            rsi_status = {
+                "name": "RSI Zone",
+                "weight": rsi_weight,
+                "ok": False,
+                "value": f"{rsi:.1f}",
+                "detail": ""
+            }
             if 0 < rsi <= 100:
                 if rsi < 35:
-                    indicators_fail.append(f"RSI: {rsi:.1f} (перепродан)")
+                    rsi_status["detail"] = "Перепродан (<35)"
                 elif rsi > 65:
-                    indicators_fail.append(f"RSI: {rsi:.1f} (перекуплен)")
+                    rsi_status["detail"] = "Перекуплен (>65)"
                 else:
-                    indicators_ok.append(f"RSI: {rsi:.1f}")
-                    potential_confirmations += 1
+                    rsi_status["ok"] = True
+                    rsi_status["detail"] = "В зоне"
             else:
-                indicators_fail.append(f"RSI: нет данных")
+                rsi_status["detail"] = "Нет данных"
+            indicators_status.append(rsi_status)
 
-            # Объём (+1)
-            if volume_ratio > 0:
-                if volume_ratio >= 0.8:
-                    indicators_ok.append(f"Объём: {volume_ratio:.1f}x")
-                    potential_confirmations += 1
+            # 3. EMA Alignment (+2)
+            ema_status = {
+                "name": "EMA Alignment",
+                "weight": ema_weight,
+                "ok": False,
+                "value": f"9:{ema9:.2f} 21:{ema21:.2f}",
+                "detail": ""
+            }
+            if ema9 > 0 and ema21 > 0:
+                if ema9 > ema21:
+                    ema_status["ok"] = True
+                    ema_status["detail"] = "Бычий (9>21)"
                 else:
-                    indicators_fail.append(f"Объём: {volume_ratio:.1f}x (слабый)")
+                    ema_status["detail"] = "Медвежий (9<21)"
+            else:
+                ema_status["detail"] = "Нет данных"
+            indicators_status.append(ema_status)
 
-            # Рассчитываем potential_score на основе подтверждений (без MACD)
-            # EMA=2, Свечи=1, RSI=1, Объём=1 -> макс 5 подтверждений, макс score = 6
-            # НЕ ограничиваем по max_score (это для полной стратегии с MACD)
-            potential_score = potential_confirmations * 2  # Без MACD, макс 10 но для journal покажем 6
+            # 4. Not Sideways (+1)
+            sideways_status = {
+                "name": "Not Sideways",
+                "weight": not_sideways_weight,
+                "ok": False,
+                "value": f"BB:{bb_width:.1f}% ADX:{adx:.0f}",
+                "detail": ""
+            }
+            if not is_sideways:
+                sideways_status["ok"] = True
+                sideways_status["detail"] = "Тренд есть"
+            else:
+                sideways_status["detail"] = "Боковик"
+            indicators_status.append(sideways_status)
 
-            # Для HOLD без MACD используем отдельный max_score = 6 (EMA + Свечи + RSI + Объём)
-            hold_max_score = 6
-            max_confirmations = 5
+            # 5. No Exhaustion (+1)
+            exhaustion_status = {
+                "name": "No Exhaustion",
+                "weight": no_exhaustion_weight,
+                "ok": False,
+                "value": "",
+                "detail": ""
+            }
+            if not bearish_div and not bullish_div:
+                exhaustion_status["ok"] = True
+                exhaustion_status["detail"] = "Нет дивергенции"
+            else:
+                exhaustion_status["detail"] = "Есть дивергенция"
+            indicators_status.append(exhaustion_status)
+
+            # 6. Volume (+1)
+            volume_status = {
+                "name": "Volume",
+                "weight": volume_weight,
+                "ok": False,
+                "value": f"{volume_ratio:.1f}x",
+                "detail": ""
+            }
+            if volume_ratio >= 0.8:
+                volume_status["ok"] = True
+                volume_status["detail"] = "Достаточный"
+            else:
+                volume_status["detail"] = "Слабый"
+            indicators_status.append(volume_status)
+
+            # Рассчитываем реальные метрики
+            ok_count = sum(1 for s in indicators_status if s["ok"])
+            total_count = len(indicators_status)
+            potential_score = sum(s["weight"] for s in indicators_status if s["ok"])
+            max_possible_score = sum(s["weight"] for s in indicators_status)
+
+            # Формируем строки для reason
+            indicators_ok = [f"{s['name']}: {s['detail']}" for s in indicators_status if s["ok"]]
+            indicators_fail = [f"{s['name']}: {s['detail']}" for s in indicators_status if not s["ok"]]
+
             return self._hold_result(max_score, ["No MACD crossover"],
                                      {"macd_hist": macd_hist, "filter": "no_macd_cross",
-                                      "potential_score": potential_score, "confirmations": potential_confirmations,
-                                      "max_confirmations": max_confirmations,
-                                      "indicators_ok": indicators_ok, "indicators_fail": indicators_fail}, regime)
+                                      "potential_score": potential_score, "confirmations": ok_count,
+                                      "max_confirmations": total_count,
+                                      "indicators_ok": indicators_ok, "indicators_fail": indicators_fail,
+                                      "indicators_status": indicators_status,
+                                      "indicators_ok_count": ok_count,
+                                      "indicators_total_count": total_count,
+                                      "max_possible_score": max_possible_score}, regime)
 
         # === SCORE CONFIRMATIONS ===
         long_score = 0

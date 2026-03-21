@@ -73,7 +73,8 @@ class BingXClient(ExchangeClient):
         # Загрузка конфигурации
         if config is None:
             from ..config import create_config
-            config = create_config("bingx")
+            from src.config import MODE
+            config = create_config("bingx", is_demo=(MODE == "demo"))
 
         self._config = config
 
@@ -310,11 +311,13 @@ class BingXClient(ExchangeClient):
 
     def get_balance(self) -> Balance:
         """Получить баланс Perpetual Futures."""
+        # В DEMO режиме (VST) получаем РЕАЛЬНЫЙ баланс с демо-биржи!
+        # Не используем захардкоженное значение 10000 - это реальные данные
+
         with self._cache_lock:
             now = time.time()
-            if (self._balance_cache is not None and
-                now - self._balance_cache_time < self._balance_cache_ttl):
-                return self._balance_cache
+            # Не используем кэш для баланса - получаем актуальные данные
+            # Кэш может привести к ошибкам при торговле
 
             endpoint = "/openApi/swap/v2/user/balance"
             response = self._make_request("get", endpoint)

@@ -177,27 +177,20 @@ class LightweightAnalyzer:
             for i, m in enumerate(macd_history[self._macd_signal:]):
                 prev_ema_macd_signal = self._ema_macd_signal  # Save previous before update
                 self._ema_macd_signal = m * k_sig + self._ema_macd_signal * (1 - k_sig)
-                if i < len(macd_history[self._macd_signal:]) - 1:
-                    signal_history.append(self._ema_macd_signal)
+                # Store ALL signal line values (not skipping any)
+                signal_history.append(self._ema_macd_signal)
 
         self._macd_line = self._ema_macd_fast - self._ema_macd_slow
         self._macd_hist = self._macd_line - self._ema_macd_signal
 
-        # FIX: Use correct previous signal line for prev_histogram
-        # Option 1: If we have signal_history, use the last value before current
-        # Option 2: Recalculate based on macd_history
-        if len(macd_history) >= 2:
-            # Need to calculate what the signal line was at (n-1) period
-            # For proper EMA calculation, we need to track previous signal value
-            # Use the approach: signal_prev = EMA of macd_history[:-1]
-            if len(macd_history) >= self._macd_signal + 1:
-                # Recalculate signal line for previous period
-                macd_hist_prev = macd_history[:-1]
-                signal_line_prev = self._calculate_ema_from_values(macd_hist_prev, self._macd_signal)
-                self._prev_macd_hist = macd_history[-2] - signal_line_prev
-            else:
-                # Not enough history, approximate using current values
-                self._prev_macd_hist = macd_history[-2] - self._ema_macd_signal
+        # FIX: Use stored signal_history to get previous signal line
+        # signal_history[-1] is current, signal_history[-2] is previous (n-1 period)
+        if len(signal_history) >= 2:
+            # Use the actual signal line value from (n-1) period that we stored
+            self._prev_macd_hist = macd_history[-2] - signal_history[-2]
+        elif len(macd_history) >= 2:
+            # Not enough signal history, approximate with current signal
+            self._prev_macd_hist = macd_history[-2] - self._ema_macd_signal
         else:
             self._prev_macd_hist = self._macd_hist
 

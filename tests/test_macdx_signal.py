@@ -157,19 +157,23 @@ class TestMACDCrossover:
         assert result["details"]["macd_cross_short"] is True
         assert result["details"]["macd_cross_long"] is False
 
-    def test_macd_momentum_building(self, generator):
+    def test_macd_momentum_building_not_crossover(self, generator):
         # Histogram growing stronger (not fresh cross but momentum building)
+        # This should NOT be detected as crossover - only sign change is a crossover
         analysis = _base_analysis(
             macd_line=15,
             macd_signal=5,
             macd_hist=10,
-            macd_hist_prev=5,  # Was positive, now more positive -> momentum
+            macd_hist_prev=5,  # Was positive, now more positive -> momentum, NOT crossover
             ema9=50100,
             ema21=50000,
             rsi=40,
         )
         result = generator.generate_signal(analysis)
-        assert result["details"]["macd_cross_long"] is True
+        # With new logic, this should NOT be detected as crossover
+        # Signal should be HOLD because there's no crossover (no sign change)
+        assert result["signal"] == "HOLD"
+        assert result["details"]["filter"] == "no_macd_cross"
 
 
 class TestBuySignal:

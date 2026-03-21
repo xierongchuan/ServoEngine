@@ -458,34 +458,50 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                     elif signal == "HOLD":
                         # No signal - HOLD
                         details = signal_data.get("details", {})
-                        # Используем potential_score и confirmations из details
-                        hold_score = details.get('potential_score', signal_data.get('score', 0))
-                        hold_confirmations = details.get('confirmations', 0)
-                        max_score = details.get('max_potential_score', signal_data.get('max_score', 8))
-                        max_confirmations = details.get('max_confirmations', 6)
-                        indicators_ok = details.get('indicators_ok', [])
-                        indicators_fail = details.get('indicators_fail', [])
+                        indicators_status = details.get("indicators_status", [])
+                        ok_count = details.get("indicators_ok_count", 0)
+                        total_count = details.get("indicators_total_count", 6)
+                        potential_score = details.get("potential_score", 0)
+                        max_possible_score = details.get("max_possible_score", 9)
+
+                        # Формируем понятную reason
+                        if indicators_status:
+                            ok_indicators = [s for s in indicators_status if s.get("ok")]
+                            fail_indicators = [s for s in indicators_status if not s.get("ok")]
+
+                            ok_str = ", ".join([f"{s['name']}" for s in ok_indicators]) if ok_indicators else "Нет"
+                            # Добавим информацию о MACD
+                            macd_info = details.get('macd_hist', 0)
+                            macd_prev_info = details.get('macd_hist_prev', 0)
+
+                            fail_str = ", ".join([f"{s['name']}: {s.get('detail', '')}" for s in fail_indicators]) if fail_indicators else "Нет"
+
+                            reason = (
+                                f"[MACDX] Нет пересечения MACD (hist={macd_info:.6f}, prev={macd_prev_info:.6f}). "
+                                f"Индикаторы: {ok_count}/{total_count} подтверждены. "
+                                f"Score: {potential_score}/{max_possible_score}. "
+                                f"Подтверждены: {ok_str}. "
+                                f"Отклонены: {fail_str}. "
+                                f"[{regime_label}]"
+                            )
+                        else:
+                            reason = f"[MACDX] Нет пересечения MACD [{regime_label}]"
 
                         # При HOLD сигнале показываем процент подтверждений
-                        # (сколько индикаторов уже подтверждают направление)
-                        confidence = hold_confirmations / max_confirmations if max_confirmations > 0 else 0.0
+                        confidence = ok_count / total_count if total_count > 0 else 0.0
 
-                        # Формируем детальную строку с индикаторами
-                        ok_str = "; ".join(indicators_ok) if indicators_ok else "Нет"
-                        fail_str = ". ".join(indicators_fail) if indicators_fail else "Нет"
-                        detail_str = f"ПОДТВЕРЖДЕНЫ: {ok_str}. ОТКЛОНЕНЫ: {fail_str}" if indicators_ok or indicators_fail else ""
-
-                        info(f"🔧 [{symbol}] MACDX: No MACD cross (score: {hold_score}/{max_score}, conf: {hold_confirmations}/{max_confirmations}) [{regime_label}]")
+                        info(f"🔧 [{symbol}] MACDX: No MACD cross (score: {potential_score}/{max_possible_score}, conf: {ok_count}/{total_count}) [{regime_label}]")
                         prediction = {
                             "symbol": symbol,
                             "action": "hold",
                             "confidence": confidence,
-                            "score": hold_score,
-                            "max_score": max_score,
-                            "confirmations": hold_confirmations,
-                            "max_confirmations": max_confirmations,
-                            "reason": f"[MACDX] Нет пересечения MACD (score: {hold_score}/{max_score}). {detail_str} [{regime_label}]",
-                            "current_price": current_price
+                            "score": potential_score,
+                            "max_score": max_possible_score,
+                            "confirmations": ok_count,
+                            "max_confirmations": total_count,
+                            "reason": reason,
+                            "current_price": current_price,
+                            "indicators_status": indicators_status,
                         }
                     else:
                         # Signal exists - execute directly (NO AI)
@@ -511,20 +527,27 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                             tp = sl_tp["take_profit"]
                             info(f"🎯 [{symbol}] MACDX SL/TP: SL={sl:.2f} TP={tp:.2f} R/R={sl_tp['risk_reward']:.2f}")
 
-                            # Validate risk
-                            if not validate_risk_parameters(sl_tp):
-                                warning(f"⚠️ [{symbol}] MACDX: Risk validation failed (R/R={sl_tp.get('risk_reward', 0):.2f}), skipping trade")
-                                prediction = {
-                                    "symbol": symbol,
-                                    "action": "hold",
-                                    "confidence": 0.0,
-                                    "score": signal_data.get("score", 0),
-                                    "confirmations": confirmations,
-                                    "reason": f"[MACDX] Risk validation failed (R/R={sl_tp.get('risk_reward', 0):.2f})",
-                                    "current_price": current_price
-                                }
-                                # Skip rest of signal processing
-                                signal = "HOLD"
+                            # Validate risk (optional - disabled by default for MACDX)
+                            macdx_settings = BOT_CONFIG.get("MACDX_SETTINGS", {})
+                            macdx_rules = macdx_settings.get("signal_rules", {})
+                            enable_risk_validation = macdx_rules.get("enable_risk_validation", False)
+
+                            if enable_risk_validation:
+                                if not validate_risk_parameters(sl_tp):
+                                    warning(f"⚠️ [{symbol}] MACDX: Risk validation failed (R/R={sl_tp.get('risk_reward', 0):.2f}), skipping trade")
+                                    prediction = {
+                                        "symbol": symbol,
+                                        "action": "hold",
+                                        "confidence": 0.0,
+                                        "score": signal_data.get("score", 0),
+                                        "confirmations": confirmations,
+                                        "reason": f"[MACDX] Risk validation failed (R/R={sl_tp.get('risk_reward', 0):.2f})",
+                                        "current_price": current_price
+                                    }
+                                    # Skip rest of signal processing
+                                    signal = "HOLD"
+                            else:
+                                info(f"✅ [{symbol}] MACDX: Risk validation disabled, proceeding with trade (R/R={sl_tp.get('risk_reward', 0):.2f})")
                         except Exception as e:
                             warning(f"⚠️ [{symbol}] MACDX: SL/TP calculation failed: {e}, using ATR fallback")
                             atr = analysis_result.get("atr", 0)

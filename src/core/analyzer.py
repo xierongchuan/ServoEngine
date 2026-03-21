@@ -34,9 +34,11 @@ def calculate_macd(prices, fast=12, slow=26, signal=9):
     FIX: Now correctly calculates previous histogram for proper crossover detection.
     """
     # Debug: log prices count and sample
-    if len(prices) < slow + signal:
-        from src.utils.logger import debug
-        debug(f"[MACD] Not enough data: {len(prices)} prices, need {slow + signal}")
+    min_required = slow + signal
+    if len(prices) < min_required:
+        from src.utils.logger import debug, warning
+        warning(f"[MACD] Недостаточно данных: {len(prices)} свечей, требуется минимум {min_required} (slow={slow} + signal={signal})")
+        debug(f"[MACD] Рекомендация: увеличьте количество запрашиваемых свечей или используйте более длинный таймфрейм")
         return 0, 0, 0, 0
 
     ema_fast = calculate_ema(prices, fast)
@@ -66,33 +68,26 @@ def calculate_macd(prices, fast=12, slow=26, signal=9):
         # Calculate k for EMA smoothing
         k = 2.0 / (signal + 1)
 
-        # Process remaining values and track each signal line value
+        # Process remaining values and track EACH signal line value
         for i, m in enumerate(macd_history[signal:]):
             prev_signal_line = signal_line  # Save previous before updating
             signal_line = m * k + signal_line * (1 - k)
-            # Store signal line after first update (for n-1 period)
-            if i == 0:
-                signal_history.append(signal_line)
+            # Store ALL signal line values for later use (to get previous signal)
+            signal_history.append(signal_line)
 
-        # Current histogram
-        histogram = macd_line - signal_line
+        # Current histogram - use last value from history, not the full-array macd_line
+        histogram = macd_history[-1] - signal_line
 
-        # FIX: Calculate previous histogram correctly
-        # Need signal line from (n-1) period, not current
-        if len(macd_history) >= signal + 1:
-            # Recalculate signal line for previous period (n-1)
-            # Using the same EMA approach: start from SMA of previous history
-            macd_prev = macd_history[:-1]  # All except last
-            if len(macd_prev) >= signal:
-                signal_line_prev = sum(macd_prev[:signal]) / signal
-                for m in macd_prev[signal:]:
-                    signal_line_prev = m * k + signal_line_prev * (1 - k)
-                histogram_prev = macd_history[-2] - signal_line_prev
-            else:
-                histogram_prev = macd_history[-2] - signal_line
+        # FIX: Use stored signal_history to get previous signal line
+        # signal_history[-1] is current, signal_history[-2] is previous (n-1 period)
+        if len(signal_history) >= 2:
+            # Use the actual signal line value from (n-1) period that we stored
+            histogram_prev = macd_history[-2] - signal_history[-2]
+        elif len(macd_history) >= 2:
+            # Not enough signal history, approximate with current signal
+            histogram_prev = macd_history[-2] - signal_line
         else:
-            # Not enough history, approximate
-            histogram_prev = macd_history[-2] - signal_line if len(macd_history) >= 2 else histogram
+            histogram_prev = histogram
     else:
         signal_line = macd_line
         histogram = 0
@@ -1135,6 +1130,11 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         "global_trend": global_trend,
         "local_trend": local_trend,
         "last_5_direction": last_5_direction,
+        # MACD indicators (needed for MACDX strategy)
+        "macd_line": macd_line,
+        "macd_signal": macd_signal,
+        "macd_hist": macd_hist,
+        "macd_hist_prev": macd_hist_prev,
         "has_position": bool(position),
         "position": position,
         "prompt": prompt.strip(),

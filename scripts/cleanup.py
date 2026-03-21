@@ -58,8 +58,8 @@ def main():
     clear_directory(data_dir / 'news')
     clear_directory(data_dir / 'prices')
 
-    # 2b. JSON files active_trades.json & trade_history.json
-    for json_file in ['active_trades.json', 'trade_history.json']:
+    # 2b. JSON files active_trades.json & trade_history.json & decision_journal.json
+    for json_file in ['active_trades.json', 'trade_history.json', 'decision_journal.json']:
         file_path = data_dir / json_file
         if file_path.exists():
             try:

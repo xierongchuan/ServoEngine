@@ -46,14 +46,26 @@ export interface LogLine {
   timestamp: string;
 }
 
+export interface IndicatorStatus {
+  name: string;
+  weight: number;
+  ok: boolean;
+  value: string;
+  detail: string;
+}
+
 export interface JournalEntry {
-  timestamp: string;
-  prediction: string;
-  current_price: number;
-  current_pnl: number;
+  time?: string;
+  action?: string;
   confidence?: number;
-  reasoning?: string;
-  symbol?: string;
+  score?: number;
+  confirmations?: number;
+  price?: number;
+  sl?: number;
+  tp?: number;
+  pnl?: string;
+  reason?: string;
+  indicators_status?: IndicatorStatus[];
 }
 
 export interface JournalSymbolStats {

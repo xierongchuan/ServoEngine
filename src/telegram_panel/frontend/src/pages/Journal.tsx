@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { getJournal, getJournalStats, getDashboard } from '../api/client';
-import type { JournalStats, JournalSymbolStats } from '../api/types';
+import type { JournalStats, JournalSymbolStats, IndicatorStatus } from '../api/types';
 import { StatsCard } from '../components/StatsCard';
 import { Spinner } from '../components/Spinner';
 import { Tabs } from '../components/ui/Tabs';
@@ -17,6 +17,7 @@ interface JournalEntryData {
   tp?: number;
   pnl?: string;
   reason?: string;
+  indicators_status?: IndicatorStatus[];
 }
 
 interface JournalData {
@@ -100,6 +101,47 @@ function pnlColor(pnl?: string): string {
   if (pnl.startsWith('+')) return 'text-green-400';
   if (pnl.startsWith('-')) return 'text-red-400';
   return 'text-tg-text';
+}
+
+function IndicatorBar({ indicators }: { indicators: IndicatorStatus[] }) {
+  if (!indicators || indicators.length === 0) return null;
+
+  const okCount = indicators.filter(i => i.ok).length;
+  const totalCount = indicators.length;
+
+  return (
+    <div className="mt-2 p-2 bg-gray-800/50 rounded-lg">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs text-tg-hint">Индикаторы</span>
+        <span className="text-xs font-medium text-tg-text">
+          {okCount}/{totalCount} подтверждены
+        </span>
+      </div>
+      <div className="flex gap-1">
+        {indicators.map((ind, idx) => (
+          <div
+            key={idx}
+            className={`flex-1 h-1.5 rounded-full ${
+              ind.ok ? 'bg-green-500' : 'bg-gray-600'
+            }`}
+            title={`${ind.name}: ${ind.detail}`}
+          />
+        ))}
+      </div>
+      <div className="mt-1.5 grid grid-cols-2 gap-1 text-[10px]">
+        {indicators.map((ind, idx) => (
+          <div key={idx} className="flex items-center gap-1">
+            <span className={ind.ok ? 'text-green-400' : 'text-gray-500'}>
+              {ind.ok ? '✓' : '✗'}
+            </span>
+            <span className="text-tg-hint truncate" title={ind.detail}>
+              {ind.name}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function Journal({ subscribe }: { subscribe: (type: string, cb: (data: Record<string, unknown>) => void) => () => void }) {
@@ -321,7 +363,12 @@ export function Journal({ subscribe }: { subscribe: (type: string, cb: (data: Re
 
                     {/* Reason */}
                     {entry.reason && (
-                      <p className={`text-xs text-tg-hint/70 ${isExpanded ? '' : 'line-clamp-1'}`}>{entry.reason}</p>
+                      <p className={`text-xs text-tg-hint/70 ${isExpanded ? '' : 'line-clamp-2'}`}>{entry.reason}</p>
+                    )}
+
+                    {/* Indicators status (если есть) */}
+                    {isExpanded && entry.indicators_status && (
+                      <IndicatorBar indicators={entry.indicators_status} />
                     )}
 
                     {/* Expanded details */}
