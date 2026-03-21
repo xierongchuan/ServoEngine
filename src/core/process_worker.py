@@ -122,7 +122,9 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
 
                 # 2b. Fetch positions ONCE per cycle (reused by analyzer, executor, monitor)
                 all_positions = client.get_positions()
-                symbol_positions = all_positions.get(symbol, [])
+                # Normalize symbol: remove hyphen to match BingX format (BTCUSDT instead of BTC-USDT)
+                normalized_symbol = symbol.replace("-", "")
+                symbol_positions = all_positions.get(normalized_symbol, [])
                 real_position = symbol_positions[0] if symbol_positions else None
 
                 # 3. Анализ (с контекстом предыдущих решений)

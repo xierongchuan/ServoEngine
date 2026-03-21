@@ -134,16 +134,18 @@ class TradeTracker:
         Synchronizes the internal state with the real position from the exchange.
         Handles detecting new trades and closed trades (including manual closures).
         """
-        stored_trade = self.active_trades.get(symbol)
+        # Normalize symbol: use format without hyphen to match exchange format (BTCUSDT not BTC-USDT)
+        normalized_symbol = symbol.replace("-", "")
+        stored_trade = self.active_trades.get(normalized_symbol)
 
         # Scenario 1: New Position detected (Real exists, Stored does not)
         if real_position and not stored_trade:
-            self._handle_new_trade(symbol, real_position)
-            return self.active_trades.get(symbol)
+            self._handle_new_trade(normalized_symbol, real_position)
+            return self.active_trades.get(normalized_symbol)
 
         # Scenario 2: Position Closed (Stored exists, Real does not)
         elif not real_position and stored_trade:
-            self._handle_closed_trade(symbol, stored_trade, exchange_client=exchange_client)
+            self._handle_closed_trade(normalized_symbol, stored_trade, exchange_client=exchange_client)
             return None
 
         # Scenario 3: Update existing position (Both exist)
@@ -151,8 +153,8 @@ class TradeTracker:
             # Check if deal_id changed (unlikely but possible if closed and reopened fast)
             # BingX usually has 'positionId' or we use symbol as key.
             # Assuming symbol is key is fine for isolated margin/one-way mode.
-            self._handle_update_trade(symbol, stored_trade, real_position)
-            return self.active_trades.get(symbol)
+            self._handle_update_trade(normalized_symbol, stored_trade, real_position)
+            return self.active_trades.get(normalized_symbol)
 
         return None
 
@@ -165,21 +167,32 @@ class TradeTracker:
             context: dict с ключами: entry_regime, entry_score, entry_quality,
                      entry_rsi, entry_atr, entry_volume_ratio
         """
-        trade = self.active_trades.get(symbol)
+        # Normalize symbol
+        normalized_symbol = symbol.replace("-", "")
+        trade = self.active_trades.get(normalized_symbol)
         if trade:
             for key in ("entry_regime", "entry_score", "entry_quality",
                         "entry_rsi", "entry_atr", "entry_volume_ratio"):
                 if key in context:
                     trade[key] = context[key]
-            self.active_trades[symbol] = trade
-            self._save_active_trades(symbol)
+            self.active_trades[normalized_symbol] = trade
+            self._save_active_trades(normalized_symbol)
 
     def _handle_new_trade(self, symbol, real_position):
         """Register a new trade"""
         from src.config import TRADING_FEE_TAKER, LEVERAGE
+        from src.exchanges.dto import Position
 
-        # Support both dict and Position dataclass (list from new BingX client)
-        if isinstance(real_position, list):
+        # Support both dict and Position dataclass
+        # Check for Position dataclass first (has entry_price attribute)
+        if hasattr(real_position, 'entry_price') and hasattr(real_position, 'size'):
+            # Position dataclass object
+            entry_price = float(real_position.entry_price)
+            amount = float(real_position.size)
+            side = "LONG" if real_position.is_long else "SHORT"
+            leverage = real_position.leverage or LEVERAGE
+            position_id = getattr(real_position, 'position_id', getattr(real_position, 'dealId', ''))
+        elif isinstance(real_position, list):
             # New format: list of Position objects
             if real_position:
                 pos = real_position[0]  # Take first position
@@ -408,10 +421,15 @@ class TradeTracker:
         Removes stale trades that don't exist on exchange.
         Adds trades that exist on exchange but not in tracker.
         """
+        # Normalize exchange symbols to match internal format (without hyphen)
+        normalized_exchange_symbols = {s.replace("-", "") for s in real_positions_dict.keys()}
+
         # 1. Remove stale trades (in tracker but not on exchange)
         stale_symbols = []
         for symbol in list(self.active_trades.keys()):
-            if symbol not in real_positions_dict:
+            # Normalize tracker symbol for comparison
+            normalized_symbol = symbol.replace("-", "")
+            if normalized_symbol not in normalized_exchange_symbols:
                 stale_symbols.append(symbol)
 
         for symbol in stale_symbols:
@@ -426,8 +444,10 @@ class TradeTracker:
 
         # 2. Add missing trades (on exchange but not in tracker)
         for symbol, real_pos in real_positions_dict.items():
-            if symbol not in self.active_trades and real_pos:
-                self._handle_new_trade(symbol, real_pos)
+            # Normalize symbol for comparison
+            normalized_symbol = symbol.replace("-", "")
+            if normalized_symbol not in self.active_trades and real_pos:
+                self._handle_new_trade(normalized_symbol, real_pos)
 
         self._save_active_trades()
 
