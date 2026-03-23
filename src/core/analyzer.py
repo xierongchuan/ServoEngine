@@ -168,7 +168,11 @@ def calculate_atr(prices_data, period=14):
 
 
 def calculate_indicators(prices):
-    """Рассчитывает ключевые индикаторы"""
+    """Рассчитывает ключевые индикаторы.
+
+    Теперь использует унифицированный метод расчета RSI (Wilder's smoothing)
+    согласующийся с calculate_rsi_series для консистентности данных.
+    """
     # Валидация структуры данных
     if not prices:
         raise ValueError("Нет данных о ценах")
@@ -194,32 +198,15 @@ def calculate_indicators(prices):
     else:
         sma = sum(closes) / len(closes)
 
-    # RSI - используем конфигурируемый период
-    # RSI рассчитывается как скользящее окно по последним rsi_period значениям
-    if len(closes) < rsi_period:
+    # RSI - используем унифицированный метод Wilder's smoothing
+    # согласующийся с calculate_rsi_series
+    if len(closes) < rsi_period + 1:
         # Недостаточно данных для RSI
         return round(sma, 5), 50.0
 
-    # Берем последние rsi_period значений для расчета RSI
-    recent_closes = closes[-rsi_period:]
-
-    deltas = [recent_closes[i] - recent_closes[i-1] for i in range(1, len(recent_closes))]
-    gains = [d for d in deltas if d > 0]
-    losses = [-d for d in deltas if d < 0]
-
-    # Используем среднее по последним rsi_period-1 значениям
-    avg_gain = sum(gains) / len(deltas) if deltas else 0
-    avg_loss = sum(losses) / len(deltas) if deltas else 0
-
-    # Предотвращаем деление на ноль
-    if avg_loss == 0:
-        if avg_gain == 0:
-            rsi = 50.0  # Нейтральное значение если нет движения
-        else:
-            rsi = 100.0  # Максимальное значение если только рост
-    else:
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
+    # Используем calculate_rsi_series для консистентности
+    rsi_series = calculate_rsi_series(closes, rsi_period)
+    rsi = rsi_series[-1] if rsi_series else 50.0
 
     return round(sma, 5), round(rsi, 2)
 
@@ -607,6 +594,34 @@ def analyze_symbol(symbol, position=None, decision_context=""):
 
     # MACD calculation (5 values: + histogram_2prev for crossover timing)
     macd_line, macd_signal, macd_hist, macd_hist_prev, macd_hist_2prev = calculate_macd(close_prices)
+
+    # MACD crossover detection for AI
+    # Current: histogram > 0 means bullish, < 0 means bearish
+    # Previous: histogram_prev > 0 means bullish, < 0 means bearish
+    # 2 prev: histogram_2prev > 0 means bullish, < 0 means bearish
+    macd_crossover = "NONE"
+    macd_crossover_confirmed = False
+
+    # Check current crossover (histogram just crossed zero)
+    if macd_hist > 0 and macd_hist_prev <= 0:
+        # Bullish crossover - MACD line crossed above signal line
+        macd_crossover = "BULLISH"
+        # Check if this is confirmed (previous was also positive, meaning the cross happened and held)
+        macd_crossover_confirmed = macd_hist_prev > 0
+    elif macd_hist < 0 and macd_hist_prev >= 0:
+        # Bearish crossover - MACD line crossed below signal line
+        macd_crossover = "BEARISH"
+        macd_crossover_confirmed = macd_hist_prev < 0
+    elif macd_hist > 0 and macd_hist_prev > 0:
+        # Currently bullish, check if recently crossed (within last 2 candles)
+        if macd_hist_2prev <= 0:
+            macd_crossover = "BULLISH"
+            macd_crossover_confirmed = True
+    elif macd_hist < 0 and macd_hist_prev < 0:
+        # Currently bearish, check if recently crossed (within last 2 candles)
+        if macd_hist_2prev >= 0:
+            macd_crossover = "BEARISH"
+            macd_crossover_confirmed = True
 
     # Bollinger Bands calculation
     bb_upper, bb_middle, bb_lower, bb_width = calculate_bollinger_bands(close_prices)
@@ -1100,6 +1115,12 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         "local_trend": local_trend,
         "rsi": rsi,
         "atr": atr,
+        # MACD crossover info for AI
+        "macd_crossover": macd_crossover,
+        "macd_crossover_confirmed": macd_crossover_confirmed,
+        "macd_hist": macd_hist,
+        "macd_line": macd_line,
+        "macd_signal_val": macd_signal,
         "volume_status": volume_status,
         "volume_ratio": volume_ratio,
         "last_5_direction": last_5_direction,
