@@ -72,28 +72,27 @@ class TestConfigLoading:
     def test_load_base_config(self):
         """Base config should load and have expected structure."""
         config = load_base_config()
-        # Check some expected keys exist
-        if config:  # Only test if file exists
-            assert "exchange" in config or "ai" in config or "chart_ranges" in config
+        assert config is not None, "Base config should not be None"
+        assert "exchange" in config or "ai" in config or "chart_ranges" in config
 
     def test_load_trading_config(self):
         """Trading config should load and have expected structure."""
         config = load_trading_config()
-        if config:
-            assert "position" in config or "risk" in config or "features" in config
+        assert config is not None, "Trading config should not be None"
+        assert "position" in config or "risk" in config or "features" in config
 
     def test_load_active_config(self):
         """Active config should load and have strategy."""
         config = load_active_config()
-        if config:
-            assert "strategy" in config
+        assert config is not None, "Active config should not be None"
+        assert "strategy" in config
 
     def test_load_strategy_config(self):
         """Strategy configs should load with preset."""
         for strategy in ["MACDX", "HYBRID", "SCALP", "AISCALP", "SWING", "GRID"]:
             config = load_strategy_config(strategy)
-            if config:
-                assert "preset" in config or "signal_rules" in config
+            assert config is not None, f"Strategy config for {strategy} should not be None"
+            assert "preset" in config or "signal_rules" in config
 
 
 class TestProfileInheritance:

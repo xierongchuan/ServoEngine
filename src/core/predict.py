@@ -457,7 +457,7 @@ def validate_prediction(prediction, current_price, has_position=False):
     soft_limit = VALIDATION.get("rr_soft_limit", 0.5)
     action = prediction.get("action", "hold")
 
-    if rr_ratio < soft_limit:
+    if rr_ratio <= soft_limit:
         if action in ("buy", "sell"):
             # Auto-correct TP to meet minimum R/R instead of blocking
             required_reward = risk * soft_limit

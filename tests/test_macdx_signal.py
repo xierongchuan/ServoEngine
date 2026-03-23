@@ -215,9 +215,10 @@ class TestBuySignal:
             adx=15,  # Low ADX
         )
         result = generator.generate_signal(analysis)
-        # May be BUY if score >= min_score, or HOLD if not enough
-        if result["signal"] == "BUY":
-            assert result["confirmations"] >= 3
+        # With these conditions: MACD(+1) + EMA(+1) + RSI(+1) + NoExhaustion(+1) + NotSideways(0) + Volume(0) >= 3
+        # Should be BUY with at least 3 confirmations (NoExhaustion adds +1 when no divergence detected)
+        assert result["signal"] == "BUY", f"Expected BUY but got {result['signal']}"
+        assert result["confirmations"] >= 3, f"Expected at least 3 confirmations but got {result['confirmations']}"
 
     def test_hold_insufficient_confirmations(self, generator):
         # Only MACD cross + EMA = 2 confirmations (not enough)
@@ -287,8 +288,10 @@ class TestSellSignal:
             adx=15,
         )
         result = generator.generate_signal(analysis)
-        if result["signal"] == "SELL":
-            assert result["confirmations"] >= 3
+        # With these conditions: MACD + EMA + RSI + NoExhaustion >= 3 confirmations
+        # Should be SELL with at least 3 confirmations
+        assert result["signal"] == "SELL", f"Expected SELL but got {result['signal']}"
+        assert result["confirmations"] >= 3, f"Expected at least 3 confirmations but got {result['confirmations']}"
 
 
 class TestSidewaysDetection:

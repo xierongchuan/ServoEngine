@@ -396,10 +396,12 @@ class TestScalpSignalGenerator:
         ind["bb_lower"] = 49710  # Price at BB lower
         ind["rsi"] = 25  # Oversold
         ind["ema_fast"] = 49750  # EMA still confirms direction
+        # Force RSI into oversold zone which should trigger mean_reversion pattern
         regime = {"regime": "RANGING"}
         result = generator.generate(ind, regime=regime)
-        if result["signal"] == "BUY":
-            assert result["pattern"] == "mean_reversion"
+        # With RANGING regime + oversold RSI + price near BB lower = mean_reversion
+        assert result["signal"] == "BUY", f"Expected BUY but got {result['signal']}"
+        assert result["pattern"] == "mean_reversion", f"Expected mean_reversion but got {result['pattern']}"
 
     def test_macd_crossover_annotation(self, generator):
         """MACD crossover should appear in reasons."""
