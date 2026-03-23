@@ -606,12 +606,14 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     if macd_hist > 0 and macd_hist_prev <= 0:
         # Bullish crossover - MACD line crossed above signal line
         macd_crossover = "BULLISH"
-        # Check if this is confirmed (previous was also positive, meaning the cross happened and held)
-        macd_crossover_confirmed = macd_hist_prev > 0
+        # Check if this is confirmed (cross happened 2+ candles ago and held)
+        # For immediate crossover, check 2 candles ago - if it was already positive, it's confirmed
+        macd_crossover_confirmed = macd_hist_2prev > 0
     elif macd_hist < 0 and macd_hist_prev >= 0:
         # Bearish crossover - MACD line crossed below signal line
         macd_crossover = "BEARISH"
-        macd_crossover_confirmed = macd_hist_prev < 0
+        # Check if this is confirmed (cross happened 2+ candles ago and held)
+        macd_crossover_confirmed = macd_hist_2prev < 0
     elif macd_hist > 0 and macd_hist_prev > 0:
         # Currently bullish, check if recently crossed (within last 2 candles)
         if macd_hist_2prev <= 0:
@@ -1034,7 +1036,7 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         # 2. Session awareness
         session_data = get_session_info()
 
-        # 3. Build signal input (same base as HYBRID + HTF + session)
+        # 3. Build signal input (adds HTF/session to base analysis)
         signal_input = {
             "global_trend": global_trend,
             "local_trend": local_trend,
@@ -1053,6 +1055,9 @@ def analyze_symbol(symbol, position=None, decision_context=""):
             "macd_hist": macd_hist,
             "macd_hist_prev": macd_hist_prev,
             "macd_hist_2prev": macd_hist_2prev,
+            # Add new MACD crossover fields for aiscalp_signal
+            "macd_crossover": macd_crossover,
+            "macd_crossover_confirmed": macd_crossover_confirmed,
             "bb_upper": bb_upper,
             "bb_lower": bb_lower,
             "bb_width": bb_width,

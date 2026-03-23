@@ -99,6 +99,10 @@ class AiScalpSignalGenerator:
         # HTF data
         htf_trend = htf_data.get("htf_trend", "NEUTRAL") if htf_data else "NEUTRAL"
 
+        # MACD crossover data from analyzer
+        macd_crossover = analysis.get("macd_crossover", "NONE")
+        macd_crossover_confirmed = analysis.get("macd_crossover_confirmed", False)
+
         # Session data
         session_quality = session_data.get("session_quality", "MEDIUM") if session_data else "MEDIUM"
         is_overlap = session_data.get("is_overlap", False) if session_data else False
@@ -206,7 +210,7 @@ class AiScalpSignalGenerator:
         if current_price > 0 and support > 0 and resistance > 0:
             support_dist_pct = abs((current_price - support) / current_price * 100)
             resistance_dist_pct = abs((resistance - current_price) / current_price * 100)
-            sr_spread_pct = (resistance - support) / current_price * 100 if current_price > 0 else 0
+            sr_spread_pct = (resistance - support) / current_price * 100
 
             if sr_spread_pct >= 1.0:
                 if support_dist_pct <= sr_proximity_pct:
@@ -222,17 +226,30 @@ class AiScalpSignalGenerator:
 
         # --- TIER 3: Support (optional) ---
 
-        # 3a. MACD (+1)
+        # 3a. MACD (+1) - using advanced crossover detection
         macd_long = False
         macd_short = False
-        if macd_line > macd_signal_val and macd_hist > 0:
-            long_score += w_macd
-            long_reasons.append(f"MACD↑ +{w_macd}")
-            macd_long = True
-        elif macd_line < macd_signal_val and macd_hist < 0:
-            short_score += w_macd
-            short_reasons.append(f"MACD↓ +{w_macd}")
-            macd_short = True
+        # Priority: use advanced crossover detection if available
+        if macd_crossover != "NONE":
+            # Use analyzer's crossover detection for more accurate signals
+            if macd_crossover == "BULLISH":
+                long_score += w_macd
+                long_reasons.append(f"MACD↑ {macd_crossover_confirmed and '✓' or '○'} +{w_macd}")
+                macd_long = True
+            elif macd_crossover == "BEARISH":
+                short_score += w_macd
+                short_reasons.append(f"MACD↓ {macd_crossover_confirmed and '✓' or '○'} +{w_macd}")
+                macd_short = True
+        else:
+            # Fallback to simple histogram check
+            if macd_line > macd_signal_val and macd_hist > 0:
+                long_score += w_macd
+                long_reasons.append(f"MACD↑ +{w_macd}")
+                macd_long = True
+            elif macd_line < macd_signal_val and macd_hist < 0:
+                short_score += w_macd
+                short_reasons.append(f"MACD↓ +{w_macd}")
+                macd_short = True
 
         # 3b. Momentum (+1)
         momentum_long = False
