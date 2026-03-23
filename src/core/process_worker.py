@@ -289,35 +289,46 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                                     "size_pct": size_pct,
                                 }
                             else:
-                                # AI veto invocation with focused HYBRID_VETO prompt
-                                with StageTimer("AI Veto", symbol, "🧠"):
-                                    info(f"🔧 [{symbol}] HYBRID: AI veto invoked ({ai_reason})")
-                                    # Rebuild prompt with HYBRID_VETO strategy for focused risk assessment
-                                    try:
-                                        from src.prompts.builder import PromptBuilder
-                                        veto_ctx = analysis_result.get("prompt_ctx", {})
-                                        if veto_ctx:
-                                            veto_prompt = PromptBuilder.build("HYBRID_VETO", veto_ctx)
-                                            analysis_result["prompt"] = veto_prompt.strip()
-                                    except Exception as e:
-                                        warning(f"⚠️ [{symbol}] HYBRID_VETO prompt failed: {e}, using default")
-                                    prediction = predict.process_analysis(analysis_result)
+                                # Check if risk validation failed - skip AI call if so
+                                if risk_validation_failed:
+                                    info(f"⚠️ [{symbol}] HYBRID: Risk validation failed, forcing HOLD")
+                                    prediction = {
+                                        "symbol": symbol,
+                                        "action": "hold",
+                                        "confidence": 0.0,
+                                        "reason": "[HYBRID] Risk validation failed - skipped AI veto",
+                                        "current_price": current_price,
+                                    }
+                                else:
+                                    # AI veto invocation with focused HYBRID_VETO prompt
+                                    with StageTimer("AI Veto", symbol, "🧠"):
+                                        info(f"🔧 [{symbol}] HYBRID: AI veto invoked ({ai_reason})")
+                                        # Rebuild prompt with HYBRID_VETO strategy for focused risk assessment
+                                        try:
+                                            from src.prompts.builder import PromptBuilder
+                                            veto_ctx = analysis_result.get("prompt_ctx", {})
+                                            if veto_ctx:
+                                                veto_prompt = PromptBuilder.build("HYBRID_VETO", veto_ctx)
+                                                analysis_result["prompt"] = veto_prompt.strip()
+                                        except Exception as e:
+                                            warning(f"⚠️ [{symbol}] HYBRID_VETO prompt failed: {e}, using default")
+                                        prediction = predict.process_analysis(analysis_result)
 
-                                    # Override SL/TP with dynamic values if AI didn't provide better ones
-                                    if not prediction.get("stop_loss"):
-                                        prediction["stop_loss"] = sl
-                                    if not prediction.get("take_profit"):
-                                        prediction["take_profit"] = tp
-                                    if size_pct:
-                                        prediction["size_pct"] = size_pct
+                                        # Override SL/TP with dynamic values if AI didn't provide better ones
+                                        if not prediction.get("stop_loss"):
+                                            prediction["stop_loss"] = sl
+                                        if not prediction.get("take_profit"):
+                                            prediction["take_profit"] = tp
+                                        if size_pct:
+                                            prediction["size_pct"] = size_pct
 
-                                    # HYBRID constraint: AI cannot generate opposite signal
-                                    if signal in ("BUY", "SELL"):
-                                        ai_action = prediction.get("action", "hold").upper()
-                                        if ai_action not in (signal, "HOLD", "CLOSE", "CLOSE_PARTIAL"):
-                                            info(f"🔧 [{symbol}] HYBRID: AI tried {ai_action} but signal was {signal} - forcing HOLD")
-                                            prediction["action"] = "hold"
-                                            prediction["reason"] = f"[HYBRID] AI rejected {signal} signal"
+                                        # HYBRID constraint: AI cannot generate opposite signal
+                                        if signal in ("BUY", "SELL"):
+                                            ai_action = prediction.get("action", "hold").upper()
+                                            if ai_action not in (signal, "HOLD", "CLOSE", "CLOSE_PARTIAL"):
+                                                info(f"🔧 [{symbol}] HYBRID: AI tried {ai_action} but signal was {signal} - forcing HOLD")
+                                                prediction["action"] = "hold"
+                                                prediction["reason"] = f"[HYBRID] AI rejected {signal} signal"
                 elif STRATEGY_STYLE == "AISCALP":
                     # AISCALP pipeline: pre-filter → signal scoring → regime → risk → AI (always)
                     signal_data = analysis_result.get("signal_data", {})

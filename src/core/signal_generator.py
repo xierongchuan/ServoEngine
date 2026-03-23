@@ -61,13 +61,15 @@ class SignalGenerator:
         bb_lower = analysis.get("bb_lower", 0)
 
         # === WEIGHTS FROM CONFIG ===
-        ema_weight = self.rules.get("ema_cross_weight", 2)
-        rsi_weight = self.rules.get("rsi_zone_weight", 2)
-        volume_weight = self.rules.get("volume_weight", 1)
-        sr_weight = self.rules.get("sr_weight", 2)
-        momentum_weight = self.rules.get("momentum_weight", 1)
-        macd_weight = self.rules.get("macd_weight", 1)
-        bb_weight = self.rules.get("bb_weight", 1)
+        # Config uses nested weights dict: {"weights": {"ema_cross": 2, "rsi_zone": 2, ...}}
+        weights = self.rules.get("weights", {})
+        ema_weight = weights.get("ema_cross", 2)
+        rsi_weight = weights.get("rsi_zone", 2)
+        volume_weight = weights.get("volume", 1)
+        sr_weight = weights.get("sr", 2)
+        momentum_weight = weights.get("momentum", 1)
+        macd_weight = weights.get("macd", 1)
+        bb_weight = weights.get("bb", 1)
 
         max_score = ema_weight + rsi_weight + sr_weight + momentum_weight + macd_weight + bb_weight + volume_weight
 
@@ -84,7 +86,7 @@ class SignalGenerator:
 
         # Min score: use regime-adaptive or default
         if regime and regime.get("recommended_min_score"):
-            min_score = regime["recommended_min_score"]
+            min_score = regime.get("recommended_min_score")
         else:
             min_score = self.rules.get("min_score_for_signal", 5)
 

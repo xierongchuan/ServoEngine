@@ -42,7 +42,8 @@ def calculate_dynamic_sl_tp(
             - reward_pct: Потенциальная прибыль в процентах
     """
     # Получаем мультипликаторы из режима рынка
-    sl_mult = regime.get("sl_multiplier", 2.0)
+    # Используем значения из HYBRID config по умолчанию: atr_sl_mult=1.5, atr_tp_mult=3
+    sl_mult = regime.get("sl_multiplier", 1.5)
     tp_mult = regime.get("tp_multiplier", 3.0)
 
     # Корректировка на основе качества сигнала
