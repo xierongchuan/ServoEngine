@@ -180,6 +180,9 @@ def parse_response(response):
 
 
         # Добавляем причину по умолчанию
+        if "reason" not in data:
+            data["reason"] = ""
+
         # Добавляем процент закрытия (для close_partial)
         if "percentage" not in data:
             data["percentage"] = 1.0
@@ -354,7 +357,8 @@ def process_analysis(analysis):
         prediction = parse_response(response)
 
         # 1. Check Technical Errors (API/Parsing)
-        if prediction["reason"] == "Ошибка парсинга ответа AI" or prediction["reason"].startswith("Ошибка API"):
+        reason = prediction.get("reason", "")
+        if reason == "Ошибка парсинга ответа AI" or reason.startswith("Ошибка API"):
             if attempt < max_retries:
                 warning(f"⚠️ {analysis['symbol']}: Ошибка парсинга/API. Повторная попытка через 1 сек...")
                 time.sleep(1)

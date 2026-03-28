@@ -6,11 +6,11 @@
     "timeframe": "15m",
     "chart_period": "1D",
     "plotter_period": "1D",
-    "loop_interval": 20,
+    "loop_interval": 60,
     "position_check_interval": 15,
     "atr_sl_mult": 1.5,
     "atr_tp_mult": 3.0,
-    "leverage": 7
+    "leverage": 6
   },
 
   "signal_rules": {

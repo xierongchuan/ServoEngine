@@ -393,8 +393,16 @@ STYLE_PRESETS = BOT_CONFIG.get("STYLE_PRESETS", DEFAULT_STYLE_PRESETS)
 
 # Apply style preset
 current_preset = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS.get("AISCALP", {}))
-LEVERAGE = current_preset.get("leverage", 10)
-print(f"🔧 Strategy: {STRATEGY_STYLE}, Leverage: {LEVERAGE}x")
+
+# Get leverage from strategy config first, fallback to STYLE_PRESETS
+_strategy_config = BOT_CONFIG.get(f"{STRATEGY_STYLE}_SETTINGS", {})
+_strategy_leverage = _strategy_config.get("preset", {}).get("leverage")
+if _strategy_leverage is not None:
+    LEVERAGE = _strategy_leverage
+    print(f"🔧 Strategy: {STRATEGY_STYLE}, Leverage: {LEVERAGE}x (from strategy config)")
+else:
+    LEVERAGE = current_preset.get("leverage", 10)
+    print(f"🔧 Strategy: {STRATEGY_STYLE}, Leverage: {LEVERAGE}x (from STYLE_PRESETS)")
 
 
 def parse_interval_minutes(interval_str):

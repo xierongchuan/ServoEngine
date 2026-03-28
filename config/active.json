@@ -1,7 +1,7 @@
 {
   "_description": "Active runtime configuration - strategy and symbol profile mapping",
   "_version": "1.0.0",
-  "strategy": "SWING",
+  "strategy": "MACDX",
   "symbols": {
     "bingx": [
       "BTCUSDT",
@@ -19,18 +19,18 @@
     ]
   },
   "symbol_profiles": {
-    "BTCUSDT": "SWING Fast",
-    "BNBUSDT": "SWING Fast",
-    "ADAUSDT": "SWING Fast",
-    "XRPUSDT": "SWING Fast",
-    "SOLUSDT": "SWING Fast",
-    "DOGEUSDT": "SWING Fast",
-    "DOTUSDT": "SWING Fast",
-    "AVAXUSDT": "SWING Fast",
-    "LTCUSDT": "SWING Fast",
-    "LINKUSDT": "SWING Fast",
-    "UNIUSDT": "SWING Fast",
-    "ATOMUSDT": "SWING Fast"
+    "BTCUSDT": "default",
+    "BNBUSDT": "default",
+    "ADAUSDT": "default",
+    "XRPUSDT": "default",
+    "SOLUSDT": "default",
+    "DOGEUSDT": "default",
+    "DOTUSDT": "default",
+    "AVAXUSDT": "default",
+    "LTCUSDT": "default",
+    "LINKUSDT": "default",
+    "UNIUSDT": "default",
+    "ATOMUSDT": "default"
   },
   "disabled_symbols": []
 }
