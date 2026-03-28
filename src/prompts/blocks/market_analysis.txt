@@ -12,7 +12,6 @@
 ### B. Импульс
 | Индикатор | Статус | Значение |
 |-----------|--------|----------|
-| Volume | {volume_status} | {volume_ratio:.2f}x |
 | Pattern | {last_5_direction} | {direction_desc} |
 | SEB (Trend) | {seb_status} | Quality: {trend_quality_desc} (R²={seb_r_sq:.2f}) |
 

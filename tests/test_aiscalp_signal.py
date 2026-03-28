@@ -9,13 +9,12 @@ AISCALP_CONFIG = {
         "signal_scoring": {
             "weights": {
                 "htf_trend": 3, "ema_alignment": 2, "rsi_zone": 2,
-                "sr_proximity": 2, "macd": 1, "volume": 1,
+                "sr_proximity": 2, "macd": 1,
                 "session_quality": 1, "momentum": 1
             },
             "min_score_for_signal": 5,
             "tier1_required": True,
             "conflict_friction_threshold": 4,
-            "min_volume_ratio": 0.4,
             "min_atr_ratio": 0.4,
             "rsi_long_zone": [30, 55],
             "rsi_short_zone": [45, 70],
@@ -33,7 +32,6 @@ AISCALP_CONFIG = {
         "multi_timeframe": {"enabled": True},
         "pre_filter": {
             "enabled": True,
-            "skip_dead_market_volume": 0.25,
             "skip_rsi_neutral_zone": [46, 54],
             "skip_no_htf_trend": True,
         },
@@ -68,7 +66,6 @@ def _base_analysis(**overrides):
         "global_trend": "UP",
         "local_trend": "BULLISH",
         "rsi": 42,
-        "volume_ratio": 1.2,
         "current_price": 100.0,
         "support": 98.0,
         "resistance": 103.0,
@@ -130,13 +127,6 @@ def _regime(**overrides):
 class TestPreFilter:
     """Test pre-filter logic."""
 
-    def test_dead_market_volume(self):
-        from src.core.aiscalp_signal import aiscalp_pre_filter
-        analysis = _base_analysis(volume_ratio=0.1)
-        proceed, reason = aiscalp_pre_filter(analysis, _htf_data(), _session_data())
-        assert proceed is False
-        assert "Dead market" in reason
-
     def test_rsi_neutral_no_htf(self):
         from src.core.aiscalp_signal import aiscalp_pre_filter
         analysis = _base_analysis(rsi=50)
@@ -166,7 +156,7 @@ class TestGenerateSignal:
     def test_strong_buy_signal(self):
         """All indicators align for BUY — should produce a signal."""
         from src.core.aiscalp_signal import generate_aiscalp_signal
-        analysis = _base_analysis(rsi=42, ema9=100.5, ema21=99.8, volume_ratio=1.5)
+        analysis = _base_analysis(rsi=42, ema9=100.5, ema21=99.8)
         htf = _htf_data(htf_trend="BULLISH")
         session = _session_data(quality_score_adj=1)
         regime = _regime(recommended_min_score=4)
@@ -182,7 +172,7 @@ class TestGenerateSignal:
         """All indicators align for SELL."""
         from src.core.aiscalp_signal import generate_aiscalp_signal
         analysis = _base_analysis(
-            rsi=62, ema9=99.0, ema21=100.0, volume_ratio=1.5,
+            rsi=62, ema9=99.0, ema21=100.0,
             last_5_direction="DOWN",
             macd_line=-0.1, macd_signal=-0.05, macd_hist=-0.05,
             current_price=100.0, resistance=102.0, support=97.5,
@@ -195,16 +185,6 @@ class TestGenerateSignal:
 
         assert result["signal"] == "SELL"
         assert result["score"] >= 5
-
-    def test_hold_low_volume(self):
-        """Low volume should produce HOLD."""
-        from src.core.aiscalp_signal import generate_aiscalp_signal
-        analysis = _base_analysis(volume_ratio=0.2)
-
-        result = generate_aiscalp_signal(analysis, _htf_data(), _session_data())
-
-        assert result["signal"] == "HOLD"
-        assert result["quality"] == 0.0
 
     def test_hold_low_atr(self):
         """Low ATR should produce HOLD."""
@@ -220,7 +200,7 @@ class TestGenerateSignal:
         from src.core.aiscalp_signal import generate_aiscalp_signal
         analysis = _base_analysis(
             ema9=100.0, ema21=100.0,  # flat EMA
-            rsi=42, volume_ratio=1.0,
+            rsi=42,
         )
         htf = _htf_data(htf_trend="NEUTRAL")  # no HTF direction
 
@@ -262,14 +242,14 @@ class TestGenerateSignal:
         # Off-session score should be lower than normal
         assert result_low["score"] < result_normal["score"]
 
-    def test_max_score_is_13(self):
-        """Max base score = 13."""
+    def test_max_score_is_12(self):
+        """Max base score = 12."""
         from src.core.aiscalp_signal import generate_aiscalp_signal
         analysis = _base_analysis()
 
         result = generate_aiscalp_signal(analysis, _htf_data(), _session_data())
 
-        assert result["max_score"] == 13
+        assert result["max_score"] == 12
 
     def test_regime_adaptive_min_score(self):
         """Regime should override default min_score."""

@@ -62,6 +62,11 @@ class WebSocketDataProvider:
         self._max_reconnect_delay = 60
         self._last_msg_time = 0.0
         self._ping_interval = 20  # Send keepalive every 20s of silence
+        # Отслеживание timestamp последней обработанной свечи для каждого символа
+        self._last_candle_timestamps: Dict[str, int] = {}
+        # Rate limiting для REST запросов завершённых свечей
+        self._last_rest_fetch_time: Dict[str, float] = {}
+        self._rest_fetch_cooldown = 1.0  # Минимум 1 секунда между REST запросами для одного символа
 
     def start(self, symbols: List[str], interval: str = "5m"):
         """
@@ -122,6 +127,39 @@ class WebSocketDataProvider:
         if symbol.endswith("USDT"):
             return symbol[:-4] + "-USDT"
         return symbol
+
+    def _interval_to_ms(self, interval: str) -> int:
+        """Convert interval string to milliseconds."""
+        interval_map = {
+            "1m": 60_000,
+            "3m": 180_000,
+            "5m": 300_000,
+            "15m": 900_000,
+            "30m": 1_800_000,
+            "1h": 3_600_000,
+            "4h": 14_400_000,
+            "12h": 43_200_000,
+            "1d": 86_400_000,
+            "1w": 604_800_000,
+            "1M": 2_592_000_000,
+        }
+        return interval_map.get(interval, 300_000)  # Default 5m
+
+    def _get_candle_start_time(self, timestamp_ms: int, interval_ms: int) -> int:
+        """Get the start time of the candle that contains this timestamp."""
+        return (timestamp_ms // interval_ms) * interval_ms
+
+    def _is_new_candle_start(self, symbol: str, new_timestamp: int) -> bool:
+        """Определяет, началась ли новая свеча (сменился период)."""
+        last_ts = self._last_candle_timestamps.get(symbol)
+        if last_ts is None:
+            return False
+
+        interval_ms = self._interval_to_ms(self._interval)
+        last_candle_start = self._get_candle_start_time(last_ts, interval_ms)
+        new_candle_start = self._get_candle_start_time(new_timestamp, interval_ms)
+
+        return new_candle_start > last_candle_start
 
     def _backfill_all_symbols(self):
         """REST backfill historical data for all symbols."""
@@ -346,6 +384,21 @@ class WebSocketDataProvider:
             # DEBUG: Log every kline update (commented out to prevent log flooding)
             # info(f"[WS-KLINE] {symbol}: close={new_candle['closePrice']:.4f}, volume={new_candle['volume']:.2f}")
 
+            # Проверяем: началась ли новая свеча?
+            if self._is_new_candle_start(symbol, ts_ms):
+                # Запрашиваем завершённую свечу из REST API
+                last_ts = self._last_candle_timestamps.get(symbol)
+                if last_ts:
+                    interval_ms = self._interval_to_ms(self._interval)
+                    completed_ts = self._get_candle_start_time(last_ts, interval_ms)
+                    info(f"[WS] New candle detected for {symbol}, fetching completed candle ts={completed_ts}")
+                    completed_candle = self._fetch_completed_candle_from_rest(symbol, completed_ts)
+                    if completed_candle:
+                        self._replace_completed_candle_in_cache(symbol, completed_candle)
+
+            # Обновляем timestamp последней обработанной свечи
+            self._last_candle_timestamps[symbol] = ts_ms
+
             # Update cache
             self._update_cache(symbol, new_candle)
 
@@ -384,6 +437,65 @@ class WebSocketDataProvider:
         if self._cache_update_counts[symbol] % 10 == 0:
             cache_type = "NEW" if is_new_candle else "UPDATE"
             info(f"[WS-CACHE] {symbol}: {cache_type} candle, cache_size={len(cached)}, updates={self._cache_update_counts[symbol]}")
+
+    def _fetch_completed_candle_from_rest(self, symbol: str, candle_timestamp_ms: int) -> Optional[dict]:
+        """Запрашивает завершённую свечу из REST API."""
+        # Rate limiting: проверяем, прошло ли достаточно времени с последнего запроса
+        current_time = time.time()
+        last_fetch_time = self._last_rest_fetch_time.get(symbol, 0.0)
+        if current_time - last_fetch_time < self._rest_fetch_cooldown:
+            info(f"[WS] Rate limit: skipping REST fetch for {symbol} (cooldown {self._rest_fetch_cooldown}s)")
+            return None
+
+        try:
+            formatted_symbol = self._normalize_symbol(symbol)
+            market_url = f"{BINGX_API_URL}/openApi/swap/v3/quote/klines"
+            params = {
+                "symbol": formatted_symbol,
+                "interval": self._interval,
+                "limit": 1,
+                "startTime": candle_timestamp_ms,
+                "endTime": candle_timestamp_ms + self._interval_to_ms(self._interval) - 1
+            }
+
+            response = requests.get(market_url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            if data and data.get("code") == 0:
+                klines = data.get("data", [])
+                if klines:
+                    formatted = self._format_klines(klines)
+                    if formatted:
+                        # Обновляем время последнего успешного запроса
+                        self._last_rest_fetch_time[symbol] = time.time()
+                        return formatted[0]
+
+            warning(f"[WS] REST fetch completed candle failed for {symbol}: no data")
+            return None
+
+        except Exception as e:
+            warning(f"[WS] REST fetch completed candle error for {symbol}: {e}")
+            return None
+
+    def _replace_completed_candle_in_cache(self, symbol: str, completed_candle: dict):
+        """Подменяет последнюю свечу в кэше на реальную из REST API."""
+        if symbol not in self._kline_cache:
+            return
+
+        cached = list(self._kline_cache.get(symbol, []))
+        if not cached:
+            return
+
+        # Находим и заменяем свечу с таким же timestamp
+        for i in range(len(cached) - 1, -1, -1):
+            if cached[i]["timestamp"] == completed_candle["timestamp"]:
+                cached[i] = completed_candle
+                self._kline_cache[symbol] = cached
+                info(f"[WS] ✅ Replaced completed candle for {symbol}: ts={completed_candle['timestamp']}, close={completed_candle['closePrice']:.4f}")
+                return
+
+        warning(f"[WS] Could not find candle to replace for {symbol}: ts={completed_candle['timestamp']}")
 
     def _on_error(self, ws, error):
         """Handle WebSocket error."""

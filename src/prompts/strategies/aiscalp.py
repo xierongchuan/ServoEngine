@@ -16,8 +16,6 @@ class AiScalpStrategy(BaseStrategy):
         current_price = ctx.get("current_price", 0)
         atr = ctx.get("atr", 0)
         rsi = ctx.get("rsi", 50)
-        volume_ratio = ctx.get("volume_ratio", 1.0)
-        volume_status = ctx.get("volume_status", "Норма")
 
         global_trend = ctx.get("global_trend", "N/A")
         local_trend = ctx.get("local_trend", "N/A")
@@ -47,8 +45,6 @@ class AiScalpStrategy(BaseStrategy):
             long_potential_pct = short_potential_pct = long_risk_pct = short_risk_pct = 0
 
         warnings = []
-        if volume_ratio < 0.3:
-            warnings.append("DEAD MARKET: Volume too low.")
         if "MIXED" in last_5_direction and trend_quality_desc == "Low":
             warnings.append("CHOPPY: No direction — consider HOLD.")
 
@@ -189,14 +185,12 @@ Factor this into your decision — poor R/R means higher risk.
 Conditions for LONG:
 - HTF Trend = BULLISH (required)
 - Local Trend = BULLISH (EMA9 > EMA21)
-- Volume Ratio >= 0.7x (current: {volume_ratio:.2f}x — {volume_status})
 - RSI 30-55 (not overbought, current: {rsi:.1f})
 - Last 5 Direction: UP or STRONG UP (current: {last_5_direction})
 
 Conditions for SHORT:
 - HTF Trend = BEARISH (required)
 - Local Trend = BEARISH
-- Volume Ratio >= 0.7x
 - RSI 45-70
 - Last 5 Direction: DOWN or STRONG DOWN
 
@@ -208,7 +202,6 @@ Conditions for LONG:
 - HTF Trend = BULLISH (not broken)
 - Price pulled back to support ({support:.2f}) or EMA
 - RSI dipped to 35-50 (current: {rsi:.1f})
-- Volume declining on pullback
 
 Conditions for SHORT:
 - HTF Trend = BEARISH
@@ -223,7 +216,6 @@ Conditions for SHORT:
 
 Conditions:
 - Price breaks resistance ({resistance:.2f}) or support ({support:.2f})
-- Volume spike >= 1.2x on breakout candle
 - Confirmation: close beyond level
 
 **Entry:** After candle close beyond level, not during the break.
@@ -258,26 +250,24 @@ Conditions:
 
 **Current state:**
 - Trend: Global={global_trend}, Local={local_trend}
-- Momentum: {last_5_direction} ({volume_status})
+- Momentum: {last_5_direction}
 - Trend quality: {trend_quality_desc}
 - SEB: {seb_status}
 
-| State | Volume | Action |
-|-------|--------|--------|
-| Trending | >= 0.7x | Trend Continuation |
-| Trending + Pullback | >= 0.5x | Pullback Entry |
-| Breakout | >= 1.2x | Breakout Trade |
-| Ranging (INSIDE) | Any | HOLD or Range play |
-| Dead Market | < 0.3x | HOLD |
+| State | Action |
+|-------|--------|
+| Trending | Trend Continuation |
+| Trending + Pullback | Pullback Entry |
+| Breakout | Breakout Trade |
+| Ranging (INSIDE) | HOLD or Range play |
 
 ---
 
 ### WHEN NOT TO ENTER (HOLD)
 
 **Hard filters:**
-1. Volume Ratio < 0.3x (dead market)
-2. MIXED direction + Low quality + RSI 45-55 (full chaos)
-3. Counter-HTF trade (signal against 1H trend)
+1. MIXED direction + Low quality + RSI 45-55 (full chaos)
+2. Counter-HTF trade (signal against 1H trend)
 
 **Soft filters:**
 - Price in middle of range (far from levels)
@@ -285,7 +275,7 @@ Conditions:
 - Off-session hours (lower liquidity, use caution)
 
 **IMPORTANT:** Do not skip a trade due to imperfection.
-If there is HTF direction + LTF confirmation + volume — consider entry."""
+If there is HTF direction + LTF confirmation — consider entry."""
 
     def get_position_management(self, ctx: dict) -> str:
         return """### POSITION MANAGEMENT (AI SCALP MODE)

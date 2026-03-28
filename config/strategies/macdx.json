@@ -3,7 +3,7 @@
   "_version": "1.0.0",
 
   "preset": {
-    "timeframe": "1m",
+    "timeframe": "15m",
     "chart_period": "1D",
     "plotter_period": "1D",
     "loop_interval": 20,

@@ -1,18 +1,36 @@
 {
   "_description": "Active runtime configuration - strategy and symbol profile mapping",
   "_version": "1.0.0",
-  "strategy": "AISCALP",
+  "strategy": "HYBRID",
   "symbols": {
     "bingx": [
       "BTCUSDT",
+      "BNBUSDT",
+      "ADAUSDT",
+      "XRPUSDT",
       "SOLUSDT",
-      "ETHUSDT"
+      "DOGEUSDT",
+      "DOTUSDT",
+      "AVAXUSDT",
+      "LTCUSDT",
+      "LINKUSDT",
+      "UNIUSDT",
+      "ATOMUSDT"
     ]
   },
   "symbol_profiles": {
     "BTCUSDT": "default",
+    "BNBUSDT": "default",
+    "ADAUSDT": "default",
+    "XRPUSDT": "default",
     "SOLUSDT": "default",
-    "ETHUSDT": "default"
+    "DOGEUSDT": "default",
+    "DOTUSDT": "default",
+    "AVAXUSDT": "default",
+    "LTCUSDT": "default",
+    "LINKUSDT": "default",
+    "UNIUSDT": "default",
+    "ATOMUSDT": "default"
   },
   "disabled_symbols": []
 }

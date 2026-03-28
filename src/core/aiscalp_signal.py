@@ -14,11 +14,10 @@ TIERED SCORING SYSTEM:
     - MACD: +1
     - Momentum: +1
     - Bollinger Bands: +1
-    - Volume: +1
   Interaction bonuses/penalties: ±1..3
   Session adjustment: +1 (overlap) / -1 (off-session)
 
-Max base: 13, Min for signal: regime-adaptive (default 5)
+Max base: 12, Min for signal: regime-adaptive (default 5)
 """
 
 from src.config import BOT_CONFIG
@@ -43,18 +42,12 @@ class AiScalpSignalGenerator:
         """
         pf_cfg = self.settings.get("pre_filter", {})
 
-        volume_ratio = analysis.get("volume_ratio", 1.0)
         rsi = analysis.get("rsi", 50)
         htf_trend = htf_data.get("htf_trend", "NEUTRAL") if htf_data else "NEUTRAL"
         daily_bias = htf_data.get("daily_bias", "NEUTRAL") if htf_data else "NEUTRAL"
         session_quality = session_data.get("session_quality", "MEDIUM") if session_data else "MEDIUM"
 
-        # 1. Dead market (volume too low)
-        dead_vol = pf_cfg.get("skip_dead_market_volume", 0.2)
-        if volume_ratio < dead_vol:
-            return False, f"Dead market (volume {volume_ratio:.2f} < {dead_vol})"
-
-        # 2. RSI neutral + no HTF trend (full neutral — nothing to trade)
+        # 1. RSI neutral + no HTF trend (full neutral — nothing to trade)
         rsi_neutral = pf_cfg.get("skip_rsi_neutral_zone", [46, 54])
         if pf_cfg.get("skip_no_htf_trend", True):
             if htf_trend == "NEUTRAL" and rsi_neutral[0] <= rsi <= rsi_neutral[1]:
@@ -82,7 +75,6 @@ class AiScalpSignalGenerator:
         """
         # === EXTRACT DATA ===
         rsi = analysis.get("rsi", 50)
-        volume_ratio = analysis.get("volume_ratio", 1.0)
         current_price = analysis.get("current_price", 0)
         support = analysis.get("support", 0)
         resistance = analysis.get("resistance", 0)
@@ -116,12 +108,10 @@ class AiScalpSignalGenerator:
         w_macd = self.weights.get("macd", 1)
         w_mom = self.weights.get("momentum", 1)
         w_bb = self.weights.get("bb", 1)
-        w_vol = self.weights.get("volume", 1)
 
-        max_score = w_htf + w_ema + w_rsi + w_sr + w_macd + w_mom + w_bb + w_vol
+        max_score = w_htf + w_ema + w_rsi + w_sr + w_macd + w_mom + w_bb
 
         # === THRESHOLDS ===
-        min_volume = self.scoring.get("min_volume_ratio", 0.3)
         min_atr = self.scoring.get("min_atr_ratio", 0.3)
         rsi_long_zone = self.scoring.get("rsi_long_zone", [25, 55])
         rsi_short_zone = self.scoring.get("rsi_short_zone", [45, 75])
@@ -140,11 +130,6 @@ class AiScalpSignalGenerator:
             info(f"📊 [AISCALP] HOLD | Low volatility (ATR: {atr_ratio:.2f})")
             return self._hold_result(max_score, [f"Low volatility (ATR {atr_ratio:.2f})"],
                                      {"atr_ratio": atr_ratio, "filter": "volatility"}, regime)
-
-        if volume_ratio < min_volume:
-            info(f"📊 [AISCALP] HOLD | Low volume ({volume_ratio:.2f}x)")
-            return self._hold_result(max_score, [f"Low volume ({volume_ratio:.2f}x)"],
-                                     {"volume_ratio": volume_ratio, "filter": "volume"}, regime)
 
         # === TIERED SCORING ===
         long_score = 0
@@ -275,16 +260,6 @@ class AiScalpSignalGenerator:
             short_reasons.append(f"BB↑ +{w_bb}")
             bb_short = True
 
-        # 3d. Volume (+1)
-        volume_confirmed = volume_ratio >= 0.8
-        if volume_confirmed:
-            if ema_long or htf_long or momentum_long:
-                long_score += w_vol
-                long_reasons.append(f"Vol {volume_ratio:.1f}x +{w_vol}")
-            if ema_short or htf_short or momentum_short:
-                short_score += w_vol
-                short_reasons.append(f"Vol {volume_ratio:.1f}x +{w_vol}")
-
         # === INTERACTION BONUSES/PENALTIES ===
         long_interactions = 0
         short_interactions = 0
@@ -318,12 +293,12 @@ class AiScalpSignalGenerator:
             short_interactions += reversal_bonus
             short_int_reasons.append(f"Reversal confluence +{reversal_bonus}")
 
-        # Momentum burst: Volume spike + directional candles + EMA (+1)
+        # Momentum burst: directional candles + EMA (+1)
         burst_bonus = self.interactions.get("momentum_burst_bonus", 1)
-        if volume_ratio >= 1.5 and momentum_long and ema_long:
+        if momentum_long and ema_long:
             long_interactions += burst_bonus
             long_int_reasons.append(f"Momentum burst +{burst_bonus}")
-        if volume_ratio >= 1.5 and momentum_short and ema_short:
+        if momentum_short and ema_short:
             short_interactions += burst_bonus
             short_int_reasons.append(f"Momentum burst +{burst_bonus}")
 
@@ -430,7 +405,6 @@ class AiScalpSignalGenerator:
             "long_reasons": long_reasons,
             "short_reasons": short_reasons,
             "min_score_required": min_score,
-            "volume_confirmed": volume_confirmed,
             "atr_ratio": atr_ratio,
             "macd_hist": macd_hist,
             "support": support,
