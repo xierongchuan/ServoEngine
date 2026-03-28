@@ -437,13 +437,13 @@ class SignalGenerator:
         if pos_type == "SELL" and macd_hist > 0 and pnl_pct < macd_exit_pnl:
             return {"should_close": True, "reason": f"MACD↑ + loss {pnl_pct:.1f}%", "urgency": "high"}
 
-        # 4. Trend reversal + loss
+        # 4. Trend reversal + loss (only if loss > 0.5% to avoid premature closes)
         global_trend = analysis.get("global_trend", "N/A")
         local_trend = analysis.get("local_trend", "N/A")
 
-        if pos_type == "BUY" and global_trend == "DOWN" and local_trend == "BEARISH" and pnl_pct < 0:
+        if pos_type == "BUY" and global_trend == "DOWN" and local_trend == "BEARISH" and pnl_pct < -0.5:
             return {"should_close": True, "reason": f"Trend↓ + loss {pnl_pct:.1f}%", "urgency": "high"}
-        if pos_type == "SELL" and global_trend == "UP" and local_trend == "BULLISH" and pnl_pct < 0:
+        if pos_type == "SELL" and global_trend == "UP" and local_trend == "BULLISH" and pnl_pct < -0.5:
             return {"should_close": True, "reason": f"Trend↑ + loss {pnl_pct:.1f}%", "urgency": "high"}
 
         # 5. Breakeven trailing: lock in profit if PnL >= 3%

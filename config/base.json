@@ -12,7 +12,7 @@
   },
   "ai": {
     "provider": "openrouter",
-    "model": "google/gemini-3-flash-preview",
+    "model": "openrouter/free",
     "base_url": "https://openrouter.ai/api/v1/chat/completions",
     "temperature": 0.3,
     "max_tokens": 4096,

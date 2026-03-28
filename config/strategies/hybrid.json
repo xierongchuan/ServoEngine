@@ -10,14 +10,14 @@
     "position_check_interval": 15,
     "atr_sl_mult": 1.5,
     "atr_tp_mult": 3,
-    "leverage": 10
+    "leverage": 7
   },
 
   "signal_rules": {
     "trend_alignment_required": false,
     "min_volume_ratio": 0.15,
-    "min_atr_ratio": 0.2,
-    "min_score_for_signal": 4,
+    "min_atr_ratio": 0.15,
+    "min_score_for_signal": 6,
     "tier1_required": true,
     "conflict_friction_threshold": 4,
     "macd_exit_pnl_threshold": -1.5,

@@ -67,25 +67,29 @@
         "min_score": 4,
         "sl_multiplier": 1.5,
         "tp_multiplier": 3.5,
-        "position_size_factor": 1.2
+        "position_size_factor": 1.2,
+        "min_risk_reward_ratio": 1.2
       },
       "RANGING": {
         "min_score": 5,
-        "sl_multiplier": 1,
-        "tp_multiplier": 2,
-        "position_size_factor": 0.8
+        "sl_multiplier": 1.5,
+        "tp_multiplier": 5,
+        "position_size_factor": 0.8,
+        "min_risk_reward_ratio": 0.8
       },
       "VOLATILE": {
         "min_score": 5,
         "sl_multiplier": 2,
         "tp_multiplier": 3.5,
-        "position_size_factor": 0.6
+        "position_size_factor": 0.6,
+        "min_risk_reward_ratio": 1.0
       },
       "TRANSITIONAL": {
         "min_score": 5,
         "sl_multiplier": 2,
         "tp_multiplier": 3,
-        "position_size_factor": 0.7
+        "position_size_factor": 0.7,
+        "min_risk_reward_ratio": 1.0
       }
     }
   },

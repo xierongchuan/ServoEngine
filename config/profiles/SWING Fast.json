@@ -1,0 +1,18 @@
+{
+  "_description": "Auto-created profile for SWING",
+  "_version": "1.0.0",
+  "_inherits": "default",
+  "_strategy": "SWING",
+  "preset": {
+    "timeframe": "1h",
+    "chart_period": "30D",
+    "plotter_period": "14D",
+    "loop_interval": "3600",
+    "position_check_interval": 3600,
+    "atr_sl_mult": 3,
+    "atr_tp_mult": 6,
+    "leverage": 5,
+    "min_hold_hours": 24,
+    "cooldown_after_close_hours": 6
+  }
+}

@@ -402,13 +402,13 @@ class ScalpSignalGenerator:
             return {"should_close": True, "reason": f"EMA↑ reversal", "urgency": "medium"}
 
         # 3. Volume capitulation: at loss + volume spike
-        if pnl_pct < -0.1 and volume_ratio > 2.0:
+        if pnl_pct < -0.5 and volume_ratio > 2.0:
             return {"should_close": True, "reason": f"VolCapitulation {volume_ratio:.1f}x", "urgency": "high"}
 
         # 4. MACD reversal against + at loss
-        if pos_type == "BUY" and macd_hist < 0 and pnl_pct < -0.3:
+        if pos_type == "BUY" and macd_hist < 0 and pnl_pct < -0.5:
             return {"should_close": True, "reason": f"MACD↓ loss {pnl_pct:.1f}%", "urgency": "medium"}
-        if pos_type == "SELL" and macd_hist > 0 and pnl_pct < -0.3:
+        if pos_type == "SELL" and macd_hist > 0 and pnl_pct < -0.5:
             return {"should_close": True, "reason": f"MACD↑ loss {pnl_pct:.1f}%", "urgency": "medium"}
 
         return {"should_close": False, "reason": "No exit signal", "urgency": "low"}

@@ -493,21 +493,21 @@ class AiScalpSignalGenerator:
         if pos_type == "SELL" and macd_hist > 0 and pnl_pct < macd_exit_pnl:
             return {"should_close": True, "reason": f"MACD↑ + loss {pnl_pct:.1f}%", "urgency": "high"}
 
-        # 4. HTF trend reversal against position (AISCALP-specific)
+        # 4. HTF trend reversal against position (AISCALP-specific) - only if loss > 0.5%
         if htf_data:
             htf_trend = htf_data.get("htf_trend", "NEUTRAL")
-            if pos_type == "BUY" and htf_trend == "BEARISH" and pnl_pct < 0:
+            if pos_type == "BUY" and htf_trend == "BEARISH" and pnl_pct < -0.5:
                 return {"should_close": True, "reason": f"HTF↓ reversal + loss {pnl_pct:.1f}%", "urgency": "high"}
-            if pos_type == "SELL" and htf_trend == "BULLISH" and pnl_pct < 0:
+            if pos_type == "SELL" and htf_trend == "BULLISH" and pnl_pct < -0.5:
                 return {"should_close": True, "reason": f"HTF↑ reversal + loss {pnl_pct:.1f}%", "urgency": "high"}
 
-        # 5. Trend reversal + loss (LTF)
+        # 5. Trend reversal + loss (LTF) - only if loss > 0.5%
         global_trend = analysis.get("global_trend", "N/A")
         local_trend = analysis.get("local_trend", "N/A")
 
-        if pos_type == "BUY" and global_trend == "DOWN" and local_trend == "BEARISH" and pnl_pct < 0:
+        if pos_type == "BUY" and global_trend == "DOWN" and local_trend == "BEARISH" and pnl_pct < -0.5:
             return {"should_close": True, "reason": f"Trend↓ + loss {pnl_pct:.1f}%", "urgency": "high"}
-        if pos_type == "SELL" and global_trend == "UP" and local_trend == "BULLISH" and pnl_pct < 0:
+        if pos_type == "SELL" and global_trend == "UP" and local_trend == "BULLISH" and pnl_pct < -0.5:
             return {"should_close": True, "reason": f"Trend↑ + loss {pnl_pct:.1f}%", "urgency": "high"}
 
         # 6. Breakeven trailing: lock profit if PnL >= 3%

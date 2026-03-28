@@ -214,7 +214,8 @@ def calculate_position_size(
 
 def validate_risk_parameters(
     sl_tp_result: Dict[str, float],
-    min_rr_ratio: float = None
+    min_rr_ratio: Optional[float] = None,
+    regime: Optional[Dict] = None
 ) -> bool:
     """
     Валидация параметров риска перед открытием позиции.
@@ -222,12 +223,16 @@ def validate_risk_parameters(
     Args:
         sl_tp_result: Результат от calculate_dynamic_sl_tp
         min_rr_ratio: Минимальное соотношение R/R (из конфига если None)
+        regime: Словарь с параметрами режима рынка (для режим-специфичного min_risk_reward_ratio)
 
     Returns:
         True если параметры прошли валидацию, False иначе
     """
-    if min_rr_ratio is None:
-        min_rr_ratio = BOT_CONFIG.get("MIN_RISK_REWARD_RATIO", 1.2)
+    # Приоритет: regime-specific > переданный параметр > глобальный конфиг
+    if regime and "min_risk_reward_ratio" in regime:
+        min_rr_ratio = float(regime["min_risk_reward_ratio"])
+    elif min_rr_ratio is None:
+        min_rr_ratio = float(BOT_CONFIG.get("MIN_RISK_REWARD_RATIO", 1.2))
 
     rr = sl_tp_result.get("risk_reward", 0.0)
     risk_pct = sl_tp_result.get("risk_pct", 0.0)

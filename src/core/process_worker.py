@@ -212,7 +212,7 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                             # Validate risk parameters before proceeding
                             try:
                                 from src.core.risk_manager import validate_risk_parameters
-                                if not validate_risk_parameters(sl_tp):
+                                if not validate_risk_parameters(sl_tp, regime=regime_data if regime_data else None):
                                     warning(f"⚠️ [{symbol}] Risk validation failed (R/R={sl_tp.get('risk_reward', 0):.2f}), skipping trade")
                                     prediction = {
                                         "symbol": symbol,
@@ -369,7 +369,7 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
 
                             try:
                                 from src.core.risk_manager import validate_risk_parameters
-                                if not validate_risk_parameters(sl_tp):
+                                if not validate_risk_parameters(sl_tp, regime=regime_data if regime_data else None):
                                     warning(f"⚠️ [{symbol}] Risk validation failed (R/R={sl_tp.get('risk_reward', 0):.2f})")
                                     # Pass info to AI — it will see this in context
                                     analysis_result["risk_warning"] = f"R/R={sl_tp.get('risk_reward', 0):.2f} below minimum"
@@ -546,7 +546,7 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
                             enable_risk_validation = macdx_rules.get("enable_risk_validation", False)
 
                             if enable_risk_validation:
-                                if not validate_risk_parameters(sl_tp):
+                                if not validate_risk_parameters(sl_tp, regime=regime_data if regime_data else None):
                                     warning(f"⚠️ [{symbol}] MACDX: Risk validation failed (R/R={sl_tp.get('risk_reward', 0):.2f}), skipping trade")
                                     prediction = {
                                         "symbol": symbol,
