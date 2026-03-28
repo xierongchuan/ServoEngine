@@ -1123,6 +1123,7 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         # MACD crossover info for AI
         "macd_crossover": macd_crossover,
         "macd_crossover_confirmed": macd_crossover_confirmed,
+        "macd_confirmed_symbol": '✓' if macd_crossover_confirmed else '✗',
         "macd_hist": macd_hist,
         "macd_line": macd_line,
         "macd_signal_val": macd_signal,

@@ -7,7 +7,7 @@
 | Тренд (Local) | {local_trend} |
 | RSI(14) | {rsi:.1f} |
 | ATR(14) | {atr:.2f} |
-| MACD | {macd_crossover} {'✓' if macd_crossover_confirmed else '✗'} |
+| MACD | {macd_crossover} {macd_confirmed_symbol} |
 
 ### B. Импульс
 | Индикатор | Статус | Значение |

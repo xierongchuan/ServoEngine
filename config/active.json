@@ -1,24 +1,18 @@
 {
   "_description": "Active runtime configuration - strategy and symbol profile mapping",
   "_version": "1.0.0",
-  "strategy": "MACDX",
+  "strategy": "AISCALP",
   "symbols": {
     "bingx": [
       "BTCUSDT",
       "SOLUSDT",
-      "ETHUSDT",
-      "BNBUSDT",
-      "ADAUSDT",
-      "XRPUSDT"
+      "ETHUSDT"
     ]
   },
   "symbol_profiles": {
     "BTCUSDT": "default",
     "SOLUSDT": "default",
-    "ETHUSDT": "default",
-    "BNBUSDT": "default",
-    "ADAUSDT": "default",
-    "XRPUSDT": "default"
+    "ETHUSDT": "default"
   },
   "disabled_symbols": []
 }
