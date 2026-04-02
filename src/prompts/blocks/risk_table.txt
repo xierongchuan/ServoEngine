@@ -2,10 +2,9 @@
 
 **Рекомендуемые параметры сделки (ADAPTIVE ATR):**
 
-| Тип | Stop Loss (SL) | Take Profit (TP) | Логика |
-|-----|----------------|------------------|--------|
-| **LONG** | ~{long_sl:.2f} | ~{long_tp:.2f} | SL ниже локальной поддержки или ATR |
-| **SHORT**| ~{short_sl:.2f} | ~{short_tp:.2f} | SL выше локального хая или ATR |
+| Тип | Вход | Stop Loss | Take Profit | R:R |
+|-----|------|-----------|-------------|-----|
+| **LONG** | ~{current_price:.2f} | ~{long_sl:.2f} (-{long_risk_pct:.2f}%) | ~{long_tp:.2f} (+{long_potential_pct:.2f}%) | {long_rr:.1f}:1 |
+| **SHORT**| ~{current_price:.2f} | ~{short_sl:.2f} (+{short_risk_pct:.2f}%) | ~{short_tp:.2f} (-{short_potential_pct:.2f}%) | {short_rr:.1f}:1 |
 
-*⚠️ SWING: СТРОГО следуй рассчитанным SL/TP. R/R должен быть минимум 2:1. НЕ корректируй!*
-*SCALP/AISCALP: Можешь слегка корректировать если видишь сильные технические уровни.*
+*R:R = Risk:Reward ratio. Чем выше — тем лучше потенциал.*

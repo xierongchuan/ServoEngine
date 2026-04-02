@@ -7,50 +7,19 @@ class AiScalpStrategy(BaseStrategy):
         return "Ты — AI Scalping Trader (внутридневной трейдер на 1m TF с мультитаймфреймовым анализом)."
 
     def get_objective(self) -> str:
-        return "Ловить дневные движения в направлении HTF тренда. Держать позицию 4-12 часов. Шире стопы чем в скальпинге."
+        return "Ловить дневные движения в направлении HTF тренда. Держать позицию 4-12 часов."
 
     def get_time_horizon(self) -> str:
         return "Horizon: 4-12 часов. Закрыть к концу торговой сессии."
 
     def get_strategy_section(self, ctx: dict) -> str:
-        current_price = ctx.get("current_price", 0)
-        atr = ctx.get("atr", 0)
-        rsi = ctx.get("rsi", 50)
-
         global_trend = ctx.get("global_trend", "N/A")
         local_trend = ctx.get("local_trend", "N/A")
         last_5_direction = ctx.get("last_5_direction", "MIXED")
-
         support = ctx.get("support", 0)
         resistance = ctx.get("resistance", 0)
-        support_dist_pct = ctx.get("support_dist_pct", 0)
-        resistance_dist_pct = ctx.get("resistance_dist_pct", 0)
-
-        seb_upper = ctx.get("seb_upper", 0)
-        seb_lower = ctx.get("seb_lower", 0)
         seb_status = ctx.get("seb_status", "INSIDE")
         trend_quality_desc = ctx.get("trend_quality_desc", "Low")
-
-        long_sl = ctx.get("long_sl", 0)
-        long_tp = ctx.get("long_tp", 0)
-        short_sl = ctx.get("short_sl", 0)
-        short_tp = ctx.get("short_tp", 0)
-
-        if current_price > 0:
-            long_potential_pct = (long_tp - current_price) / current_price * 100
-            short_potential_pct = (current_price - short_tp) / current_price * 100
-            long_risk_pct = (current_price - long_sl) / current_price * 100
-            short_risk_pct = (short_sl - current_price) / current_price * 100
-        else:
-            long_potential_pct = short_potential_pct = long_risk_pct = short_risk_pct = 0
-
-        warnings = []
-        if "MIXED" in last_5_direction and trend_quality_desc == "Low":
-            warnings.append("CHOPPY: No direction — consider HOLD.")
-
-        warnings_block = ""
-        if warnings:
-            warnings_block = "\n**CURRENT RISKS:**\n" + "\n".join(f"- {w}" for w in warnings)
 
         # === HTF CONTEXT BLOCK ===
         htf_block = ""
@@ -68,7 +37,7 @@ class AiScalpStrategy(BaseStrategy):
 |-----------|------------|---------|--------|
 | {htf_trend} | {daily_bias} | {htf_rsi:.1f} | {daily_change:+.2f}% |
 
-**RULE: Trade ONLY in HTF direction. Counter-HTF entries are high risk.**
+**ПРАВИЛО: Торгуй ТОЛЬКО в направлении HTF. Контр-трендовые сделки — высокий риск.**
 """
 
         # === SESSION CONTEXT BLOCK ===
@@ -85,65 +54,55 @@ class AiScalpStrategy(BaseStrategy):
 | Time UTC | Active Sessions | Quality |
 |----------|----------------|---------|
 | {hour}:00 | {sessions} | {quality} |
+
+{"⚠️ Низкая ликвидность — используй осторожность." if quality == "LOW" else ""}
 """
 
-        # === SIGNAL SCORE BLOCK ===
+        # === SIGNAL DECISION BLOCK ===
         signal_block = ""
         signal_data = ctx.get("signal_data")
-        if signal_data and signal_data.get("signal") != "HOLD":
+        if signal_data:
             sig = signal_data.get("signal", "HOLD")
-            score = signal_data.get("score", 0)
-            max_score = signal_data.get("max_score", 13)
-            quality = signal_data.get("quality", 0)
-            regime = signal_data.get("regime", "UNKNOWN")
             reasons = signal_data.get("reasons", [])
-            reasons_str = ", ".join(reasons[:5])
-            signal_block = f"""
+            reasons_str = ", ".join(reasons[:5]) if reasons else "N/A"
+            
+            if sig == "HOLD":
+                signal_block = f"""
 ---
 
-### SYSTEM SIGNAL (advisory — YOU decide)
-| Signal | Score | Quality | Regime |
-|--------|-------|---------|--------|
-| {sig} | {score}/{max_score} | {quality:.2f} | {regime} |
+### SYSTEM SIGNAL: HOLD
+**Причина:** {reasons_str}
 
-**Reasons:** {reasons_str}
-
-**This is a recommendation.** You make the final decision. You may:
-- **Confirm** the signal if your analysis agrees
-- **Reject** and HOLD if you see risks the system missed
-- **Adjust** SL/TP based on your analysis
+**Это означает:** Текущая рыночная ситуация не соответствует критериям для входа.
+**Твоя роль:** Не просто согласиться с HOLD — оцени свечи и уровни. Если видишь ЧЕТКИЙ сетап с подтверждением — можешь открыть позицию против рекомендации.
 """
-        elif signal_data:
-            reasons = signal_data.get("reasons", ["No signal"])
-            reasons_str = reasons[0] if reasons else ""
-            signal_block = f"""
+            else:
+                signal_block = f"""
 ---
 
-### SYSTEM SIGNAL (advisory — YOU decide)
-**No deterministic signal.** {reasons_str}
+### SYSTEM SIGNAL: {sig}
+**Оценка:** {reasons_str}
 
-**This does NOT mean you must HOLD.** Analyze the market yourself:
-- If you see a clear setup with HTF alignment — you can enter
-- If the market is unclear — HOLD is correct
-- Trust your own analysis over the scoring system
+**Рекомендация системы:** {'Вход в LONG' if sig == 'BUY' else 'Вход в SHORT'}.
+**Твоя роль:** Подтвердить или отклонить на основе свечного анализа и качества уровней.
 """
 
-        # === DETERMINISTIC CLOSE BLOCK ===
+        # === CLOSE SIGNAL BLOCK ===
         close_block = ""
-        det_close = ctx.get("deterministic_close")
+        det_close = ctx.get("close_signal")
         if det_close and det_close.get("should_close"):
             close_reason = det_close.get("reason", "Exit signal")
             close_urgency = det_close.get("urgency", "medium")
-            urgency_note = "**URGENT — strongly consider closing.**" if close_urgency == "high" else "Consider closing, but evaluate the full picture."
+            urgency_note = "**СРОЧНО — рекомендуется закрыть.**" if close_urgency == "high" else "Рекомендуется оценить."
             close_block = f"""
 ---
 
-### EXIT SIGNAL (advisory — YOU decide)
-**System recommends CLOSE:** {close_reason}
-Urgency: {close_urgency}
+### EXIT SIGNAL
+**Система рекомендует CLOSE:** {close_reason}
+Уровень срочности: {close_urgency}
 
 {urgency_note}
-You may override if your analysis shows the position is still valid.
+Ты можешь переопределить если твой анализ показывает, что позиция ещё актуальна.
 """
 
         # === RISK WARNING BLOCK ===
@@ -153,172 +112,128 @@ You may override if your analysis shows the position is still valid.
             risk_block = f"""
 ---
 
-### RISK WARNING
+### ⚠️ RISK WARNING
 **{risk_warning}**
-Factor this into your decision — poor R/R means higher risk.
 """
 
-        return f"""## 3. STRATEGY: AI SCALPING (1m TF + 1H HTF)
-*Multi-timeframe AI scalping. Trade in HTF direction, confirm on 1m.*
+        # === MARKET STATE FOR AI ANALYSIS ===
+        # Только ключевые данные для ИИ-оценки
+        market_state_block = ""
+        
+        warnings = []
+        if "MIXED" in last_5_direction and trend_quality_desc == "Low":
+            warnings.append("⚠️ MIXED направление + низкое качество тренда")
+        
+        warnings_block = "\n".join(warnings) if warnings else ""
 
-**YOU are the final decision-maker.** The scoring system provides signals as recommendations — confirm, reject, or override based on your own analysis.
+        return f"""## 3. STRATEГИЯ: AI SCALPING (1m TF + 1H HTF)
+
 {htf_block}{session_block}{signal_block}{close_block}{risk_block}
 ---
 
-### AI SCALP MINDSET
+### РЫНОЧНАЯ ОЦЕНКА (твоя зона ответственности)
 
-**Key principles:**
-- Trade ONLY in HTF (1H) trend direction
-- Use 1m for precise entry timing and confirmation
-- Wide SL (see table below) — let price breathe through noise
-- Wide TP — capture the full intraday move
-- Hold for hours, not minutes
-- Fewer trades, bigger moves
+**Тебе даны ВСЕ данные. Система уже рассчитала формальные критерии.
+Твоя задача — оценить качество и психологию рынка.**
+
 {warnings_block}
 
 ---
 
-### ENTRY SETUPS
+### ЧТО ТЕБЕ НУЖНО ОЦЕНИТЬ
 
-**1. TREND CONTINUATION**
+**1. Свечной паттерн и психология:**
 
-Conditions for LONG:
-- HTF Trend = BULLISH (required)
-- Local Trend = BULLISH (EMA9 > EMA21)
-- RSI 30-55 (not overbought, current: {rsi:.1f})
-- Last 5 Direction: UP or STRONG UP (current: {last_5_direction})
+Текущее направление: {last_5_direction}
+- Это ИМПУЛЬС или НАКОПЛЕНИЕ?
+- Свечи с сильными хвостами (ловля ножей)?
+- Объём подтверждает движение?
 
-Conditions for SHORT:
-- HTF Trend = BEARISH (required)
-- Local Trend = BEARISH
-- RSI 45-70
-- Last 5 Direction: DOWN or STRONG DOWN
+**2. Качество тренда:**
 
----
+SEB Status: {seb_status}
+Trend Quality: {trend_quality_desc}
+- Тренд устойчивый или слабый?
+- Цена у верхней/нижней границы?
 
-**2. PULLBACK ENTRY**
+**3. Уровни поддержки/сопротивления:**
 
-Conditions for LONG:
-- HTF Trend = BULLISH (not broken)
-- Price pulled back to support ({support:.2f}) or EMA
-- RSI dipped to 35-50 (current: {rsi:.1f})
+Support: {support:.2f}
+Resistance: {resistance:.2f}
+- Эти уровни ещё актуальны?
+- Были ли протестированы недавно?
 
-Conditions for SHORT:
-- HTF Trend = BEARISH
-- Price bounced to resistance ({resistance:.2f})
-- RSI rose to 50-65
+**4. Объём:**
 
-**Entry:** On reversal from level. Do NOT catch falling knives.
+Volume: {ctx.get("volume_status", "N/A")}
+- Идёт ли в направлении сделки?
 
 ---
 
-**3. BREAKOUT**
+### КОГДА СИСТЕМА СКАЗАЛА HOLD
 
-Conditions:
-- Price breaks resistance ({resistance:.2f}) or support ({support:.2f})
-- Confirmation: close beyond level
+Не принимай HOLD автоматически. Оцени:
 
-**Entry:** After candle close beyond level, not during the break.
-**SL:** Behind the broken level.
+✅ **Можно открыть позицию несмотря на HOLD если:**
+- Чёткий свечной паттерн разворота на важном уровне
+- HTF тренд подтверждён (не нейтральный)
+- Объём в направлении сделки
 
----
-
-### POSITION MANAGEMENT (ATR-BASED)
-
-**For LONG:**
-| Parameter | Level | % from price |
-|-----------|-------|-------------|
-| Entry | ~{current_price:.2f} | — |
-| Stop Loss | {long_sl:.2f} | -{long_risk_pct:.2f}% |
-| Take Profit | {long_tp:.2f} | +{long_potential_pct:.2f}% |
-
-**For SHORT:**
-| Parameter | Level | % from price |
-|-----------|-------|-------------|
-| Entry | ~{current_price:.2f} | — |
-| Stop Loss | {short_sl:.2f} | +{short_risk_pct:.2f}% |
-| Take Profit | {short_tp:.2f} | -{short_potential_pct:.2f}% |
-
-**Rules:**
-1. Use the SL/TP levels from the table above (ATR-based, regime-adjusted)
-2. Do NOT move SL against your position
-3. Move SL to breakeven after price moves halfway to TP
-
----
-
-### MARKET ADAPTATION
-
-**Current state:**
-- Trend: Global={global_trend}, Local={local_trend}
-- Momentum: {last_5_direction}
-- Trend quality: {trend_quality_desc}
-- SEB: {seb_status}
-
-| State | Action |
-|-------|--------|
-| Trending | Trend Continuation |
-| Trending + Pullback | Pullback Entry |
-| Breakout | Breakout Trade |
-| Ranging (INSIDE) | HOLD or Range play |
-
----
-
-### WHEN NOT TO ENTER (HOLD)
-
-**Hard filters:**
-1. MIXED direction + Low quality + RSI 45-55 (full chaos)
-2. Counter-HTF trade (signal against 1H trend)
-
-**Soft filters:**
-- Price in middle of range (far from levels)
-- Conflicting trends (Global UP, Local BEARISH)
-- Off-session hours (lower liquidity, use caution)
-
-**IMPORTANT:** Do not skip a trade due to imperfection.
-If there is HTF direction + LTF confirmation — consider entry."""
+❌ **Держись подальше:**
+- Цена в середине диапазона (далеко от уровней)
+- Новости идёт против сделки
+- Конфликт HTF и LTF направлений
+- Low-liquidity сессия без чёткого сетапа
+"""
 
     def get_position_management(self, ctx: dict) -> str:
-        return """### POSITION MANAGEMENT (AI SCALP MODE)
+        signal_data = ctx.get("signal_data", {})
+        regime = signal_data.get("regime", "UNKNOWN")
+        
+        base_rules = """### УПРАВЛЕНИЕ ПОЗИЦИЕЙ
 
-**RULE:** Let profits run, but don't be greedy.
+**ГЛАВНОЕ: Не закрывай раньше времени. Дай прибыли расти.**
 
-1. **Small profit (+0.5% - +1.5%):**
-   - Move SL to breakeven
-   - HOLD — this is not TP yet
+| PnL | Действие |
+|-----|----------|
+| +0.5% → +1.5% | SL в безубыток, HOLD |
+| +1.5% → +3% | Закрой 50%, trailing stop на остатке |
+| > +3% | Trailing stop, дай забрать |
+| < -1% | HOLD если структура цела, CLOSE если уровень сломан |
+| Near SL | НЕ двигай SL, принимай убыток |
 
-2. **Good profit (+1.5% - +3%):**
-   - Consider partial close (50%)
-   - Trailing stop on remainder
+**При потере импульса (PnL > +2%):**
+- RSI перекуплен/перепродан → частичное закрытие
+- MACD разворот → закрытие"""
 
-3. **Small loss (up to -1%):**
-   - HOLD if structure is intact
-   - CLOSE if key level is broken
+        if regime == "RANGE":
+            base_rules += """
 
-4. **Near SL:**
-   - Do NOT move SL further
-   - Accept the loss, move on
-
-5. **Position stalled:**
-   - No movement > 2 hours = consider exit"""
+**⚠️ RANGE режим:**
+- Более узкие цели
+- Быстрее фиксировать прибыль
+- Не держать через новости"""
+        
+        return base_rules
 
     def get_special_situations(self, ctx: dict) -> str:
         return """### SPECIAL SITUATIONS (AI SCALP)
 
 **1. STRONG TREND DAY:**
-- Price moves in one direction all day
-- Do NOT counter-trend — only trade with the trend
-- Can add to position on pullbacks
+- Цена движется в одном направлении весь день
+- НЕ торгуй против тренда
+- Можно добавлять на откатах
 
 **2. FAKEOUT:**
-- Breakout + return = enter AGAINST the breakout
-- SL behind the fakeout extreme
+- Пробой → возврат = вход ПРОТИВ пробоя
+- SL за экстремумом ложного пробоя
 
 **3. REVERSAL:**
-- After strong morning move, price reverses
-- Wait for confirmation (break of key level in opposite direction)
-- Caution — false reversals are common
+- После сильного утреннего движения цена разворачивается
+- Жди подтверждения (пробой ключевого уровня)
+- Осторожно — ложные развороры часты
 
-**4. HTF TREND REVERSAL:**
-- If 1H trend changes direction while in position
-- Tighten SL or close if in loss
-- Do not add to position against new HTF direction"""
+**4. HTF REVERSAL:**
+- HTF тренд меняется while in position
+- Затяни SL или закрой если в убытке
+- НЕ добавляй против нового HTF"""
