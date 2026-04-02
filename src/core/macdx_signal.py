@@ -123,17 +123,17 @@ class MACDXSignalGenerator:
         last_5_direction = analysis.get("last_5_direction") or "MIXED"
 
         # Detect potential crossover for filter use
-        potential_long = macd_line > macd_signal_line and macd_hist > 0 and (macd_hist_prev <= 0 or macd_hist > macd_hist_prev)
-        potential_short = macd_line < macd_signal_line and macd_hist < 0 and (macd_hist_prev >= 0 or macd_hist < macd_hist_prev)
+        # Только смена знака гистограммы — рост/падение НЕ является пересечением
+        potential_long = macd_hist > 0 and macd_hist_prev <= 0
+        potential_short = macd_hist < 0 and macd_hist_prev >= 0
 
         # Filter 1: Block LONG when BOTH conditions met:
-        # 1) Consecutive red candles (momentum)
-        # 2) MACD histogram shows bearish momentum (negative or declining)
+        # 1) Consecutive red candles (price momentum down)
+        # 2) MACD histogram was bearish (just crossed from negative — weak reversal)
         if consecutive_red_filter and potential_long:
-            has_bearish_momentum = macd_hist < 0 or (macd_hist_prev < macd_hist)
             has_consecutive_reds = last_5_direction in ["STRONG_DOWN", "DOWN"]
 
-            if has_consecutive_reds and has_bearish_momentum:
+            if has_consecutive_reds:
                 should_block = False
                 block_reason = ""
 
@@ -143,7 +143,7 @@ class MACDXSignalGenerator:
                 elif last_5_direction == "DOWN" and min_consecutive_for_block == 2:
                     should_block = True
                     block_reason = f"DOWN (3 reds) + bearish MACD momentum"
-                elif last_5_direction == "DOWN" and macd_hist < 0:
+                elif last_5_direction == "DOWN" and macd_hist_prev < 0:
                     should_block = True
                     block_reason = f"DOWN (3 reds) + negative MACD histogram"
 
@@ -153,15 +153,18 @@ class MACDXSignalGenerator:
                                              {"last_5_direction": last_5_direction, "filter": "consecutive_red_momentum", "confirmations": 1, "potential_score": 2}, regime)
 
         # Filter 2: Counter-trend protection (EMA vs MACD)
+        # Работает постоянно — не только в момент пересечения
         if enable_counter_trend_filter and ema9 > 0 and ema21 > 0:
             ema_diff_pct = abs(ema9 - ema21) / ema21 * 100
 
-            if ema9 < ema21 and ema_diff_pct > counter_trend_ema_threshold and potential_long and macd_hist > 0 and macd_hist_prev <= 0:
+            # Блокируем LONG если EMA направлена вниз и MACD показывает бычий сигнал
+            if ema9 < ema21 and ema_diff_pct > counter_trend_ema_threshold and potential_long:
                 info(f"📊 [MACDX] HOLD | Counter-trend: EMA down {ema_diff_pct:.1f}%")
                 return self._hold_result(max_score, [f"Counter-trend: EMA below by {ema_diff_pct:.1f}%"],
                                          {"ema_diff_pct": ema_diff_pct, "filter": "counter_trend", "confirmations": 2, "potential_score": 4}, regime)
 
-            if ema9 > ema21 and ema_diff_pct > counter_trend_ema_threshold and potential_short and macd_hist < 0 and macd_hist_prev >= 0:
+            # Блокируем SHORT если EMA направлена вверх и MACD показывает медвежий сигнал
+            if ema9 > ema21 and ema_diff_pct > counter_trend_ema_threshold and potential_short:
                 info(f"📊 [MACDX] HOLD | Counter-trend: EMA up {ema_diff_pct:.1f}%")
                 return self._hold_result(max_score, [f"Counter-trend: EMA above by {ema_diff_pct:.1f}%"],
                                          {"ema_diff_pct": ema_diff_pct, "filter": "counter_trend", "confirmations": 2, "potential_score": 4}, regime)
@@ -352,44 +355,54 @@ class MACDXSignalGenerator:
         rsi_long_ok = rsi_long_min <= rsi <= rsi_long_max
         rsi_short_ok = rsi_short_min <= rsi <= rsi_short_max
 
-        # Дополнительная защита: при экстремальной перепроданности (RSI < 30) - НЕ SHORT!
-        # Это может быть разворотная точка, а не продолжение падения
+        # Дополнительная защита: экстремальные зоны блокируют сигналы
         rsi_extreme_oversold = rsi < 30
         rsi_extreme_overbought = rsi > 70
 
-        if macd_cross_long and rsi_long_ok:
-            long_score += rsi_weight
-            long_reasons.append(f"RSI {rsi:.0f} in zone +{rsi_weight}\n")
-            long_confirmations += 1
-        elif macd_cross_long and not rsi_long_ok:
-            long_reasons.append(f"RSI {rsi:.0f} outside zone (need {rsi_long_min}-{rsi_long_max})\n")
+        long_blocked = False
+        short_blocked = False
 
-        if macd_cross_short and rsi_short_ok:
-            # Блокируем SELL при экстремальной перепроданности
+        if macd_cross_long:
+            # Блокируем LONG при экстремальной перекупленности (независимо от зоны)
+            if rsi_extreme_overbought:
+                long_reasons.append(f"RSI {rsi:.0f} EXTREME OVERBOUGHT - блокируем LONG\n")
+                long_score = 0  # Блокируем сигнал
+                long_blocked = True
+            elif rsi_long_ok:
+                long_score += rsi_weight
+                long_reasons.append(f"RSI {rsi:.0f} in zone +{rsi_weight}\n")
+                long_confirmations += 1
+            else:
+                long_reasons.append(f"RSI {rsi:.0f} outside zone (need {rsi_long_min}-{rsi_long_max})\n")
+
+        if macd_cross_short:
+            # Блокируем SELL при экстремальной перепроданности (независимо от зоны)
             if rsi_extreme_oversold:
                 short_reasons.append(f"RSI {rsi:.0f} EXTREME OVERSOLD - блокируем SELL\n")
                 short_score = 0  # Блокируем сигнал
-            else:
+                short_confirmations = 0  # Сбрасываем подтверждения
+                short_blocked = True
+            elif rsi_short_ok:
                 short_score += rsi_weight
                 short_reasons.append(f"RSI {rsi:.0f} in zone +{rsi_weight}\n")
                 short_confirmations += 1
-        elif macd_cross_short and not rsi_short_ok:
-            short_reasons.append(f"RSI {rsi:.0f} outside zone (need {rsi_short_min}-{rsi_short_max})\n")
+            else:
+                short_reasons.append(f"RSI {rsi:.0f} outside zone (need {rsi_short_min}-{rsi_short_max})\n")
 
-        # 3. EMA Alignment (+2)
+        # 3. EMA Alignment (+2) — пропускаем если сигнал заблокирован
         ema_long = False
         ema_short = False
         if ema9 > 0 and ema21 > 0:
             ema_diff_pct = abs(ema9 - ema21) / ema21 * 100 if ema21 > 0 else 0
             if ema9 > ema21:
                 ema_long = True
-                if macd_cross_long:
+                if macd_cross_long and not long_blocked:
                     long_score += ema_weight
                     long_reasons.append(f"EMA↑ ({ema_diff_pct:.1f}%) +{ema_weight}\n")
                     long_confirmations += 1
             elif ema9 < ema21:
                 ema_short = True
-                if macd_cross_short:
+                if macd_cross_short and not short_blocked:
                     short_score += ema_weight
                     short_reasons.append(f"EMA↓ ({ema_diff_pct:.1f}%) +{ema_weight}\n")
                     short_confirmations += 1
@@ -400,7 +413,7 @@ class MACDXSignalGenerator:
         if macd_cross_short and ema_long:
             short_reasons.append("EMA counter-trend (caution)\n")
 
-        # 4. Not Sideways (+1) - BB width or ADX check
+        # 4. Not Sideways (+1) — пропускаем если сигнал заблокирован
         is_sideways = False
         bb_width = 0
         if bb_upper > 0 and bb_lower > 0 and bb_middle > 0:
@@ -410,11 +423,11 @@ class MACDXSignalGenerator:
                 is_sideways = True
 
         if not is_sideways:
-            if macd_cross_long:
+            if macd_cross_long and not long_blocked:
                 long_score += not_sideways_weight
                 long_reasons.append(f"Not sideways (BB:{bb_width:.1f}% ADX:{adx:.0f}) +{not_sideways_weight}\n")
                 long_confirmations += 1
-            if macd_cross_short:
+            if macd_cross_short and not short_blocked:
                 short_score += not_sideways_weight
                 short_reasons.append(f"Not sideways (BB:{bb_width:.1f}% ADX:{adx:.0f}) +{not_sideways_weight}\n")
                 short_confirmations += 1
@@ -424,39 +437,38 @@ class MACDXSignalGenerator:
             if macd_cross_short:
                 short_reasons.append(f"Sideways market (BB:{bb_width:.1f}% ADX:{adx:.0f})\n")
 
-        # 5. No Exhaustion (+1) - Check for RSI divergence
+        # 5. No Exhaustion (+1) — пропускаем если сигнал заблокирован
         close_prices = analysis.get("close_prices", [])
         rsi_values = analysis.get("rsi_values", [])
         bearish_div, bullish_div = self._detect_rsi_divergence(close_prices, rsi_values)
 
         # For long: no bearish divergence
-        if macd_cross_long:
+        if macd_cross_long and not long_blocked:
             if not bearish_div:
                 long_score += no_exhaustion_weight
                 long_reasons.append(f"No bearish divergence +{no_exhaustion_weight}\n")
                 long_confirmations += 1
             else:
-                long_score -= 1  # Penalty for divergence
-                long_reasons.append("Bearish RSI divergence (exhaustion warning) -1\n")
+                long_reasons.append("Bearish RSI divergence (exhaustion warning)\n")
 
         # For short: no bullish divergence
-        if macd_cross_short:
+        if macd_cross_short and not short_blocked:
             if not bullish_div:
                 short_score += no_exhaustion_weight
                 short_reasons.append(f"No bullish divergence +{no_exhaustion_weight}\n")
                 short_confirmations += 1
             else:
-                short_score -= 1  # Penalty for divergence
-                short_reasons.append("Bullish RSI divergence (exhaustion warning) -1\n")
+                short_reasons.append("Bullish RSI divergence (exhaustion warning)\n")
 
-        # 6. Volume (+1)
-        volume_ok = volume_ratio >= 0.8
+        # 6. Volume (+1) — пропускаем если сигнал заблокирован
+        volume_confirm_threshold = self.rules.get("volume_confirm_threshold", 0.8)
+        volume_ok = volume_ratio >= volume_confirm_threshold
         if volume_ok:
-            if macd_cross_long:
+            if macd_cross_long and not long_blocked:
                 long_score += volume_weight
                 long_reasons.append(f"Volume {volume_ratio:.1f}x +{volume_weight}\n")
                 long_confirmations += 1
-            if macd_cross_short:
+            if macd_cross_short and not short_blocked:
                 short_score += volume_weight
                 short_reasons.append(f"Volume {volume_ratio:.1f}x +{volume_weight}\n")
                 short_confirmations += 1
@@ -633,6 +645,11 @@ class MACDXSignalGenerator:
 
         Returns:
             (bearish_divergence, bullish_divergence) booleans
+
+        Улучшения:
+        - Ограничивает окно поиска последними 30 свечами
+        - Требует минимальное расстояние между экстремумами (3 свечи)
+        - Игнорирует экстремумы слишком близко к концу окна
         """
         if not prices or not rsi_values:
             return False, False
@@ -641,20 +658,29 @@ class MACDXSignalGenerator:
         if n < 10:
             return False, False
 
-        prices = prices[-n:]
-        rsi_values = rsi_values[-n:]
+        # Ограничиваем окно последними 30 свечами для актуальности
+        max_window = 30
+        prices = prices[-max_window:]
+        rsi_values = rsi_values[-max_window:]
+        n = len(prices)
+
+        min_extrema_distance = 3  # Минимум 3 свечи между экстремумами
 
         # Find local maxima (for bearish divergence detection)
         maxima = []
         for i in range(1, n - 1):
             if prices[i] > prices[i - 1] and prices[i] > prices[i + 1]:
-                maxima.append(i)
+                # Проверяем минимальное расстояние от предыдущего экстремума
+                if not maxima or (i - maxima[-1]) >= min_extrema_distance:
+                    maxima.append(i)
 
         # Find local minima (for bullish divergence detection)
         minima = []
         for i in range(1, n - 1):
             if prices[i] < prices[i - 1] and prices[i] < prices[i + 1]:
-                minima.append(i)
+                # Проверяем минимальное расстояние от предыдущего экстремума
+                if not minima or (i - minima[-1]) >= min_extrema_distance:
+                    minima.append(i)
 
         bearish_div = False
         bullish_div = False

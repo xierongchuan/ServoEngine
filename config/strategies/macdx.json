@@ -36,6 +36,7 @@
     "enable_counter_trend_filter": true,
     "counter_trend_ema_threshold": 1.0,
     "enable_volume_filter": false,
+    "volume_confirm_threshold": 0.8,
     "enable_risk_validation": false,
     "min_risk_reward_ratio": 1.2
   }
