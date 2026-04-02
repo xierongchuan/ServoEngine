@@ -6,7 +6,7 @@ from src.config import BOT_CONFIG, POSITION_SIZE_PERCENT, STYLE_PRESETS
 from src.core import analyzer, executor
 from src.core.decision_journal import DecisionJournal
 from src.core.trade_tracker import TradeTracker
-from src.core.risk_manager import calculate_dynamic_sl_tp, validate_risk_parameters, calculate_position_size
+from src.core.execution.risk import calculate_dynamic_sl_tp, validate_risk_parameters, calculate_position_size
 from src.core.performance import get_performance_tracker
 from src.core.regime import get_regime_detector
 from src.exchanges.exchange_factory import get_exchange_client
@@ -26,7 +26,7 @@ class MacdxPipeline(StrategyPipeline):
 
     def run_cycle(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None) -> Optional[Dict]:
         from src.config import STRATEGY_STYLE
-        from src.core.macdx_signal import generate_macdx_signal, should_close_macdx
+        from src.core.signals.macdx import MacdxSignalGenerator
 
         # Fetch positions
         all_positions = self._client.get_positions()
@@ -52,7 +52,8 @@ class MacdxPipeline(StrategyPipeline):
         current_price = analysis_result.get("current_price", 0)
 
         # Generate MACDX signal
-        signal_data = generate_macdx_signal(analysis_result, regime_data)
+        gen = MacdxSignalGenerator(self._macdx_settings)
+        signal_data = gen.generate(analysis_result, regime_data)
         analysis_result["signal_data"] = signal_data
         signal = signal_data.get("signal", "HOLD")
         signal_quality = signal_data.get("quality", 0.0)
@@ -60,7 +61,7 @@ class MacdxPipeline(StrategyPipeline):
         confirmations = signal_data.get("confirmations", 0)
 
         # Check for close signal first
-        close_signal = should_close_macdx(analysis_result, real_position)
+        close_signal = gen.should_close(analysis_result, real_position)
         analysis_result["close_signal"] = close_signal
 
         if real_position and close_signal.get("should_close"):

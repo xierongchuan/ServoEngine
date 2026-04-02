@@ -7,6 +7,7 @@ from .aiscalp import AiscalpPipeline
 from .macdx import MacdxPipeline
 from .swing import SwingPipeline
 from .scalp import TrailingStopManager, ScalpSession, ScalpVetoProcessor
+from .scalp.engine import ScalpPipeline
 from .grid import GridExecutor, GridLevel, GridState, run_grid_worker, calculate_adx
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "AiscalpPipeline",
     "MacdxPipeline",
     "SwingPipeline",
+    "ScalpPipeline",
     "TrailingStopManager",
     "ScalpSession",
     "ScalpVetoProcessor",

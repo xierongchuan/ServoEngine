@@ -13,8 +13,8 @@ from src.config import should_reload_config, reload_bot_config
 from src.core.strategies.factory import create_pipeline
 from src.core.strategies.base import StrategyPipeline
 from src.core.data.collector import process_symbol
-from src.core.decision_journal import DecisionJournal
-from src.core.trade_tracker import TradeTracker
+from src.core.tracking.journal import DecisionJournal
+from src.core.tracking.trade import TradeTracker
 from src.core.performance import get_performance_tracker
 from src.exchanges.exchange_factory import get_exchange_client
 from src.core import executor, monitor

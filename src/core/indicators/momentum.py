@@ -148,8 +148,8 @@ def detect_rsi_divergence(
     prices: List[float], rsi_values: List[float], window: int = 20
 ) -> Tuple[bool, bool]:
     """
-    Detects bullish and bearish RSI divergence.
-    Returns: (bullish_divergence, bearish_divergence)
+    Detects bearish and bullish RSI divergence.
+    Returns: (bearish_divergence, bullish_divergence)
     """
     if len(prices) < window or len(rsi_values) < window:
         return False, False
@@ -166,11 +166,10 @@ def detect_rsi_divergence(
         price_low_idx = recent_prices.index(price_low)
         rsi_at_low = recent_rsi[price_low_idx] if price_low_idx < len(recent_rsi) else 50
 
-        # Check if earlier low had higher RSI
+        # Check if earlier low had lower RSI (meaning current RSI is higher)
         for i in range(price_low_idx - 1, max(0, price_low_idx - 10), -1):
             if recent_prices[i] > price_low and recent_rsi[i] < rsi_at_low:
-                # Price went down but RSI went up = bullish divergence
-                if recent_rsi[i] < 40:  # RSI in oversold zone
+                if recent_rsi[i] < 40:
                     bullish_divergence = True
                     break
 
@@ -180,12 +179,11 @@ def detect_rsi_divergence(
         price_high_idx = recent_prices.index(price_high)
         rsi_at_high = recent_rsi[price_high_idx] if price_high_idx < len(recent_rsi) else 50
 
-        # Check if earlier high had lower RSI
+        # Check if earlier high had higher RSI (meaning current RSI is lower)
         for i in range(price_high_idx - 1, max(0, price_high_idx - 10), -1):
             if recent_prices[i] < price_high and recent_rsi[i] > rsi_at_high:
-                # Price went up but RSI went down = bearish divergence
-                if recent_rsi[i] > 60:  # RSI in overbought zone
+                if recent_rsi[i] > 60:
                     bearish_divergence = True
                     break
 
-    return bullish_divergence, bearish_divergence
+    return bearish_divergence, bullish_divergence

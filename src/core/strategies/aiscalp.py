@@ -6,7 +6,7 @@ from src.config import BOT_CONFIG, POSITION_SIZE_PERCENT, STYLE_PRESETS
 from src.core import analyzer, predict, executor
 from src.core.decision_journal import DecisionJournal
 from src.core.trade_tracker import TradeTracker
-from src.core.risk_manager import calculate_dynamic_sl_tp, validate_risk_parameters, calculate_position_size
+from src.core.execution.risk import calculate_dynamic_sl_tp, validate_risk_parameters, calculate_position_size
 from src.core.performance import get_performance_tracker
 from src.exchanges.exchange_factory import get_exchange_client
 from src.utils.logger import info, warning, StageTimer

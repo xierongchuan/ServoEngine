@@ -11,8 +11,10 @@ def create_pipeline(strategy: str, config: Dict) -> StrategyPipeline:
     from .aiscalp import AiscalpPipeline
     from .macdx import MacdxPipeline
     from .swing import SwingPipeline
+    from .scalp.engine import ScalpPipeline
 
     pipelines = {
+        "SCALP": lambda: ScalpPipeline(config),
         "HYBRID": lambda: HybridPipeline(config),
         "AISCALP": lambda: AiscalpPipeline(config),
         "MACDX": lambda: MacdxPipeline(config),
