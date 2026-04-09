@@ -1,7 +1,6 @@
 import os
-import time
 import json
-from src.config import *
+from src.config import DATA_DIR, TAKE_PROFIT_PERCENT, STOP_LOSS_PERCENT, POSITION_LIMITS, POSITION_SIZE_PERCENT, LEVERAGE, MIN_TRADE_AMOUNT_USDT, AGGRESSIVE_MODE, AGGRESSIVE_SETTINGS, MIN_CONFIDENCE_THRESHOLD
 from src.utils.logger import info, error, warning, log_trade
 from src.exchanges.exchange_factory import get_exchange_client
 from src.exchanges.dto.models import Balance, OrderType, OrderSide, PositionSide
@@ -136,11 +135,11 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
             info(f"🔍 [DEBUG] Balance dataclass: total={total_balance}, available={available}, unrealized_pnl={balance_data.unrealized_pnl}")
             # Если available_balance = 0, но total > 0, используем total_balance (с учётом PnL)
             if available == 0 and total_balance > 0:
-                info(f"⚠️ Available balance is 0, using total_balance for trading")
+                info("⚠️ Available balance is 0, using total_balance for trading")
                 total_balance = float(balance_data.total_with_pnl) if balance_data.total_with_pnl > 0 else total_balance
 
         if total_balance <= 0:
-            error(f"❌ Balance is 0 or could not be retrieved. Cannot calculate position size.")
+            error("❌ Balance is 0 or could not be retrieved. Cannot calculate position size.")
             return None
 
         # Calculate trade amount in USDT (use dynamic size if provided)
@@ -180,7 +179,7 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         quantity = round(quantity, _qty_prec)
 
         # Enhanced position size logging with leverage info
-        info(f"🧮 Position Size:")
+        info("🧮 Position Size:")
         info(f"   Balance: ${total_balance:.2f} | Margin: {effective_size_pct:.1f}% = ${trade_amount:.2f}")
         info(f"   Leverage: {LEVERAGE}x | Notional: ${notional_value:.2f}")
         info(f"   Quantity: {quantity} {symbol.replace('USDT', '')}")
@@ -238,7 +237,7 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
                                 else:
                                     error(f"❌ SL/TP retry FAILED for {symbol} — ТРЕБУЕТСЯ РУЧНАЯ УСТАНОВКА!")
                     else:
-                        warning(f"⚠️ Client does not support set_sl_tp, SL/TP might not be set")
+                        warning("⚠️ Client does not support set_sl_tp, SL/TP might not be set")
                 except Exception as e:
                     error(f"❌ Failed to set SL/TP for new order {order_id}: {e}")
 
@@ -275,8 +274,8 @@ def execute_prediction(prediction, all_positions=None):
         return
 
     # Проверяем лимит позиций (максимум 5)
-    MAX_POSITIONS = POSITION_LIMITS.get("max_positions", 5)
-    total_positions = sum(len(p) for p in positions.values())
+    POSITION_LIMITS.get("max_positions", 5)
+    sum(len(p) for p in positions.values())
 
     # Флаг, есть ли у нас позиция по этому символу
     symbol_positions = positions.get(symbol, [])
@@ -364,7 +363,7 @@ def execute_prediction(prediction, all_positions=None):
                         else:
                             error(f"❌ {symbol}: SL/TP update FAILED — позиция БЕЗ актуальной защиты!")
                     else:
-                        warning(f"⚠️ Client does not support set_sl_tp")
+                        warning("⚠️ Client does not support set_sl_tp")
                 except Exception as e:
                     error(f"❌ {symbol}: Ошибка обновления SL/TP: {e}")
             else:
@@ -480,7 +479,7 @@ def main(predictions):
                         if hasattr(client, "set_sl_tp"):
                             client.set_sl_tp(symbol, pos_side, tp=ai_tp, sl=ai_sl)
                         else:
-                            warning(f"⚠️ Client does not support set_sl_tp")
+                            warning("⚠️ Client does not support set_sl_tp")
                     except Exception as e:
                         error(f"❌ Failed to update SL/TP for {symbol}: {e}")
 
@@ -510,7 +509,10 @@ def main(predictions):
                 info(f"🔄 {symbol}: действие {pred['action']} не требует открытия позиции")
 
 if __name__ == "__main__":
-    import sys, json, predict, analyzer  # noqa: E402
+    import sys
+    import json
+    import predict
+    import analyzer  # noqa: E402
 
     info("🔄 Запуск исполнения ордеров...")
 

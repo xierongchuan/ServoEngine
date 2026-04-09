@@ -2,12 +2,11 @@
 
 from typing import Any, Dict, Optional
 
-from src.config import STYLE_PRESETS
 from src.core import analyzer, predict
 from src.core.decision_journal import DecisionJournal
 from src.core.trade_tracker import TradeTracker
 from src.exchanges.exchange_factory import get_exchange_client
-from src.utils.logger import info, StageTimer
+from src.utils.logger import StageTimer
 from .base import StrategyPipeline
 
 

@@ -223,6 +223,21 @@ class DecisionJournal:
 
         return f"{decision_history}\n\n{trade_plan_block}"
 
+    def log_decision(self, symbol: str, style: str, context: dict | None, decision: dict):
+        """
+        Упрощённый метод для логирования решения из process_worker.
+        Делегирует в record с необходимыми параметрами.
+        """
+        if not JOURNAL_ENABLED:
+            return
+        # Текущая цена берём из context, если передали, иначе 0
+        current_price = 0
+        if context and 'current_price' in context:
+            current_price = context['current_price']
+        elif context and 'price' in context:
+            current_price = context['price']
+        self.record(symbol, decision, current_price)
+
     def trim_entries(self, symbol: str, style: str):
         """Обрезает старые записи до лимита стратегии."""
         self._ensure_symbol(symbol)

@@ -11,7 +11,6 @@ from typing import Any, Dict, Optional
 from src.config import STRATEGY_STYLE, BOT_CONFIG, ERROR_HANDLING, STYLE_PRESETS
 from src.config import should_reload_config, reload_bot_config
 from src.core.strategies.factory import create_pipeline
-from src.core.strategies.base import StrategyPipeline
 from src.core.data.collector import process_symbol
 from src.core.tracking.journal import DecisionJournal
 from src.core.tracking.trade import TradeTracker

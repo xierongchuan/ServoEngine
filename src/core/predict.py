@@ -197,7 +197,7 @@ def parse_response(response):
         if "stop_loss" in data:
             try:
                 data["stop_loss"] = float(data["stop_loss"])
-            except:
+            except (ValueError, TypeError):
                 data["stop_loss"] = None
         else:
             data["stop_loss"] = None
@@ -205,7 +205,7 @@ def parse_response(response):
         if "take_profit" in data:
             try:
                 data["take_profit"] = float(data["take_profit"])
-            except:
+            except (ValueError, TypeError):
                 data["take_profit"] = None
 
         return data
@@ -233,7 +233,7 @@ def smart_filter(analysis):
     )
 
     analysis_rsi = analysis["rsi"]
-    current_price = analysis["current_price"]
+    analysis["current_price"]
     volume_ratio = analysis.get("volume_ratio", 1.0)
     has_position = analysis.get("has_position", False)
 
@@ -416,12 +416,11 @@ def validate_prediction(prediction, current_price, has_position=False):
     Валидирует прогноз ИИ, проверяя Risk/Reward Ratio.
     Если R/R слишком низкий, меняет действие на HOLD или понижает уверенность.
     """
-    from src.config import MIN_RISK_REWARD_RATIO, AGGRESSIVE_MODE, AGGRESSIVE_SETTINGS
+    from src.config import AGGRESSIVE_MODE, AGGRESSIVE_SETTINGS
 
     # Determine which R/R ratio to use
-    target_rr = MIN_RISK_REWARD_RATIO
     if AGGRESSIVE_MODE:
-        target_rr = AGGRESSIVE_SETTINGS.get("MIN_RISK_REWARD_RATIO", 1.0)
+        AGGRESSIVE_SETTINGS.get("MIN_RISK_REWARD_RATIO", 1.0)
 
     action = prediction.get("action")
     stop_loss = prediction.get("stop_loss")
@@ -450,7 +449,7 @@ def validate_prediction(prediction, current_price, has_position=False):
     reward = abs(current_price - take_profit)
 
     if risk == 0:
-        warning(f"⚠️ SL равен текущей цене. Меняем на HOLD.")
+        warning("⚠️ SL равен текущей цене. Меняем на HOLD.")
         prediction["action"] = "hold"
         prediction["reason"] += " [AUTO-FIX: Zero Risk]"
         return prediction
@@ -520,7 +519,9 @@ def main(analyses):
     return predictions
 
 if __name__ == "__main__":
-    import sys, json, analyzer
+    import sys
+    import json
+    import analyzer
 
     info("🔄 Запуск прогнозирования...")
 

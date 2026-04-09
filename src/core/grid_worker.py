@@ -10,7 +10,6 @@ Grid Trading Worker - специализированный воркер для G
 import time
 import os
 import traceback
-from datetime import datetime
 
 
 def run_grid_worker(symbol: str, config: dict):
@@ -31,7 +30,7 @@ def run_grid_worker(symbol: str, config: dict):
         # 2. Импорты
         from src.core.grid_executor import GridExecutor
         from src.exchanges.exchange_factory import get_exchange_client
-        from src.config import BOT_CONFIG, ERROR_HANDLING
+        from src.config import ERROR_HANDLING
 
         # 3. Инициализация
         client = get_exchange_client()
@@ -56,7 +55,7 @@ def run_grid_worker(symbol: str, config: dict):
                 ticker = client.get_ticker(symbol)
                 bid = ticker.get("bid", 0)
                 ask = ticker.get("ask", 0)
-                last_price = ticker.get("last", 0)
+                ticker.get("last", 0)
 
                 if bid <= 0 or ask <= 0:
                     warning(f"[GRID] Invalid ticker data: bid={bid}, ask={ask}. Skipping cycle.")
@@ -71,7 +70,7 @@ def run_grid_worker(symbol: str, config: dict):
                 # 4.3 Проверяем emergency условия
                 if grid.check_emergency_conditions(mid_price):
                     grid.emergency_close()
-                    warning(f"[GRID] Emergency close triggered. Pausing for 60s...")
+                    warning("[GRID] Emergency close triggered. Pausing for 60s...")
                     time.sleep(60)
                     continue
 
@@ -415,9 +414,9 @@ def _graceful_shutdown(grid):
     """Graceful shutdown - отменяем ордера при остановке."""
     try:
         from src.utils.logger import info
-        info(f"[GRID] Graceful shutdown - cancelling all orders...")
+        info("[GRID] Graceful shutdown - cancelling all orders...")
         grid.client.cancel_all_orders(grid.symbol)
-        info(f"[GRID] Shutdown complete.")
+        info("[GRID] Shutdown complete.")
     except Exception as e:
         from src.utils.logger import error
         error(f"[GRID] Error during shutdown: {e}")

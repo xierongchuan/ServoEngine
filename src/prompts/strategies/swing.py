@@ -341,7 +341,7 @@ class SwingStrategy(BaseStrategy):
 
     def get_risk_table(self, ctx: dict) -> str:
         """SWING-специфичная таблица рисков."""
-        current_price = ctx.get("current_price", 0)
+        ctx.get("current_price", 0)
         atr = ctx.get("atr", 0)
         long_sl = ctx.get("long_sl", 0)
         long_tp = ctx.get("long_tp", 0)

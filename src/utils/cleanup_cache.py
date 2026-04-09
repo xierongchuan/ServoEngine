@@ -2,9 +2,8 @@
 """
 Скрипт для очистки кэша позиций от закрытых/несуществующих записей
 """
-import json
 import executor
-from logger import info, warning, error
+from logger import info, error
 
 def cleanup_position_cache():
     """Очищает кэш от записей, которых нет в открытых позициях"""

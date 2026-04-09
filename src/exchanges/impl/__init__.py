@@ -7,4 +7,4 @@ Implementation package for exchange clients.
 # При импорте автоматически регистрируются конфигурации
 from ..config.base import ConfigFactory
 
-__all__ = []
+__all__ = ["ConfigFactory"]

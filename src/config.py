@@ -26,8 +26,8 @@ try:
                         os.environ[key] = value.strip().strip('"').strip("'")
 
     try:
-        from src.utils import logger
-    except:
+        pass
+    except Exception:
         pass
 except Exception:
     pass
@@ -58,7 +58,7 @@ def load_bot_config():
         try:
             from src.config_loader import get_legacy_compatible_config
             config = get_legacy_compatible_config()
-            print(f"✅ Loaded configuration from config/ directory (new system)")
+            print("✅ Loaded configuration from config/ directory (new system)")
             return config
         except Exception as e:
             print(f"⚠️ New config system failed: {e}, falling back to legacy")

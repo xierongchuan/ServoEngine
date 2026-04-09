@@ -10,7 +10,7 @@ import hashlib
 import json
 import requests
 from urllib.parse import urlencode
-from src.config import BINGX_API_KEY, BINGX_SECRET_KEY, BINGX_API_URL, MODE
+from src.config import BINGX_API_KEY, BINGX_SECRET_KEY, BINGX_API_URL
 from src.utils.logger import info, error, warning
 
 from .exchange_client import ExchangeClient
@@ -133,7 +133,7 @@ class BingXClient(ExchangeClient):
                 if 'response' in locals():
                     try:
                         error(f"   Response: {response.text}")
-                    except:
+                    except Exception:
                         pass
                 return None
 

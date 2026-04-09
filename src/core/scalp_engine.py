@@ -18,10 +18,10 @@ import threading
 import traceback
 from typing import Dict, Optional
 
-from src.config import SCALP_SETTINGS, LEVERAGE, ERROR_HANDLING, DATA_DIR
+from src.config import SCALP_SETTINGS, ERROR_HANDLING, DATA_DIR
 from src.config import should_reload_config, reload_bot_config
 from src.config import AI_VETO_OVERRIDE, AI_REGIME_OVERRIDE, AI_MODEL
-from src.utils.logger import setup_symbol_logger, info, error, warning
+from src.utils.logger import info, error, warning
 from src.utils.helpers import get_filename
 
 
@@ -515,7 +515,7 @@ class ScalpEngine:
                     time.sleep(self._fast_interval)
                     continue
 
-                current_price = indicators["current_price"]
+                indicators["current_price"]
 
                 with self._lock:
                     position = self._position
@@ -1010,7 +1010,7 @@ class ScalpEngine:
 
         try:
             from src.prompts.strategies.scalp_regime import ScalpRegimeStrategy
-            from src.core.predict import get_prediction, parse_response
+            from src.core.predict import get_prediction
 
             snapshot = self._analyzer.get_snapshot()
 

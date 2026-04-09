@@ -19,7 +19,7 @@ def calculate_macd(
     min_required = slow + signal
     if len(prices) < min_required:
         warning(f"[MACD] Недостаточно данных: {len(prices)} свечей, требуется минимум {min_required} (slow={slow} + signal={signal})")
-        debug(f"[MACD] Рекомендация: увеличьте количество запрашиваемых свечей или используйте более длинный таймфрейм")
+        debug("[MACD] Рекомендация: увеличьте количество запрашиваемых свечей или используйте более длинный таймфрейм")
         return 0, 0, 0, 0, 0
 
     # Import EMA from trend module to avoid duplication
@@ -43,7 +43,6 @@ def calculate_macd(
     if len(macd_history) >= signal:
         # Track signal line history for proper prev_histogram calculation
         signal_history = []
-        prev_signal_line = 0.0
 
         # Initialize signal line with SMA
         signal_line = sum(macd_history[:signal]) / signal
@@ -53,7 +52,6 @@ def calculate_macd(
 
         # Process remaining values and track EACH signal line value
         for i, m in enumerate(macd_history[signal:]):
-            prev_signal_line = signal_line  # Save previous before updating
             signal_line = m * k + signal_line * (1 - k)
             # Store ALL signal line values for later use (to get previous signal)
             signal_history.append(signal_line)
@@ -97,8 +95,6 @@ def calculate_rsi_series(prices: List[float], period: int = 14) -> List[float]:
 
     rsi_values = [50.0] * len(prices)  # Default 50
 
-    gains = []
-    losses = []
 
     # Calculate changes
     deltas = [prices[i] - prices[i - 1] for i in range(1, len(prices))]

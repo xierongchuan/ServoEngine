@@ -3,7 +3,7 @@
 from typing import Dict, List, Tuple
 
 from src.config import AI_THRESHOLDS, TECHNICAL_ANALYSIS
-from .trend import calculate_ema, calculate_ema_series
+from .trend import calculate_ema_series
 from .momentum import calculate_rsi_series
 
 

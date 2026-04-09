@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, Optional
 
-from src.utils.logger import info, warning
+from src.utils.logger import info
 
 from .base import BaseSignalGenerator
 from .utils import detect_rsi_divergence
@@ -332,7 +332,6 @@ class HybridSignalGenerator(BaseSignalGenerator):
         if not position:
             return {"should_close": False, "reason": "No position", "urgency": "low"}
 
-        pos_adapter = position  # Use PositionAdapter externally
         if hasattr(position, 'entry_price'):
             pos_type = "BUY" if position.is_long else "SELL"
             entry_price = float(position.entry_price)

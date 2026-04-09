@@ -1,5 +1,4 @@
 import json
-import os
 from src.config import DATA_DIR, AI_THRESHOLDS, SYMBOLS, ENABLE_NEWS, TECHNICAL_ANALYSIS
 from src.utils.logger import info, error, warning
 from src.utils.helpers import get_filename
@@ -12,11 +11,9 @@ from src.core.indicators import (
     calculate_bollinger_bands,
     calculate_atr,
     calculate_support_resistance,
-    calculate_sma_series,
     calculate_ema_series,
     calculate_rsi_series,
     calculate_seb,
-    calculate_seb_series,
 )
 
 
@@ -177,8 +174,20 @@ def analyze_symbol(symbol, position=None, decision_context=""):
 
     # Загружаем данные
     price_file = f"{DATA_DIR}/prices/{get_filename(symbol)}.json"
-    with open(price_file) as f:
-        prices = json.load(f)
+    try:
+        with open(price_file) as f:
+            prices = json.load(f)
+    except FileNotFoundError:
+        # Если файл ещё не создан, получаем свежие данные и сохраняем их
+        info(f"🔄 Данные для {symbol} ещё не кешированы, загружаем свежие...")
+        from src.core import collector
+        prices = collector.fetch_prices(symbol)
+        # Сохраняем в файл для будующего использования
+        try:
+            with open(price_file, 'w') as f:
+                json.dump(prices, f)
+        except Exception as e:
+            warning(f"⚠️ Не удалось сохранить кеш цен для {symbol}: {str(e)}")
 
     debug(f"[Analyzer] Loaded {len(prices)} candles for {symbol}")
 
@@ -187,8 +196,20 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         last_candle = prices[-1]
         debug(f"[Analyzer] Last candle: close={last_candle.get('closePrice')}, volume={last_candle.get('volume')}")
 
-    with open(f"{DATA_DIR}/news/{get_filename(symbol)}.json") as f:
-        news = json.load(f)
+    try:
+        with open(f"{DATA_DIR}/news/{get_filename(symbol)}.json") as f:
+            news = json.load(f)
+    except FileNotFoundError:
+        # Если файл новостей ещё не создан, получаем свежие новости и сохраняем их
+        info(f"🔄 Новости для {symbol} ещё не кешированы, загружаем свежие...")
+        from src.core import collector
+        news = collector.fetch_news(symbol)
+        # Сохраняем в файл для будующего использования
+        try:
+            with open(f"{DATA_DIR}/news/{get_filename(symbol)}.json", 'w') as f:
+                json.dump(news, f)
+        except Exception as e:
+            warning(f"⚠️ Не удалось сохранить кеш новостей для {symbol}: {str(e)}")
 
     # === РАСЧЁТ ИНДИКАТОРОВ ===
     sma, rsi = calculate_indicators(prices)
@@ -251,6 +272,23 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     # Bollinger Bands calculation
     bb_upper, bb_middle, bb_lower, bb_width = calculate_bollinger_bands(close_prices)
 
+    # === Детекция рыночного режима ===
+    try:
+        from src.core.regime import detect_regime
+        regime_input = {
+            "ema9": ema9,
+            "ema21": ema21,
+            "bb_upper": bb_upper,
+            "bb_lower": bb_lower,
+            "close_prices": close_prices,
+            "atr_ratio": atr_ratio,
+        }
+        regime_data = detect_regime(regime_input)
+    except Exception as e:
+        from src.utils.logger import warning
+        warning(f"⚠️ Regime detection failed: {e}")
+        regime_data = None
+
     # Текущая цена
     last_close = prices[-1]["closePrice"]
     current_price = get_price_value(last_close)
@@ -298,9 +336,9 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         prev_high = get_price_value(prices[-2].get("highPrice", current_price))
         prev_low = get_price_value(prices[-2].get("lowPrice", current_price))
         prev_close = get_price_value(prices[-2].get("closePrice", current_price))
-        pivot = (prev_high + prev_low + prev_close) / 3
+        (prev_high + prev_low + prev_close) / 3
     else:
-        pivot = current_price
+        pass
 
     # Расстояния до уровней
     resistance_dist_pct = ((resistance - current_price) / current_price * 100) if current_price > 0 else 0
@@ -349,27 +387,27 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         volatility_ratio = 1.0
 
     if volatility_ratio > 2.0:
-        volatility_status = "⚡ ВЫСОКАЯ"
+        pass
     elif volatility_ratio < 0.5:
-        volatility_status = "🐌 Низкая (сжатие)"
+        pass
     else:
-        volatility_status = "✅ Норма"
+        pass
 
     # === RSI ИНТЕРПРЕТАЦИЯ ===
     if rsi >= 80:
-        rsi_interpretation = "🔴 КРИТИЧЕСКИ ПЕРЕКУПЛЕН"
+        pass
     elif rsi >= 70:
-        rsi_interpretation = "🟠 Перекуплен"
+        pass
     elif rsi >= 60:
-        rsi_interpretation = "🟡 Умеренно высокий"
+        pass
     elif rsi >= 40:
-        rsi_interpretation = "🟢 Нейтральная зона"
+        pass
     elif rsi >= 30:
-        rsi_interpretation = "🟡 Умеренно низкий"
+        pass
     elif rsi >= 20:
-        rsi_interpretation = "🟠 Перепродан"
+        pass
     else:
-        rsi_interpretation = "🔴 КРИТИЧЕСКИ ПЕРЕПРОДАН"
+        pass
 
     # === ПОЗИЦИЯ ===
     from src.config import TRADING_FEE_MAKER, TRADING_FEE_TAKER, MIN_PARTIAL_CLOSE_PNL, LEVERAGE
@@ -423,7 +461,7 @@ def analyze_symbol(symbol, position=None, decision_context=""):
 
 
         if pnl_usdt > 0 and roe_percent < MIN_PARTIAL_CLOSE_PNL * 2:
-            pnl_context = f"""
+            pnl_context = """
 > ⚠️ **LOW PROFIT WARNING**: Чистый PnL слишком мал для partial close.
 > Рекомендация: HOLD для роста или CLOSE если тренд сломан."""
 
@@ -431,17 +469,17 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     from src.config import AGGRESSIVE_MODE, AGGRESSIVE_SETTINGS
 
     if AGGRESSIVE_MODE:
-        rsi_long_max = AGGRESSIVE_SETTINGS.get("RSI_BUY_COND", 65)
-        rsi_long_forbidden = AGGRESSIVE_SETTINGS.get("RSI_BUY_FORBIDDEN", 80)
-        rsi_short_min = AGGRESSIVE_SETTINGS.get("RSI_SELL_COND", 35)
-        rsi_short_forbidden = AGGRESSIVE_SETTINGS.get("RSI_SELL_FORBIDDEN", 20)
+        AGGRESSIVE_SETTINGS.get("RSI_BUY_COND", 65)
+        AGGRESSIVE_SETTINGS.get("RSI_BUY_FORBIDDEN", 80)
+        AGGRESSIVE_SETTINGS.get("RSI_SELL_COND", 35)
+        AGGRESSIVE_SETTINGS.get("RSI_SELL_FORBIDDEN", 20)
         min_confidence = AGGRESSIVE_SETTINGS.get("MIN_CONFIDENCE", 0.6)
         strategy_mode = "AGGRESSIVE"
     else:
-        rsi_long_max = AI_THRESHOLDS.get('RSI_BUY_ENTRY_MAX', 65)
-        rsi_long_forbidden = AI_THRESHOLDS.get('RSI_OVERBOUGHT', 70)
-        rsi_short_min = AI_THRESHOLDS.get('RSI_SELL_ENTRY_MIN', 35)
-        rsi_short_forbidden = AI_THRESHOLDS.get('RSI_OVERSOLD', 30)
+        AI_THRESHOLDS.get('RSI_BUY_ENTRY_MAX', 65)
+        AI_THRESHOLDS.get('RSI_OVERBOUGHT', 70)
+        AI_THRESHOLDS.get('RSI_SELL_ENTRY_MIN', 35)
+        AI_THRESHOLDS.get('RSI_OVERSOLD', 30)
         min_confidence = 0.7
         strategy_mode = "BALANCED"
 
@@ -723,7 +761,7 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     from src.prompts.builder import PromptBuilder
 
     fee_context = (
-        f"## 💰 КОМИССИИ И УБЫТКИ (CRITICAL)\n"
+        "## 💰 КОМИССИИ И УБЫТКИ (CRITICAL)\n"
         f"*   **Maker комиссия:** {TRADING_FEE_MAKER}% | **Taker комиссия:** {TRADING_FEE_TAKER}% (за сделку).\n"
         f"*   **Round-Trip (Вход+Выход, taker):** ~{TRADING_FEE_TAKER * 2:.3f}%.\n"
         f"*   **Break-Even:** Цена должна пройти минимум {TRADING_FEE_TAKER * 2.1:.3f}%, чтобы покрыть комиссию.\n"

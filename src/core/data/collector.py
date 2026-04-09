@@ -2,11 +2,10 @@
 
 import os
 import json
-import time
 from typing import Dict, List, Optional
 
 from src.config import (
-    SYMBOLS, DATA_DIR, NEWS_SETTINGS, ENABLE_NEWS, CHART_RANGES,
+    SYMBOLS, DATA_DIR, ENABLE_NEWS, CHART_RANGES,
     DEFAULT_CHART_RANGE, STYLE_PRESETS, STRATEGY_STYLE, BOT_CONFIG,
     parse_interval_minutes, ENABLE_PARALLEL_COLLECTION,
 )

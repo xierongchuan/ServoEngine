@@ -1,11 +1,11 @@
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ..config import DATA_DIR, CONFIG_PATH
+from ..config import DATA_DIR
 from ..services.auth import get_current_user
 
 # Путь к base.json для получения plotter_ranges
@@ -262,7 +262,6 @@ async def get_chart_data(
 
     # Используем фактический таймфрейм свечей - никакого ресемплинга!
     # Графики показывают ровно то, что есть в данных
-    target_minutes = detected_tf_minutes
 
     # Фильтр по временному диапазону (отталкиваемся от последней свечи)
     latest_ts = candles[-1]["time"]

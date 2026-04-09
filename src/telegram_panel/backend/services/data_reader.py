@@ -70,7 +70,7 @@ class DataReader:
             with open(self.config_path, "w", encoding="utf-8") as f:
                 f.write(content)
             os.unlink(tmp_path)
-        except Exception as e:
+        except Exception:
             # Clean up temp file
             try:
                 os.unlink(tmp_path)

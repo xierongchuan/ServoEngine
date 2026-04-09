@@ -7,7 +7,6 @@ and an inline button to launch the Telegram Mini App.
 import json
 import logging
 import os
-import secrets
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -346,7 +345,6 @@ async def cmd_weblink(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         # Import token store - need to handle import properly
         import sys
-        from pathlib import Path
 
         # Add src to path for imports
         project_root = PROJECT_ROOT
@@ -397,7 +395,6 @@ async def cmd_revoketoken(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     try:
         import sys
-        from pathlib import Path
 
         project_root = PROJECT_ROOT
         src_path = project_root / "src"
@@ -520,7 +517,7 @@ async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             else:
                 await update.message.reply_text(f"❌ Failed to close position {symbol}")  # type: ignore[union-attr]
         else:
-            await update.message.reply_text(f"❌ Exchange client does not support close_position")  # type: ignore[union-attr]
+            await update.message.reply_text("❌ Exchange client does not support close_position")  # type: ignore[union-attr]
     except Exception as e:
         await update.message.reply_text(f"❌ Error closing position: {str(e)}")  # type: ignore[union-attr]
 

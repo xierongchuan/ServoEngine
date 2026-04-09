@@ -272,7 +272,7 @@ class PerformanceTracker:
             return []
 
         min_trades = self.config.get("min_trades_for_analysis", 10)
-        win_rate_floor = self.config.get("win_rate_floor", 0.30)
+        self.config.get("win_rate_floor", 0.30)
 
         suggestions = []
 

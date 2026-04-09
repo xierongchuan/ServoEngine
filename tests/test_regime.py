@@ -56,61 +56,73 @@ class TestTrendStrength:
     """Tests for _calculate_trend_strength."""
 
     def test_no_trend_when_ema9_none(self, detector):
-        strength, category = detector._calculate_trend_strength(None, 50000)
+        strength, category, direction = detector._calculate_trend_strength(None, 50000)
         assert strength == 0.0
         assert category == "NO_TREND"
+        assert direction == "NEUTRAL"
 
     def test_no_trend_when_ema21_none(self, detector):
-        strength, category = detector._calculate_trend_strength(50000, None)
+        strength, category, direction = detector._calculate_trend_strength(50000, None)
         assert strength == 0.0
         assert category == "NO_TREND"
+        assert direction == "NEUTRAL"
 
     def test_no_trend_when_both_none(self, detector):
-        strength, category = detector._calculate_trend_strength(None, None)
+        strength, category, direction = detector._calculate_trend_strength(None, None)
         assert strength == 0.0
         assert category == "NO_TREND"
+        assert direction == "NEUTRAL"
 
     def test_no_trend_when_ema21_zero(self, detector):
-        strength, category = detector._calculate_trend_strength(50000, 0)
+        strength, category, direction = detector._calculate_trend_strength(50000, 0)
         assert strength == 0.0
         assert category == "NO_TREND"
+        assert direction == "NEUTRAL"
 
     def test_no_trend_small_spread(self, detector):
         # spread = |50000 - 49990| / 49990 * 100 = 0.02% < 0.15%
-        strength, category = detector._calculate_trend_strength(50000, 49990)
+        strength, category, direction = detector._calculate_trend_strength(50000, 49990)
         assert strength == 0.0
         assert category == "NO_TREND"
+        assert direction == "BULLISH"  # ema9 > ema21
 
-    def test_weak_trend(self, detector):
+    def test_weak_trend_bullish(self, detector):
         # spread = |50200 - 50000| / 50000 * 100 = 0.4% (>0.15, <0.5)
-        strength, category = detector._calculate_trend_strength(50200, 50000)
-        assert strength == 0.33
+        # normalized = (0.4 - 0.15) / (0.5 - 0.15) * 0.5 ≈ 0.357
+        strength, category, direction = detector._calculate_trend_strength(50200, 50000)
+        assert strength == pytest.approx(0.357, abs=0.01)
         assert category == "WEAK_TREND"
+        assert direction == "BULLISH"
 
-    def test_moderate_trend(self, detector):
+    def test_moderate_trend_bullish(self, detector):
         # spread = |50500 - 50000| / 50000 * 100 = 1.0% (>0.5, <1.5)
-        strength, category = detector._calculate_trend_strength(50500, 50000)
-        assert strength == 0.66
+        # normalized = 0.5 + (1.0 - 0.5) / (1.5 - 0.5) * 0.3 = 0.65
+        strength, category, direction = detector._calculate_trend_strength(50500, 50000)
+        assert strength == pytest.approx(0.65, abs=0.01)
         assert category == "MODERATE_TREND"
+        assert direction == "BULLISH"
 
-    def test_strong_trend(self, detector):
+    def test_strong_trend_bullish(self, detector):
         # spread = |51000 - 50000| / 50000 * 100 = 2.0% (>1.5)
-        strength, category = detector._calculate_trend_strength(51000, 50000)
+        strength, category, direction = detector._calculate_trend_strength(51000, 50000)
         assert strength == 1.0
         assert category == "STRONG_TREND"
+        assert direction == "BULLISH"
 
     def test_strong_trend_bearish(self, detector):
         # ema9 < ema21, spread = |49000 - 50000| / 50000 * 100 = 2.0% (>1.5)
-        strength, category = detector._calculate_trend_strength(49000, 50000)
+        strength, category, direction = detector._calculate_trend_strength(49000, 50000)
         assert strength == 1.0
         assert category == "STRONG_TREND"
+        assert direction == "BEARISH"
 
     def test_boundary_no_trend_to_weak(self, detector):
         # Exactly at no_trend threshold (0.15%)
         # spread = 0.15 => ema9 = 50000 * (1 + 0.0015) = 50075
-        strength, category = detector._calculate_trend_strength(50075, 50000)
+        strength, category, direction = detector._calculate_trend_strength(50075, 50000)
         assert category == "WEAK_TREND"
-        assert strength == 0.33
+        assert strength == 0.0  # At exactly the boundary
+        assert direction == "BULLISH"
 
 
 class TestVolatilityState:

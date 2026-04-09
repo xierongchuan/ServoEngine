@@ -9,7 +9,7 @@ Grid Executor - управляет сеткой лимитных ордеров 
 """
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Dict, Optional
 from src.exchanges.exchange_factory import get_exchange_client
 from src.utils.logger import info, error, warning
@@ -293,7 +293,7 @@ class GridExecutor:
             symbol_pos = positions.get(norm_symbol, [])
 
             if symbol_pos:
-                pnl = float(symbol_pos[0].get("pnl", 0))
+                float(symbol_pos[0].get("pnl", 0))
                 entry = float(symbol_pos[0].get("entry", current_price))
 
                 if entry > 0:

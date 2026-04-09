@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, Optional
 
-from src.utils.logger import info, warning
+from src.utils.logger import info
 
 from .base import BaseSignalGenerator
 from .utils import detect_rsi_divergence
@@ -54,7 +54,7 @@ class AiscalpSignalGenerator(BaseSignalGenerator):
         macd_crossover = analysis.get("macd_crossover", "NONE")
         macd_crossover_confirmed = analysis.get("macd_crossover_confirmed", False)
         session_quality = session_data.get("session_quality", "MEDIUM") if session_data else "MEDIUM"
-        is_overlap = session_data.get("is_overlap", False) if session_data else False
+        session_data.get("is_overlap", False) if session_data else False
         quality_score_adj = session_data.get("quality_score_adj", 0) if session_data else 0
 
         w_htf = self.weights.get("htf_trend", 3)

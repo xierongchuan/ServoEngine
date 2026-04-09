@@ -20,7 +20,7 @@ Max base: 10, Min for signal: regime-adaptive (default 5)
 """
 
 from src.config import BOT_CONFIG
-from src.utils.logger import info, warning
+from src.utils.logger import info
 
 
 class SignalGenerator:

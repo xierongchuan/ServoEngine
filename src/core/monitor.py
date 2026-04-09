@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-import time
-import json
 from datetime import datetime
 from src.config import *
 from . import executor
@@ -124,7 +122,7 @@ def main():
         for i, position in enumerate(position_list):
             try:
                 created_time = position.get("created", "")
-                deal_id = str(position.get("dealId", ""))
+                str(position.get("dealId", ""))
                 pnl = position.get("pnl", 0)
 
                 if created_time:

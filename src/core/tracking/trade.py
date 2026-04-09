@@ -245,7 +245,6 @@ class TradeTracker:
     def _handle_new_trade(self, symbol, real_position):
         """Register a new trade"""
         from src.config import TRADING_FEE_TAKER, LEVERAGE
-        from src.exchanges.dto import Position
 
         # Support both dict and Position dataclass
         # Check for Position dataclass first (has entry_price attribute)
@@ -454,7 +453,7 @@ class TradeTracker:
             stored_trade["net_pnl"] = round(current_pnl - entry_fee - exit_fee, 4)
 
         # Track Max/Min PnL
-        pnl_history = stored_trade.get("pnl_history", [])
+        stored_trade.get("pnl_history", [])
         # Only keep last 100 points to save space? Or just max/min
         stored_trade["max_pnl"] = max(stored_trade.get("max_pnl", -999999), current_pnl)
         stored_trade["min_pnl"] = min(stored_trade.get("min_pnl", 999999), current_pnl)

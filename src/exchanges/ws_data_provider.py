@@ -14,7 +14,6 @@ import time
 import threading
 import requests
 import gzip
-from collections import deque
 from typing import Dict, List, Optional
 from multiprocessing import Manager
 import websocket
@@ -213,14 +212,16 @@ class WebSocketDataProvider:
         for k in klines:
             if isinstance(k, dict):
                 ts_ms = k.get("time")
+                if ts_ms is None:
+                    continue  # Skip invalid candles
                 formatted.append({
                     "snapshotTimeUTC": time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(ts_ms / 1000)),
                     "timestamp": ts_ms,
-                    "openPrice": float(k.get("open")),
-                    "highPrice": float(k.get("high")),
-                    "lowPrice": float(k.get("low")),
-                    "closePrice": float(k.get("close")),
-                    "volume": float(k.get("volume"))
+                    "openPrice": float(k.get("open") or 0),
+                    "highPrice": float(k.get("high") or 0),
+                    "lowPrice": float(k.get("low") or 0),
+                    "closePrice": float(k.get("close") or 0),
+                    "volume": float(k.get("volume") or 0)
                 })
 
         # Sort by timestamp ascending
@@ -302,7 +303,7 @@ class WebSocketDataProvider:
             if isinstance(message, bytes):
                 try:
                     message = gzip.decompress(message).decode('utf-8')
-                except:
+                except Exception:
                     message = message.decode('utf-8')
 
             data = json.loads(message)
@@ -580,8 +581,8 @@ def start_ws_provider(symbols: List[str], interval: str = "5m"):
 
     # Create multiprocessing Manager for cross-process cache sharing
     _manager = Manager()
-    _shared_cache = _manager.dict()
-    _shared_ready = _manager.dict()
+    _shared_cache = _manager.dict()  # type: ignore
+    _shared_ready = _manager.dict()  # type: ignore
 
     _provider = WebSocketDataProvider(manager=None)
     _provider._kline_cache = _shared_cache

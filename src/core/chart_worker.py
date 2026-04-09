@@ -4,7 +4,6 @@ import os
 import multiprocessing
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime
 
 from src.config import SYMBOLS, DATA_DIR, ENABLE_PARALLEL_PROCESSING, DEFAULT_PLOTTER_RANGE, CHART_SETTINGS
 from src.utils.logger import info, error, warning

@@ -13,8 +13,8 @@ class AiScalpStrategy(BaseStrategy):
         return "Horizon: 4-12 часов. Закрыть к концу торговой сессии."
 
     def get_strategy_section(self, ctx: dict) -> str:
-        global_trend = ctx.get("global_trend", "N/A")
-        local_trend = ctx.get("local_trend", "N/A")
+        ctx.get("global_trend", "N/A")
+        ctx.get("local_trend", "N/A")
         last_5_direction = ctx.get("last_5_direction", "MIXED")
         support = ctx.get("support", 0)
         resistance = ctx.get("resistance", 0)
@@ -118,7 +118,6 @@ class AiScalpStrategy(BaseStrategy):
 
         # === MARKET STATE FOR AI ANALYSIS ===
         # Только ключевые данные для ИИ-оценки
-        market_state_block = ""
         
         warnings = []
         if "MIXED" in last_5_direction and trend_quality_desc == "Low":

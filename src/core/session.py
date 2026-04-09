@@ -6,7 +6,6 @@ and overlap periods for AISCALP strategy.
 """
 
 from datetime import datetime, timezone
-from typing import Dict, List
 
 from src.config import BOT_CONFIG
 from src.utils.logger import info

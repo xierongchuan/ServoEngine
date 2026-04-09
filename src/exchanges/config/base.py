@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import os
 
 
@@ -230,7 +230,7 @@ class ConfigFactory:
         try:
             from .bingx_config import BingXConfig
             cls.register("bingx", BingXConfig)
-        except ImportError as e:
+        except ImportError:
             # Игнорируем если модуль ещё не создан
             pass
 

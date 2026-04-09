@@ -14,9 +14,8 @@ Configuration is resolved with inheritance:
 
 import os
 import json
-from typing import Dict, Any, Optional, List
 from copy import deepcopy
-from functools import lru_cache
+from typing import cast, Dict, Any, Optional, List
 
 
 # --- Paths ---
@@ -200,7 +199,9 @@ def resolve_symbol_config(symbol: str, strategy: Optional[str] = None) -> Dict[s
 
     # Get strategy (from arg or active config)
     strategy = strategy or active.get('strategy', 'MACDX')
-    strategy_config = load_strategy_config(strategy)
+    if not strategy:
+        strategy = 'MACDX'  # fallback
+    strategy_config = load_strategy_config(cast(str, strategy))
 
     # Get profile for this symbol
     symbol_profiles = active.get('symbol_profiles', {})
@@ -253,7 +254,7 @@ def clear_config_cache():
     """Clear all configuration caches."""
     global _resolved_configs
     _resolved_configs = {}
-    load_base_config.cache_clear() if hasattr(load_base_config, 'cache_clear') else None
+    load_base_config.cache_clear() if hasattr(load_base_config, 'cache_clear') else None  # type: ignore
 
 
 def should_reload_config() -> bool:

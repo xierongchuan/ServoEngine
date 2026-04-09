@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, Optional
 
-from src.utils.logger import info, warning
+from src.utils.logger import info
 
 from .base import BaseSignalGenerator
 
@@ -20,7 +20,7 @@ class ScalpSignalGenerator(BaseSignalGenerator):
                  ob_imbalance: float = 0.0, **kwargs) -> Dict:
         ema_fast = indicators.get("ema_fast", 0)
         ema_med = indicators.get("ema_med", 0)
-        ema_macro = indicators.get("ema_macro", 0)
+        indicators.get("ema_macro", 0)
         rsi = indicators.get("rsi", 50)
         volume_ratio = indicators.get("volume_ratio", 1.0)
         current_price = indicators.get("current_price", 0)

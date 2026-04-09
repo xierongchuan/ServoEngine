@@ -3,7 +3,7 @@
   "_version": "1.0.0",
 
   "position": {
-    "size_percent": 10,
+    "size_percent": 32,
     "min_trade_amount_usdt": 10
   },
 

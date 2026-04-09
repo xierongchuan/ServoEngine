@@ -1,6 +1,6 @@
 """Общие утилиты для генераторов сигналов — дедупликация."""
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, List, Tuple
 
 
 def detect_rsi_divergence(prices: List[float], rsi_values: List[float], window: int = 30) -> Tuple[bool, bool]:

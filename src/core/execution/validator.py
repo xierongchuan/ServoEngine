@@ -1,6 +1,6 @@
 """Валидатор предсказаний — проверка корректности перед исполнением."""
 
-from typing import Dict, Optional
+from typing import Dict
 
 
 def validate_prediction(

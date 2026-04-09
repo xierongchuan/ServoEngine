@@ -21,7 +21,7 @@ Max base: 12, Min for signal: regime-adaptive (default 5)
 """
 
 from src.config import BOT_CONFIG
-from src.utils.logger import info, warning
+from src.utils.logger import info
 
 
 class AiScalpSignalGenerator:
@@ -45,7 +45,7 @@ class AiScalpSignalGenerator:
         rsi = analysis.get("rsi", 50)
         htf_trend = htf_data.get("htf_trend", "NEUTRAL") if htf_data else "NEUTRAL"
         daily_bias = htf_data.get("daily_bias", "NEUTRAL") if htf_data else "NEUTRAL"
-        session_quality = session_data.get("session_quality", "MEDIUM") if session_data else "MEDIUM"
+        session_data.get("session_quality", "MEDIUM") if session_data else "MEDIUM"
 
         # 1. RSI neutral + no HTF trend (full neutral — nothing to trade)
         rsi_neutral = pf_cfg.get("skip_rsi_neutral_zone", [46, 54])
@@ -97,7 +97,7 @@ class AiScalpSignalGenerator:
 
         # Session data
         session_quality = session_data.get("session_quality", "MEDIUM") if session_data else "MEDIUM"
-        is_overlap = session_data.get("is_overlap", False) if session_data else False
+        session_data.get("is_overlap", False) if session_data else False
         quality_score_adj = session_data.get("quality_score_adj", 0) if session_data else 0
 
         # === WEIGHTS FROM CONFIG ===

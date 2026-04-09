@@ -7,7 +7,7 @@ from typing import Dict, Optional
 from src.config import *
 from src.utils.logger import info, error, warning, log_trade
 from src.exchanges.exchange_factory import get_exchange_client
-from src.exchanges.dto.models import Balance, OrderType, OrderSide, PositionSide
+from src.exchanges.dto.models import Balance, OrderType, PositionSide
 
 
 def _save_sl_tp(symbol: str, sl: float, tp: float):
@@ -119,7 +119,7 @@ def create_order(
                 total_balance = float(balance_data.total_with_pnl) if balance_data.total_with_pnl > 0 else total_balance
 
         if total_balance <= 0:
-            error(f"❌ Balance is 0 or could not be retrieved. Cannot calculate position size.")
+            error("❌ Balance is 0 or could not be retrieved. Cannot calculate position size.")
             return None
 
         effective_size_pct = size_pct if size_pct else POSITION_SIZE_PERCENT
@@ -146,7 +146,7 @@ def create_order(
         _qty_prec = POSITION_LIMITS.get("quantity_precision", 4)
         quantity = round(quantity, _qty_prec)
 
-        info(f"🧮 Position Size:")
+        info("🧮 Position Size:")
         info(f"   Balance: ${total_balance:.2f} | Margin: {effective_size_pct:.1f}% = ${trade_amount:.2f}")
         info(f"   Leverage: {LEVERAGE}x | Notional: ${notional_value:.2f}")
         info(f"   Quantity: {quantity} {symbol.replace('USDT', '')}")
@@ -189,7 +189,7 @@ def create_order(
                                 retry_sl = sl_price if "STOP_MARKET" in missing else None
                                 client.set_sl_tp(symbol, pos_side, tp=retry_tp, sl=retry_sl)
                     else:
-                        warning(f"⚠️ Client does not support set_sl_tp")
+                        warning("⚠️ Client does not support set_sl_tp")
                 except Exception as e:
                     error(f"❌ Failed to set SL/TP for new order {order_id}: {e}")
 

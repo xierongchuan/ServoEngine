@@ -52,8 +52,8 @@ class MarketRegimeDetector:
         Returns:
             dict: Результат классификации режима с рекомендациями
         """
-        # Метрика 1: Сила тренда (EMA spread)
-        trend_strength, trend_category = self._calculate_trend_strength(
+        # Метрика 1: Сила и направление тренда (EMA spread)
+        trend_strength, trend_category, trend_direction = self._calculate_trend_strength(
             analysis_data.get("ema9"),
             analysis_data.get("ema21")
         )
@@ -76,7 +76,9 @@ class MarketRegimeDetector:
             trend_category,
             volatility_state,
             consistency_category,
-            analysis_data.get("atr_ratio", 1.0)
+            analysis_data.get("atr_ratio", 1.0),
+            trend_strength,
+            directional_consistency
         )
 
         # Получаем параметры для режима
@@ -90,6 +92,7 @@ class MarketRegimeDetector:
         result = {
             "regime": regime,
             "trend_strength": trend_strength,
+            "trend_direction": trend_direction,
             "volatility_state": volatility_state,
             "directional_consistency": directional_consistency,
             "confidence": confidence,
@@ -100,8 +103,8 @@ class MarketRegimeDetector:
         }
 
         info(f"Режим рынка: {regime} (уверенность: {confidence:.2f}, "
-             f"тренд: {trend_strength:.2f}, волатильность: {volatility_state}, "
-             f"согласованность: {directional_consistency:.2f})")
+              f"тренд: {trend_strength:.2f} {trend_direction}, волатильность: {volatility_state}, "
+              f"согласованность: {directional_consistency:.2f})")
 
         return result
 
@@ -109,19 +112,27 @@ class MarketRegimeDetector:
         self,
         ema9: Optional[float],
         ema21: Optional[float]
-    ) -> Tuple[float, str]:
+    ) -> Tuple[float, str, str]:
         """
-        Рассчитывает силу тренда через спред EMA.
+        Рассчитывает силу и направление тренда через спред EMA.
 
         Args:
             ema9: Значение EMA-9
             ema21: Значение EMA-21
 
         Returns:
-            Tuple[float, str]: Нормализованная сила (0-1), категория тренда
+            Tuple[float, str, str]: Нормализованная сила (0-1), категория тренда, направление
         """
         if ema9 is None or ema21 is None or ema21 == 0:
-            return 0.0, "NO_TREND"
+            return 0.0, "NO_TREND", "NEUTRAL"
+
+        # Определяем направление тренда
+        if ema9 > ema21:
+            direction = "BULLISH"  # EMA9 выше EMA21 = бычий тренд
+        elif ema9 < ema21:
+            direction = "BEARISH"  # EMA9 ниже EMA21 = медвежий тренд
+        else:
+            direction = "NEUTRAL"  # EMA равны
 
         # Процентный спред между EMA
         ema_spread_pct = abs(ema9 - ema21) / ema21 * 100
@@ -131,21 +142,24 @@ class MarketRegimeDetector:
         weak = self.ema_spread_thresholds["weak"]
         strong = self.ema_spread_thresholds["strong"]
 
-        # Категоризация
+        # Категоризация и нормализация
         if ema_spread_pct < no_trend:
             category = "NO_TREND"
             normalized = 0.0
         elif ema_spread_pct < weak:
             category = "WEAK_TREND"
-            normalized = 0.33
+            # Линейная нормализация в диапазоне [no_trend, weak] -> [0.0, 0.5]
+            normalized = (ema_spread_pct - no_trend) / (weak - no_trend) * 0.5
         elif ema_spread_pct < strong:
             category = "MODERATE_TREND"
-            normalized = 0.66
+            # Линейная нормализация в диапазоне [weak, strong] -> [0.5, 0.8]
+            normalized = 0.5 + (ema_spread_pct - weak) / (strong - weak) * 0.3
         else:
             category = "STRONG_TREND"
+            # Для очень сильных трендов фиксируем 1.0
             normalized = 1.0
 
-        return normalized, category
+        return normalized, category, direction
 
     def _calculate_volatility_state(
         self,
@@ -251,7 +265,9 @@ class MarketRegimeDetector:
         trend_category: str,
         volatility_state: str,
         consistency_category: str,
-        atr_ratio: float
+        atr_ratio: float,
+        trend_strength: float = 0.0,
+        directional_consistency: float = 0.0
     ) -> Tuple[str, float]:
         """
         Классифицирует режим по матрице метрик.
@@ -267,53 +283,81 @@ class MarketRegimeDetector:
         """
         # Правило 1: Экстремальная волатильность -> VOLATILE
         if atr_ratio > 2.5:
-            return "VOLATILE", 0.9
+            # Уверенность растёт с уровнем ATR ratio
+            confidence = 0.8 + min((atr_ratio - 2.5) / 2.5, 0.2)
+            return "VOLATILE", min(confidence, 1.0)
 
         # Правило 2: Сильный/умеренный тренд + норм./высокая волатильность + направленность -> TRENDING
         if trend_category in ["STRONG_TREND", "MODERATE_TREND"]:
             if volatility_state in ["NORMAL", "EXPANDED"]:
                 if consistency_category == "DIRECTIONAL":
-                    return "TRENDING", 0.85
+                    # Высокая уверенность при сильном тренде и направленности
+                    base_confidence = 0.8
+                    confidence = base_confidence + (trend_strength * directional_consistency * 0.2)
+                    return "TRENDING", min(confidence, 1.0)
 
         # Правило 2b: Умеренный тренд + норм. волатильность + смешанный -> TRENDING (lower confidence)
         if trend_category == "MODERATE_TREND" and volatility_state == "NORMAL":
             if consistency_category == "MIXED":
-                return "TRENDING", 0.65
+                # Средняя уверенность
+                confidence = 0.6 + (trend_strength * 0.2) + (directional_consistency * 0.1)
+                return "TRENDING", confidence
 
         # Правило 2c: Слабый тренд + направленность + норм. волатильность -> TRENDING (emerging trend)
         if trend_category == "WEAK_TREND" and consistency_category == "DIRECTIONAL":
             if volatility_state == "NORMAL":
-                return "TRENDING", 0.6
+                # Низкая уверенность для emerging тренда
+                confidence = 0.5 + (trend_strength * 0.2) + (directional_consistency * 0.2)
+                return "TRENDING", confidence
 
         # Правило 3: Слабый/нет тренда + сжатие/норм. волатильность + чоп/смешанный -> RANGING
         if trend_category in ["WEAK_TREND", "NO_TREND"]:
             if volatility_state in ["COMPRESSED", "NORMAL"]:
                 if consistency_category in ["CHOPPY", "MIXED"]:
-                    return "RANGING", 0.8
+                    # Динамическая уверенность: выше при более слабом тренде и более хаотичных движениях
+                    base_confidence = 0.7
+                    trend_factor = 1 - trend_strength  # 1 когда тренд=0, 0 когда тренд=1
+                    consistency_factor = 1 - directional_consistency  # 1 когда consistency=0, 0 когда consistency=1
+                    confidence = base_confidence + (trend_factor * consistency_factor * 0.3)
+                    return "RANGING", min(confidence, 1.0)
 
         # Правило 3b: Нет тренда + норм. волатильность + направленность -> RANGING (short-lived move in range)
         if trend_category == "NO_TREND" and volatility_state == "NORMAL":
             if consistency_category == "DIRECTIONAL":
-                return "RANGING", 0.6
+                # Низкая уверенность, так как направленность противоречит ranging
+                confidence = 0.5 + (directional_consistency * 0.1)
+                return "RANGING", confidence
 
         # Правило 4: Высокая волатильность без сильного тренда -> VOLATILE
         if volatility_state == "EXPANDED" and trend_category in ["NO_TREND", "WEAK_TREND"]:
-            return "VOLATILE", 0.75
+            # Уверенность растёт с уровнем волатильности
+            base_confidence = 0.7
+            volatility_factor = min(atr_ratio / 3.0, 1.0)  # Нормализуем ATR ratio
+            confidence = base_confidence + (volatility_factor * 0.3)
+            return "VOLATILE", min(confidence, 1.0)
 
         # Правило 5: Сильный тренд но чопи консистенси -> RANGING (trend exhaustion, trade reversals)
         if trend_category in ["STRONG_TREND", "MODERATE_TREND"] and consistency_category == "CHOPPY":
-            return "RANGING", 0.6
+            # Уверенность основана на силе тренда (выше при более сильном тренде)
+            base_confidence = 0.5
+            confidence = base_confidence + (trend_strength * 0.3)
+            return "RANGING", confidence
 
         # Правило 6: Сжатие с направленностью -> TRENDING (pre-breakout)
         if volatility_state == "COMPRESSED" and consistency_category == "DIRECTIONAL":
-            return "TRENDING", 0.55
+            # Средняя уверенность для pre-breakout
+            confidence = 0.5 + (directional_consistency * 0.3)
+            return "TRENDING", confidence
 
         # Правило 7: Сильный тренд + сжатие + смешанный -> TRENDING (consolidation in trend)
         if trend_category in ["STRONG_TREND", "MODERATE_TREND"] and volatility_state == "COMPRESSED":
-            return "TRENDING", 0.55
+            # Уверенность основана на силе тренда
+            confidence = 0.5 + (trend_strength * 0.3)
+            return "TRENDING", confidence
 
         # Все остальные случаи -> RANGING (safer default than TRANSITIONAL)
-        return "RANGING", 0.5
+        # Низкая уверенность для catch-all правила
+        return "RANGING", 0.4
 
 
 # Глобальный экземпляр детектора (ленивая инициализация)

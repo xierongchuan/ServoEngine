@@ -4,11 +4,9 @@
 Извлекает полный контент новостей из URL
 """
 
-import json
 import time
 import requests
-from datetime import datetime, timedelta, timezone
-from typing import Union
+from datetime import datetime, timezone
 from src.config import NEWSAPI_KEY, ALPHAVANTAGE_KEY, FINNHUB_KEY, NEWS_SETTINGS, SYMBOLS
 from src.utils.logger import info, error, warning
 
@@ -35,7 +33,7 @@ def analyze_sentiment(text: str) -> float:
             # Нормализуем от -0.5 до 0.5, затем переводим в 0-1
             normalized = (polarity + 1) / 2
             return round(normalized, 2)
-        except:
+        except Exception:
             pass
     except ImportError:
         warning("⚠️ TextBlob не установлен. Анализ тональности будет упрощенным.")
@@ -145,7 +143,7 @@ def get_news_newsapi(symbol):
             if description:
                 info(f"   ⚠️ Используется краткое описание ({len(content_text)} символов)")
             else:
-                info(f"   ⚠️ Текст недоступен")
+                info("   ⚠️ Текст недоступен")
 
         # Анализируем тональность заголовка и полного текста
         sentiment = analyze_sentiment(f"{title}. {content_text}")
@@ -203,7 +201,7 @@ def get_news_alphavantage(symbol):
         try:
             dt = datetime.strptime(time_published, "%Y%m%dT%H%M%S")
             timestamp = dt.isoformat()
-        except:
+        except Exception:
             timestamp = datetime.now(timezone.utc).isoformat()
 
         news_items.append({
@@ -313,7 +311,7 @@ def get_news_for_symbol(symbol):
     """
     # Проверяем, нужно ли использовать реальные новости
     if not NEWS_SETTINGS["use_real_news"]:
-        error(f"❌ Реальные новости отключены в config.py! Включите use_real_news: True")
+        error("❌ Реальные новости отключены в config.py! Включите use_real_news: True")
         raise Exception(f"❌ Невозможно получить новости для {symbol}: реальные новости отключены")
 
     # Проверяем наличие API ключей

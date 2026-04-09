@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, Optional
 
-from src.utils.logger import info, debug, warning
+from src.utils.logger import info, debug
 
 from .base import BaseSignalGenerator
 from .utils import detect_rsi_divergence
@@ -19,19 +19,19 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         debug(f"[MACDX] Analysis keys: {list(analysis.keys())}")
         debug(f"[MACDX] macd_line={analysis.get('macd_line')}, macd_signal={analysis.get('macd_signal')}, macd_hist={analysis.get('macd_hist')}, macd_hist_prev={analysis.get('macd_hist_prev')}")
 
-        current_price = analysis.get("current_price") or 0
+        analysis.get("current_price") or 0
         rsi = analysis.get("rsi") or 50
         volume_ratio = analysis.get("volume_ratio") or 1.0
         ema9 = analysis.get("ema9") or 0
         ema21 = analysis.get("ema21") or 0
-        macd_line = analysis.get("macd_line") or 0
-        macd_signal_line = analysis.get("macd_signal") or 0
+        analysis.get("macd_line") or 0
+        analysis.get("macd_signal") or 0
         macd_hist = analysis.get("macd_hist") or 0
         macd_hist_prev = analysis.get("macd_hist_prev") or 0
         bb_upper = analysis.get("bb_upper") or 0
         bb_lower = analysis.get("bb_lower") or 0
         bb_middle = analysis.get("bb_middle") or 0
-        atr = analysis.get("atr") or 0
+        analysis.get("atr") or 0
         atr_ratio = analysis.get("atr_ratio") or 1.0
         adx = analysis.get("adx") or 25
 
@@ -88,13 +88,13 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 block_reason = ""
                 if last_5_direction == "STRONG_DOWN":
                     should_block = True
-                    block_reason = f"STRONG_DOWN (4+ reds) + bearish MACD momentum"
+                    block_reason = "STRONG_DOWN (4+ reds) + bearish MACD momentum"
                 elif last_5_direction == "DOWN" and min_consecutive_for_block == 2:
                     should_block = True
-                    block_reason = f"DOWN (3 reds) + bearish MACD momentum"
+                    block_reason = "DOWN (3 reds) + bearish MACD momentum"
                 elif last_5_direction == "DOWN" and macd_hist_prev < 0:
                     should_block = True
-                    block_reason = f"DOWN (3 reds) + negative MACD histogram"
+                    block_reason = "DOWN (3 reds) + negative MACD histogram"
 
                 if should_block:
                     info(f"[MACDX] HOLD | {block_reason}")

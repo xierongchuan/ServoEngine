@@ -4,7 +4,7 @@ import json
 import logging
 from urllib.parse import parse_qs, unquote
 
-from fastapi import Header, HTTPException, Request
+from fastapi import Header, HTTPException
 
 from ..config import BOT_TOKEN, ALLOWED_IDS
 from .token_store import get_token_store

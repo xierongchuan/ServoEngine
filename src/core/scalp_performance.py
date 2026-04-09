@@ -14,7 +14,7 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 
 from src.config import DATA_DIR
 from src.utils.logger import info, warning

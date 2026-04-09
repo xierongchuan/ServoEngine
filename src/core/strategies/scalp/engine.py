@@ -14,5 +14,5 @@ class ScalpPipeline(StrategyPipeline):
 
     def run_cycle(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None) -> Optional[Dict]:
         """SCALP не поддерживает run_cycle — используйте ScalpEngine.run() вместо этого."""
-        warning(f"[SCALP] run_cycle not supported — SCALP uses dedicated ScalpEngine with dual-loop architecture")
+        warning("[SCALP] run_cycle not supported — SCALP uses dedicated ScalpEngine with dual-loop architecture")
         return None

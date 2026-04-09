@@ -15,9 +15,9 @@ Tiered scoring (max 10 base + 3 interaction = 13):
   Tier 3 (Support):    Volume(+1), OB imbalance(+1), MACD(+1), BB(+1)
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 from src.config import SCALP_SETTINGS
-from src.utils.logger import info, warning
+from src.utils.logger import info
 
 
 class ScalpSignalGenerator:
@@ -45,7 +45,7 @@ class ScalpSignalGenerator:
         # Extract indicators
         ema_fast = indicators.get("ema_fast", 0)
         ema_med = indicators.get("ema_med", 0)
-        ema_macro = indicators.get("ema_macro", 0)
+        indicators.get("ema_macro", 0)
         rsi = indicators.get("rsi", 50)
         volume_ratio = indicators.get("volume_ratio", 1.0)
         current_price = indicators.get("current_price", 0)
@@ -279,11 +279,11 @@ class ScalpSignalGenerator:
         conflicting = False
         if long_score > short_score and short_score >= conflict_friction:
             long_score -= 1
-            long_reasons.append(f"Friction -1")
+            long_reasons.append("Friction -1")
             conflicting = True
         elif short_score > long_score and long_score >= conflict_friction:
             short_score -= 1
-            short_reasons.append(f"Friction -1")
+            short_reasons.append("Friction -1")
             conflicting = True
 
         # === DETERMINE SIGNAL ===
@@ -397,9 +397,9 @@ class ScalpSignalGenerator:
 
         # 2. Momentum reversal: EMA cross against + RSI confirms
         if pos_type == "BUY" and ema_fast < ema_med and rsi > 55:
-            return {"should_close": True, "reason": f"EMA↓ reversal", "urgency": "medium"}
+            return {"should_close": True, "reason": "EMA↓ reversal", "urgency": "medium"}
         if pos_type == "SELL" and ema_fast > ema_med and rsi < 45:
-            return {"should_close": True, "reason": f"EMA↑ reversal", "urgency": "medium"}
+            return {"should_close": True, "reason": "EMA↑ reversal", "urgency": "medium"}
 
         # 3. Volume capitulation: at loss + volume spike
         if pnl_pct < -0.5 and volume_ratio > 2.0:

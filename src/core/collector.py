@@ -1,7 +1,6 @@
 import os
 import json
-import time
-from src.config import SYMBOLS, DATA_DIR, NEWS_SETTINGS, ENABLE_NEWS, CHART_RANGES, DEFAULT_CHART_RANGE, STYLE_PRESETS, STRATEGY_STYLE, BOT_CONFIG, parse_interval_minutes
+from src.config import SYMBOLS, DATA_DIR, ENABLE_NEWS, CHART_RANGES, DEFAULT_CHART_RANGE, STYLE_PRESETS, STRATEGY_STYLE, BOT_CONFIG, parse_interval_minutes
 from src.utils.logger import info, error, warning
 from src.utils.helpers import get_filename
 from src.utils.news_api import get_news_for_symbol
@@ -76,16 +75,26 @@ def fetch_prices(symbol):
 
 def fetch_news(symbol):
     """Получает новости для символа (только реальные!)"""
-    # Используем новый модуль для получения новостей
-    news = get_news_for_symbol(symbol)
-    info(f"✅ Получено {len(news)} новостей для {symbol}")
+    # Если новости отключены в конфигурации, сразу возвращаем пустой список
+    if not ENABLE_NEWS:
+        return []
+    
+    try:
+        # Используем новый модуль для получения новостей
+        news = get_news_for_symbol(symbol)
+        info(f"✅ Получено {len(news)} новостей для {symbol}")
 
-    # Логируем источник новостей
-    if news:
-        source = news[0].get("source", "Unknown")
-        info(f"📰 Источник: {source}")
+        # Логируем источник новостей
+        if news:
+            source = news[0].get("source", "Unknown")
+            info(f"📰 Источник: {source}")
 
-    return news
+        return news
+    except Exception as e:
+        # Если новости не доступны (например, из-за отсутствия API ключа),
+        # просто продолжаем цикл без них
+        error(f"⚠️ Невозможно получить новости для {symbol}: {str(e)}")
+        return []
 
 def fetch_htf_prices(symbol):
     """Fetches higher-timeframe candles for AISCALP multi-timeframe analysis."""

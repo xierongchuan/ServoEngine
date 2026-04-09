@@ -15,7 +15,7 @@ class ScalpStrategy(BaseStrategy):
     def get_strategy_section(self, ctx: dict) -> str:
         # Извлекаем переменные из контекста
         current_price = ctx.get("current_price", 0)
-        atr = ctx.get("atr", 0)
+        ctx.get("atr", 0)
         rsi = ctx.get("rsi", 50)
         volume_ratio = ctx.get("volume_ratio", 1.0)
         volume_status = ctx.get("volume_status", "Норма")

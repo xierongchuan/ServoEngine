@@ -2,8 +2,8 @@
 
 from typing import Any, Dict, Optional
 
-from src.config import BOT_CONFIG, POSITION_SIZE_PERCENT, STYLE_PRESETS
-from src.core import analyzer, predict, executor
+from src.config import POSITION_SIZE_PERCENT
+from src.core import analyzer, predict
 from src.core.decision_journal import DecisionJournal
 from src.core.trade_tracker import TradeTracker
 from src.core.execution.risk import calculate_dynamic_sl_tp, validate_risk_parameters, calculate_position_size
@@ -49,7 +49,7 @@ class AiscalpPipeline(StrategyPipeline):
         signal_quality = signal_data.get("quality", 0.0)
         close_signal = analysis_result.get("close_signal", {})
         regime_data = analysis_result.get("regime", {})
-        htf_data = analysis_result.get("htf_data", {})
+        analysis_result.get("htf_data", {})
         current_price = analysis_result.get("current_price", 0)
         regime_label = regime_data.get("regime", "UNKNOWN") if regime_data else "UNKNOWN"
 

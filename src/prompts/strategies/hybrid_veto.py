@@ -27,7 +27,7 @@ class HybridVetoStrategy(BaseStrategy):
         score = signal_data.get("score", 0)
         max_score = signal_data.get("max_score", 10)
         quality = signal_data.get("quality", 0.0)
-        confidence = signal_data.get("confidence", 0.0)
+        signal_data.get("confidence", 0.0)
         reasons = signal_data.get("reasons", [])
         details = signal_data.get("details", {})
         regime = signal_data.get("regime", "UNKNOWN")

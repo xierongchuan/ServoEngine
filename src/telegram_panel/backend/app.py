@@ -157,7 +157,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             # Keep connection alive; handle incoming messages if needed
-            data = await websocket.receive_text()
+            await websocket.receive_text()
             # Client messages (e.g. subscribe) can be handled here in the future
     except WebSocketDisconnect:
         manager.disconnect(websocket)

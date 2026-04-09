@@ -16,7 +16,7 @@ import json
 import requests
 import threading
 from urllib.parse import urlencode
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 
 from ..exchange_client import ExchangeClient
 from ..config.base import ExchangeConfig
@@ -677,12 +677,12 @@ class BingXClient(ExchangeClient):
                 }
                 response = self._make_request("post", "/openApi/swap/v2/trade/order", params)
                 if response and response.get("code") == 0:
-                    info(f"✅ TP set")
+                    info("✅ TP set")
                 else:
                     error(f"❌ TP failed: {response}")
                     all_ok = False
             else:
-                error(f"❌ Cannot set TP: position size unknown")
+                error("❌ Cannot set TP: position size unknown")
                 all_ok = False
 
         if sl:
@@ -699,12 +699,12 @@ class BingXClient(ExchangeClient):
                 }
                 response = self._make_request("post", "/openApi/swap/v2/trade/order", params)
                 if response and response.get("code") == 0:
-                    info(f"✅ SL set")
+                    info("✅ SL set")
                 else:
                     error(f"❌ SL failed: {response}")
                     all_ok = False
             else:
-                error(f"❌ Cannot set SL: position size unknown")
+                error("❌ Cannot set SL: position size unknown")
                 all_ok = False
 
         return all_ok

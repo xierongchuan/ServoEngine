@@ -224,11 +224,11 @@ def plot_symbol(symbol, time_range=None, current_position=None):
             else:
                 ts_dt = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
         except ValueError:
-             try:
-                 from dateutil import parser
-                 ts_dt = parser.parse(ts_str).replace(tzinfo=timezone.utc)
-             except:
-                 continue
+            try:
+                from dateutil import parser
+                ts_dt = parser.parse(ts_str).replace(tzinfo=timezone.utc)
+            except Exception:
+                continue
 
         all_dates.append(ts_dt)
 
@@ -373,7 +373,6 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     # Loop over all_dates to extract the relevant slice for plotting (filtering by cutoff_time)
     # Note: 'dates' list is already filtered above, but we need to filter SEB arrays index-wise
 
-    current_plot_index = 0
     for i, ts_dt in enumerate(all_dates):
         if ts_dt < cutoff_time:
             continue
@@ -517,10 +516,10 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     if current_position and current_position.get("status") == "OPEN":
         side = current_position.get("side", "UNKNOWN").upper()
         if side == "LONG":
-            pos_text = f"POS: LONG"
+            pos_text = "POS: LONG"
             pos_color = '#00c853' # Green
         elif side == "SHORT":
-            pos_text = f"POS: SHORT"
+            pos_text = "POS: SHORT"
             pos_color = '#d50000' # Red
 
     # Place next to Mode badge (offset x)
@@ -568,7 +567,6 @@ def plot_symbol(symbol, time_range=None, current_position=None):
 
     # Форматирование оси X
     # Используем стандартный AutoDateFormatter с явным UTC
-    import matplotlib.dates as mdates
     locator = mdates.AutoDateLocator()
     formatter = mdates.AutoDateFormatter(locator, tz=timezone.utc)
     # Настраиваем форматтер чтобы показывать часы и минуты

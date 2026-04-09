@@ -20,7 +20,7 @@ Indicators:
 import math
 import time
 from collections import deque
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from src.config import SCALP_SETTINGS
 from src.utils.logger import info, warning
@@ -164,7 +164,6 @@ class LightweightAnalyzer:
 
         # Track signal line history for correct prev_histogram calculation
         signal_history = []
-        prev_ema_macd_signal = 0.0
 
         for c in closes[self._macd_slow:]:
             ema_f_temp = c * k_mf + ema_f_temp * (1 - k_mf)
@@ -175,7 +174,6 @@ class LightweightAnalyzer:
             self._ema_macd_signal = sum(macd_history[:self._macd_signal]) / self._macd_signal
             k_sig = 2.0 / (self._macd_signal + 1)
             for i, m in enumerate(macd_history[self._macd_signal:]):
-                prev_ema_macd_signal = self._ema_macd_signal  # Save previous before update
                 self._ema_macd_signal = m * k_sig + self._ema_macd_signal * (1 - k_sig)
                 # Store ALL signal line values (not skipping any)
                 signal_history.append(self._ema_macd_signal)

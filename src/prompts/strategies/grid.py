@@ -43,7 +43,7 @@ class GridStrategy(BaseStrategy):
         inventory = ctx.get("inventory", 0)
         inventory_limit = ctx.get("inventory_limit", 100)
         atr_pct = ctx.get("atr_pct", 0.5)
-        current_price = ctx.get("current_price", 0)
+        ctx.get("current_price", 0)
         trend = ctx.get("trend", "NEUTRAL")
 
         inventory_pct = (inventory / inventory_limit * 100) if inventory_limit > 0 else 0

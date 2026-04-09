@@ -9,7 +9,6 @@
 
 import time
 import sys
-import json
 from datetime import datetime
 
 from src.core import collector
@@ -18,6 +17,7 @@ from src.core import predict
 from src.core import executor
 from src.core import monitor
 from src.core import plotter
+from src.exchanges.dto.models import PositionSide
 
 from src.utils.logger import info, error
 from src.exchanges.exchange_factory import get_exchange_client
@@ -81,9 +81,9 @@ def run_pipeline():
         pos_details = []
         for sym, pos_list in positions.items():
             for p in pos_list:
-                side = p.get('type', '?').upper()
-                size = p.get('size', 0)
-                pnl = p.get('pnl', 0)
+                side = 'BUY' if p.side == PositionSide.LONG else 'SELL'
+                size = p.size
+                pnl = p.unrealized_pnl
                 pos_details.append(f"{sym} ({side} {size} | PnL: {pnl})")
         info(f"📊 Текущие позиции: {', '.join(pos_details)}")
 
@@ -218,7 +218,7 @@ def run_multiprocess_pipeline():
             from src.exchanges.ws_data_provider import stop_ws_provider
             stop_ws_provider()
             info("📡 WebSocket провайдер остановлен")
-        except:
+        except Exception:
             pass
 
         # Graceful shutdown of ALL processes

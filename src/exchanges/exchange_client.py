@@ -10,10 +10,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, List, Dict
 
 from .dto.models import (
-    Position,
-    Order,
     Balance,
-    Kline,
     Ticker,
     OrderBook,
     CommissionRate,

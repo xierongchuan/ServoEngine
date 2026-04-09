@@ -2,8 +2,8 @@
 
 from typing import Any, Dict, Optional
 
-from src.config import BOT_CONFIG, POSITION_SIZE_PERCENT, DISABLED_SYMBOLS, STYLE_PRESETS
-from src.core import analyzer, predict, executor
+from src.config import POSITION_SIZE_PERCENT
+from src.core import analyzer, predict
 from src.core.decision_journal import DecisionJournal
 from src.core.trade_tracker import TradeTracker
 from src.core.execution.risk import calculate_dynamic_sl_tp, validate_risk_parameters, calculate_position_size
