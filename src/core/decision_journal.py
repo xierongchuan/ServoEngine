@@ -249,12 +249,10 @@ class DecisionJournal:
 
     @staticmethod
     def _shorten_reason(reason: str) -> str:
-        """Сокращает reason до ~40 символов."""
+        """Возвращает полную reason без сокращения."""
         if not reason:
             return "—"
         # Берём первую часть до |
         parts = reason.split("|")
         short = parts[0].strip()
-        if len(short) > 40:
-            short = short[:37] + "..."
         return short

@@ -6,6 +6,9 @@ Runs the complete trading pipeline for ONE symbol in isolation.
 import time
 import os
 
+from src.utils.logger import info, warning, error
+from src.config import BOT_CONFIG
+
 # Implements the pipeline for a single process
 
 def setup_trading_context(symbol: str) -> dict:
@@ -198,14 +201,13 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
         tracker = TradeTracker()
         journal = DecisionJournal()
 
-        # Run trading loop
-        run_trading_loop(symbol, tracker, journal)
+        # Run MACDX loop
+        run_macdx_loop(symbol, tracker, journal, ws_cache, ws_ready)
 
     except KeyboardInterrupt:
         from src.utils.logger import info
         info(f"🛑 [{symbol}] Process terminated.")
     except Exception as e:
-        from src.utils.logger import error
         error(f"CRITICAL WORKER INIT ERROR {symbol}: {e}")
         import traceback
         traceback.print_exc()
@@ -231,7 +233,7 @@ def setup_worker(symbol: str, ws_cache=None, ws_ready=None):
     info(f"🚀 [PROCESS START] Запущен процесс для {symbol} (PID: {os.getpid()})")
 
     # Check if SCALP mode — use dedicated engine
-    from src.config import STRATEGY_STYLE
+    from src.config import STRATEGY_STYLE, BOT_CONFIG
     if STRATEGY_STYLE == "SCALP":
         info(f"⚡ [{symbol}] SCALP mode — launching ScalpEngine")
         from src.core.scalp_engine import ScalpEngine
@@ -239,4 +241,60 @@ def setup_worker(symbol: str, ws_cache=None, ws_ready=None):
         engine.run()  # Blocks forever
         return True
 
+    # Check if MACDX mode — use MacdxPipeline
+    if STRATEGY_STYLE == "MACDX":
+        info(f"📊 [{symbol}] MACDX mode — launching MacdxPipeline")
+        from src.core.strategies.macdx import MacdxPipeline
+        pipeline = MacdxPipeline(BOT_CONFIG)
+        # Run in loop
+        while True:
+            try:
+                prediction = pipeline.run_cycle(symbol, ws_cache, ws_ready)
+                if prediction:
+                    # Here we could execute prediction if needed
+                    pass
+                time.sleep(60)  # MACDX loop interval
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                error(f"[{symbol}] MACDX pipeline error: {e}")
+                time.sleep(5)
+        return True
+
     return False
+
+
+def get_executor():
+    """Get executor instance."""
+    from src.core.executor import Executor
+    return Executor()
+
+def run_macdx_loop(symbol: str, tracker, journal, ws_cache=None, ws_ready=None):
+    """Запускает цикл MACDX пайплайна с исполнением сигналов."""
+    from src.core.strategies.macdx import MacdxPipeline
+
+    pipeline = MacdxPipeline(BOT_CONFIG)
+    executor = get_executor()
+
+    while True:
+        try:
+            info(f"[{symbol}] Starting MACDX cycle")
+            prediction = pipeline.run_cycle(symbol, ws_cache, ws_ready)
+            info(f"[{symbol}] Prediction: {prediction}")
+            if prediction and prediction.get('action') in ('buy', 'sell'):
+                info(f"[{symbol}] Executing {prediction['action']} signal")
+                result = executor.execute_prediction(prediction)
+                if result:
+                    info(f"[{symbol}] Order executed: {result}")
+                else:
+                    warning(f"[{symbol}] Order execution failed")
+            else:
+                info(f"[{symbol}] No action in prediction")
+            time.sleep(60)  # MACDX interval
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            error(f"[{symbol}] MACDX loop error: {e}")
+            import traceback
+            traceback.print_exc()
+            time.sleep(5)
