@@ -56,7 +56,9 @@ def main():
             engine = BacktestEngine(args.symbol, args.strategy, args.balance)
             result = engine.run()
         except Exception as e:
+            import traceback
             error(f"Exception in backtest: {e}")
+            traceback.print_exc()
             result = {}
 
         if result and result.get("total_trades", 0) > 0:
@@ -73,6 +75,8 @@ def main():
             print(f"Sharpe Ratio: {result.get('sharpe_ratio', 0):.2f}")
             print(f"Max Drawdown: {result.get('max_drawdown', 0):.2f}")
             print(f"Commands Issued: {result.get('commands_issued', 0)}")
+            if result.get("chart_path"):
+                print(f"📊 График: {result['chart_path']}")
             print(f"Отчет сохранен в data/backtest_result.json")
             print("✅ Бэктест завершен")
         elif result:
