@@ -16,7 +16,7 @@
   },
 
   "defaults": {
-    "sl_percent": 0.01,
+    "sl_percent": 0.03,
     "tp_percent": 0.03,
     "_description": "Default SL/TP percentages when not provided by strategy signal"
   },
