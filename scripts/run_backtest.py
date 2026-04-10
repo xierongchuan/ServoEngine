@@ -11,8 +11,8 @@ import argparse
 import os
 import sys
 
-# Добавить src в путь
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+# Добавить корень проекта в путь
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.backtest.engine import BacktestEngine
 from src.config_loader import load_backtest_config, clear_config_cache

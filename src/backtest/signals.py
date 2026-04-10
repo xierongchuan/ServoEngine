@@ -82,18 +82,18 @@ class SignalGenerator:
 
     def _get_signal_gen(self):
         """Ленивая инициализация генератора сигналов стратегии."""
-        if not hasattr(self, '_signal_gen_instance'):
-            strategy_lower = self.strategy.lower()
-            if strategy_lower == "macdx":
-                from ..core.signals.macdx import MacdxSignalGenerator as SignalGen
-            elif strategy_lower == "hybrid":
-                from ..core.signals.hybrid import HybridSignalGenerator as SignalGen
-            elif strategy_lower == "aiscalp":
-                from ..core.signals.aiscalp import AiscalpSignalGenerator as SignalGen
-            else:
-                self._signal_gen_instance = None
-                return None
-            self._signal_gen_instance = SignalGen(self.config)
+        # Всегда пересоздавать для учёта новых весов из конфига
+        strategy_lower = self.strategy.lower()
+        if strategy_lower == "macdx":
+            from ..core.signals.macdx import MacdxSignalGenerator as SignalGen
+        elif strategy_lower == "hybrid":
+            from ..core.signals.hybrid import HybridSignalGenerator as SignalGen
+        elif strategy_lower == "aiscalp":
+            from ..core.signals.aiscalp import AiscalpSignalGenerator as SignalGen
+        else:
+            self._signal_gen_instance = None
+            return None
+        self._signal_gen_instance = SignalGen(self.config)
         return self._signal_gen_instance
 
     def generate_signal(self, klines: List[Dict[str, Any]], index: int,

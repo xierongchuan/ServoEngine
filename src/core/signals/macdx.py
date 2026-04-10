@@ -534,20 +534,16 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         reasons = []
         confirmations = 0
 
-        if (
-            long_score >= min_score
-            and long_score > short_score
-            and long_confirmations >= min_confirmations
-        ):
+        # DEBUG
+        print(f"[MACDX] DEBUG: long_score={long_score}, short_score={short_score}, min_score={min_score}")
+
+        # Упрощённая логика: только score (веса определяют силу сигнала)
+        if long_score >= min_score and long_score > short_score:
             signal = "BUY"
             score = long_score
             reasons = long_reasons
             confirmations = long_confirmations
-        elif (
-            short_score >= min_score
-            and short_score > long_score
-            and short_confirmations >= min_confirmations
-        ):
+        elif short_score >= min_score and short_score > long_score:
             signal = "SELL"
             score = short_score
             reasons = short_reasons

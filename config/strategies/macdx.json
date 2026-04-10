@@ -22,11 +22,11 @@
     "no_exhaustion_weight": 1,
     "volume_weight": 2,
     "min_score_for_signal": 4,
-    "min_confirmations": 3,
+
     "min_volume_ratio": 0.7,
     "min_atr_ratio": 0.003,
-    "rsi_long_max": 65,
-    "rsi_long_min": 25,
+    "rsi_long_max": 95,
+    "rsi_long_min": 30,
     "rsi_short_max": 75,
     "rsi_short_min": 35,
     "bb_width_threshold": 0.5,
@@ -86,8 +86,8 @@
     "emergency": {
       "enabled": true,
       "max_loss_atr": 3.0,
-      "max_loss_pct": 3.1,
-      "max_hold_candles": 20,
+      "max_loss_pct": 3.0,
+      "max_hold_candles": 25,
       "protect_matching_trend": true
     },
     "regime_adaptation": {
