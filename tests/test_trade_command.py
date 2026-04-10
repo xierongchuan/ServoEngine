@@ -499,3 +499,38 @@ class TestBacktestSimulatorAsExecutor:
         pos = bt.positions["BTC-USDT"]
         assert pos["sl_price"] == 49500.0
         assert pos["tp_price"] == 51500.0
+
+    def test_update_unrealized_pnl(self):
+        """update_unrealized_pnl updates P&L without closing positions."""
+        from src.backtest.simulator import BacktestSimulator
+        bt = BacktestSimulator(initial_balance=10000.0)
+
+        bt.execute(TradeCommand.entry(
+            symbol="BTC-USDT", side="BUY", current_price=50000.0,
+            confidence=0.8, stop_loss=49000.0, take_profit=52000.0,
+        ))
+
+        # Price goes up — unrealized PnL should be positive
+        bt.update_unrealized_pnl({"BTC-USDT": 51000.0})
+        assert bt.positions["BTC-USDT"]["unrealized_pnl"] > 0
+        assert "BTC-USDT" in bt.positions  # Position NOT closed
+
+        # Price goes down — unrealized PnL should go below SL but position stays open
+        bt.update_unrealized_pnl({"BTC-USDT": 48000.0})
+        assert bt.positions["BTC-USDT"]["unrealized_pnl"] < 0
+        assert "BTC-USDT" in bt.positions  # Still NOT closed (no SL/TP check)
+
+    def test_update_positions_closes_on_sl(self):
+        """update_positions (legacy) checks SL/TP and closes via TradeCommand."""
+        from src.backtest.simulator import BacktestSimulator
+        bt = BacktestSimulator(initial_balance=10000.0)
+
+        bt.execute(TradeCommand.entry(
+            symbol="BTC-USDT", side="BUY", current_price=50000.0,
+            confidence=0.8, stop_loss=49000.0, take_profit=52000.0,
+        ))
+
+        # Price hits SL — update_positions should close via command
+        bt.update_positions({"BTC-USDT": 48500.0})
+        assert "BTC-USDT" not in bt.positions  # Closed by SL
+        assert bt.pnl_tracker.trades  # Trade recorded

@@ -12,9 +12,6 @@ class BacktestSimulator(BaseCommandExecutor):
     Принимает TradeCommand от стратегий и исполняет их на виртуальном балансе.
     Это позволяет запускать любую стратегию (MACDX, HYBRID, и т.д.)
     на исторических данных без изменения кода стратегии.
-
-    Также поддерживает прямые вызовы open_position/close_position
-    для обратной совместимости с существующим кодом BacktestEngine.
     """
 
     def __init__(self, initial_balance: float = 1000.0, leverage: float = 5.0, position_size_percent: float = 0.1):
@@ -170,9 +167,8 @@ class BacktestSimulator(BaseCommandExecutor):
         info(f"❌ Закрыта позиция {side} для {symbol} по {exit_price:.2f}, P&L {pnl:.2f}, причина: {reason}")
         return position
 
-    def update_positions(self, current_prices: Dict[str, float]):
-        """Обновляет позиции: проверяет SL/TP, рассчитывает unrealized P&L."""
-        to_close = []
+    def update_unrealized_pnl(self, current_prices: Dict[str, float]):
+        """Обновляет unrealized P&L для открытых позиций (без SL/TP проверки)."""
         for symbol, position in self.positions.items():
             if symbol not in current_prices:
                 continue
@@ -181,53 +177,33 @@ class BacktestSimulator(BaseCommandExecutor):
             entry_price = position["entry_price"]
             size = position["size"]
 
-            # Unrealized P&L
             if side == "LONG":
                 unrealized_pnl = (current_price - entry_price) * size / entry_price
             else:
                 unrealized_pnl = (entry_price - current_price) * size / entry_price
             position["unrealized_pnl"] = unrealized_pnl
 
-            # SL/TP check
-            sl_price = position.get("sl_price")
-            tp_price = position.get("tp_price")
+    def update_positions(self, current_prices: Dict[str, float]):
+        """
+        Обновляет позиции: unrealized P&L + SL/TP проверка.
 
-            if sl_price is not None:
-                if (side == "LONG" and current_price <= sl_price) or \
-                   (side == "SHORT" and current_price >= sl_price):
-                    to_close.append((symbol, current_price, "SL"))
-                    continue
+        Для нового TradeCommand-потока используйте check_sl_tp_command()
+        и update_unrealized_pnl() по отдельности — это даёт контроль
+        над тем, как именно обрабатываются выходы.
+        """
+        self.update_unrealized_pnl(current_prices)
 
-            if tp_price is not None:
-                if (side == "LONG" and current_price >= tp_price) or \
-                   (side == "SHORT" and current_price <= tp_price):
-                    to_close.append((symbol, current_price, "TP"))
+        # SL/TP check (через check_sl_tp_command + execute для единообразия)
+        to_close = []
+        for symbol in list(self.positions.keys()):
+            if symbol not in current_prices:
+                continue
+            cmd = self.check_sl_tp_command(symbol, current_prices[symbol])
+            if cmd:
+                to_close.append(cmd)
 
-        # Закрыть позиции
-        for symbol, price, reason in to_close:
-            self.close_position(symbol, price, reason)
-
-    def check_exit_conditions(self, symbol: str, current_price: float, rsi: float, macd_hist: float) -> bool:
-        """Проверяет условия выхода по стратегии (для MACDX)."""
-        if symbol not in self.positions:
-            return False
-        position = self.positions[symbol]
-        side = position["side"]
-
-        # MACD reversal
-        macd_hist_prev = position.get("macd_hist_prev", 0)
-        if (side == "LONG" and macd_hist < 0 and macd_hist_prev >= 0) or \
-           (side == "SHORT" and macd_hist > 0 and macd_hist_prev <= 0):
-            if position["unrealized_pnl"] >= 0.005 or position["unrealized_pnl"] < -0.01:
-                self.close_position(symbol, current_price, "MACD reversal")
-                return True
-
-        # RSI extreme
-        if (side == "LONG" and rsi > 80) or (side == "SHORT" and rsi < 20):
-            self.close_position(symbol, current_price, "RSI extreme")
-            return True
-
-        return False
+        for cmd in to_close:
+            self.execute(cmd)
 
     def get_current_balance(self) -> float:
         """Текущий баланс."""

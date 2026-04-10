@@ -14,21 +14,18 @@ class BacktestEngine:
     """
     Основной движок бэктеста, объединяет все компоненты.
 
-    Поддерживает два режима работы:
-    1. Классический: SignalGenerator → BacktestSimulator (open_position/close_position)
-    2. TradeCommand: SignalGenerator → TradeCommand → BacktestSimulator.execute()
+    Работает через единый TradeCommand DTO:
+    SignalGenerator → TradeCommand → BacktestSimulator.execute()
 
-    Режим TradeCommand включается параметром use_commands=True.
-    В этом режиме стратегия генерирует TradeCommand, а BacktestSimulator
-    (реализующий BaseCommandExecutor) их исполняет — точно так же,
-    как реальный CommandExecutor исполняет команды на бирже.
+    BacktestSimulator реализует BaseCommandExecutor, поэтому
+    тот же интерфейс исполнения используется и в реальной торговле,
+    и в бэктестах (подмена executor — единственная разница).
     """
 
     def __init__(self, symbol: str, strategy: str = "MACDX",
-                 initial_balance: float = 1000.0, use_commands: bool = False):
+                 initial_balance: float = 1000.0):
         self.symbol = symbol
         self.strategy = strategy
-        self.use_commands = use_commands
         self.config = self._load_config()
         self.timeframe = self.config.get("timeframe", "15m")
         self.data_loader = DataLoader(symbol, self.timeframe)
@@ -60,15 +57,18 @@ class BacktestEngine:
         )
 
     def run(self) -> Dict[str, Any]:
-        """Запускает бэктест."""
-        if self.use_commands:
-            return self._run_with_commands()
-        return self._run_classic()
+        """
+        Запускает бэктест через единый TradeCommand поток.
 
-    def _run_with_commands(self) -> Dict[str, Any]:
-        """Запуск бэктеста через TradeCommand (новый режим)."""
+        Для каждой свечи:
+        1. Проверить SL/TP → TradeCommand.close()
+        2. Обновить unrealized P&L
+        3. Сгенерировать сигнал → TradeCommand
+        4. Исполнить через BacktestSimulator.execute()
+        5. Проверить стратегические условия выхода
+        """
         try:
-            info(f"🚀 Запуск бэктеста (TradeCommand) для {self.symbol} стратегии {self.strategy}")
+            info(f"🚀 Запуск бэктеста для {self.symbol} стратегии {self.strategy}")
 
             klines = self.data_loader.load_data(fetch_if_missing=True)
             if not klines:
@@ -86,13 +86,13 @@ class BacktestEngine:
                     self.simulator.execute(sl_tp_cmd)
                     continue
 
-                # 2. Обновить unrealized P&L
-                self.simulator.update_positions({self.symbol: current_price})
+                # 2. Обновить unrealized P&L (без SL/TP — уже проверено выше)
+                self.simulator.update_unrealized_pnl({self.symbol: current_price})
 
-                # 3. Генерировать сигнал и конвертировать в TradeCommand
+                # 3. Сгенерировать сигнал и конвертировать в TradeCommand
                 try:
                     signal = self.signal_generator.generate_signal(klines, i)
-                    command = self._signal_to_command(signal, current_price, kline)
+                    command = self._signal_to_command(signal, current_price)
                     result = self.simulator.execute(command)
 
                     if command.action.is_entry:
@@ -101,11 +101,10 @@ class BacktestEngine:
                     error(f"Ошибка на индексе {i}: {e}")
                     continue
 
-                # 4. Проверить стратегические условия выхода
-                indicators = self.signal_generator.calculate_indicators(klines, i)
-                rsi = indicators.get("rsi", 50)
-                macd_hist = indicators.get("macd_hist", 0)
-                self.simulator.check_exit_conditions(self.symbol, current_price, rsi, macd_hist)
+                # 4. Проверить стратегические условия выхода → TradeCommand
+                exit_cmd = self._check_exit_command(klines, i, current_price)
+                if exit_cmd:
+                    self.simulator.execute(exit_cmd)
 
             # Закрыть все открытые позиции
             for symbol in list(self.simulator.positions.keys()):
@@ -113,6 +112,7 @@ class BacktestEngine:
                     symbol=symbol,
                     current_price=klines[-1]["closePrice"] if klines else 0,
                     reason="end_of_data",
+                    strategy=self.strategy,
                 )
                 self.simulator.execute(close_cmd)
 
@@ -122,8 +122,7 @@ class BacktestEngine:
             error(f"❌ Ошибка в бэктесте: {e}")
             return {}
 
-    def _signal_to_command(self, signal: Dict[str, Any], current_price: float,
-                           kline: Dict[str, Any]) -> TradeCommand:
+    def _signal_to_command(self, signal: Dict[str, Any], current_price: float) -> TradeCommand:
         """Конвертирует сигнал от SignalGenerator в TradeCommand."""
         action = signal.get("action", "HOLD")
 
@@ -145,57 +144,36 @@ class BacktestEngine:
                 strategy=self.strategy,
             )
 
-    def _run_classic(self) -> Dict[str, Any]:
-        """Запуск бэктеста классическим способом (обратная совместимость)."""
-        try:
-            info(f"🚀 Запуск бэктеста для {self.symbol} стратегии {self.strategy}")
+    def _check_exit_command(self, klines, index: int, current_price: float) -> Optional[TradeCommand]:
+        """Проверяет стратегические условия выхода и возвращает TradeCommand.close() или None."""
+        if self.symbol not in self.simulator.positions:
+            return None
 
-            klines = self.data_loader.load_data(fetch_if_missing=True)
-            if not klines:
-                error("❌ Нет данных для бэктеста")
-                return {}
+        indicators = self.signal_generator.calculate_indicators(klines, index)
+        rsi = indicators.get("rsi", 50)
+        macd_hist = indicators.get("macd_hist", 0)
 
-            info(f"📊 Данные загружены из {self.data_loader.data_path}: {len(klines)} свечей")
+        position = self.simulator.positions[self.symbol]
+        side = position["side"]
 
-            for i, kline in enumerate(klines):
-                current_price = kline["closePrice"]
-                current_prices = {self.symbol: current_price}
+        # MACD reversal
+        macd_hist_prev = position.get("macd_hist_prev", 0)
+        if (side == "LONG" and macd_hist < 0 and macd_hist_prev >= 0) or \
+           (side == "SHORT" and macd_hist > 0 and macd_hist_prev <= 0):
+            if position["unrealized_pnl"] >= 0.005 or position["unrealized_pnl"] < -0.01:
+                return TradeCommand.close(
+                    symbol=self.symbol, current_price=current_price,
+                    reason="MACD reversal", strategy=self.strategy,
+                )
 
-                # Обновить позиции (SL/TP)
-                self.simulator.update_positions(current_prices)
+        # RSI extreme
+        if (side == "LONG" and rsi > 80) or (side == "SHORT" and rsi < 20):
+            return TradeCommand.close(
+                symbol=self.symbol, current_price=current_price,
+                reason="RSI extreme", strategy=self.strategy,
+            )
 
-                # Генерировать сигнал
-                try:
-                    signal = self.signal_generator.generate_signal(klines, i)
-                    action = signal.get("action", "HOLD")
-
-                    if action in ["BUY", "SELL"]:
-                        side = "LONG" if action == "BUY" else "SHORT"
-                        self.simulator.open_position(self.symbol, side, current_price)
-                        info(f"📈 Сигнал {action} на {self.symbol} по {current_price:.2f}")
-                    elif action == "HOLD":
-                        info(f"⏸️ HOLD на {self.symbol} по {current_price:.2f}, причина: {signal.get('reason', 'нет')}")
-                except Exception as e:
-                    error(f"Ошибка генерации сигнала на индексе {i}: {e}")
-                    continue
-
-                # Проверить условия выхода (один вызов calculate_indicators вместо двух)
-                indicators = self.signal_generator.calculate_indicators(klines, i)
-                rsi = indicators.get("rsi", 50)
-                macd_hist = indicators.get("macd_hist", 0)
-                self.simulator.check_exit_conditions(self.symbol, current_price, rsi, macd_hist)
-
-            # Закрыть все открытые позиции по market
-            for symbol in list(self.simulator.positions.keys()):
-                position = self.simulator.positions[symbol]
-                exit_price = klines[-1]["closePrice"] if klines else position["entry_price"]
-                self.simulator.close_position(symbol, exit_price, "end_of_data")
-
-            return self._build_result(klines)
-
-        except Exception as e:
-            error(f"❌ Ошибка в бэктесте: {e}")
-            return {}
+        return None
 
     def _build_result(self, klines) -> Dict[str, Any]:
         """Формирует результат бэктеста."""
@@ -224,7 +202,7 @@ class BacktestEngine:
             "sell_trades": sell_trades,
             "sharpe_ratio": round(metrics["sharpe_ratio"], 2),
             "max_drawdown": round(metrics["max_drawdown"], 2),
-            "use_commands": self.use_commands,
+            "commands_issued": len(self.simulator.command_history),
         }
         result["description"] = self._generate_description(result)
         self._save_report(result)
@@ -256,6 +234,7 @@ class BacktestEngine:
 ### Риск-метрики
 - **Sharpe Ratio:** {result.get('sharpe_ratio', 0):.2f}
 - **Максимальная просадка:** {result.get('max_drawdown', 0):.2f} USDT
+- **TradeCommand команд:** {result.get('commands_issued', 0)}
 
 ### Оценка
 {f"Стратегия показала {'хорошие' if result.get('win_rate', 0) > 0.6 and result.get('sharpe_ratio', 0) > 1 else 'средние' if result.get('win_rate', 0) > 0.5 else 'плохие'} результаты. " +

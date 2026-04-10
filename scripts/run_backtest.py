@@ -2,6 +2,9 @@
 """
 Скрипт для запуска бэктеста.
 Использование: python scripts/run_backtest.py --symbol BTCUSDT --strategy MACDX --balance 1000
+
+Бэктест работает через единый TradeCommand DTO:
+SignalGenerator → TradeCommand → BacktestSimulator.execute()
 """
 
 import argparse
@@ -51,26 +54,26 @@ def main():
             error(f"Exception in backtest: {e}")
             result = {}
 
-        if result and "metrics" in result:
-            metrics = result["metrics"]
+        if result and result.get("total_trades", 0) > 0:
             print("\nРезультаты бэктеста:")
             print(f"Символ: {result.get('symbol', 'N/A')}")
             print(f"Стратегия: {result.get('strategy', 'N/A')}")
-            print(f"Total P&L: {metrics.get('total_pnl', 0):.2f}")
-            print(f"Realized P&L: {metrics.get('realized_pnl', 0):.2f}")
-            print(f"Unrealized P&L: {metrics.get('unrealized_pnl', 0):.2f}")
-            print(f"Win Rate: {metrics.get('win_rate', 0):.2%}")
-            print(f"Total Trades: {metrics.get('total_trades', 0)}")
-            print(f"Sharpe Ratio: {metrics.get('sharpe_ratio', 0):.2f}")
-            print(f"Max Drawdown: {metrics.get('max_drawdown', 0):.2f}")
-            print(f"Commission Impact: {metrics.get('commission_impact', 0):.4f}")
+            print(f"Total P&L: {result.get('pnl', 0):.2f}")
+            print(f"Net P&L: {result.get('net_pnl', 0):.2f}")
+            print(f"Total Commission: {result.get('total_commission', 0):.2f}")
+            print(f"Win Rate: {result.get('win_rate', 0):.2%}")
+            print(f"Total Trades: {result.get('total_trades', 0)}")
+            print(f"Profitable: {result.get('profitable_trades', 0)}")
+            print(f"Losing: {result.get('losing_trades', 0)}")
+            print(f"Sharpe Ratio: {result.get('sharpe_ratio', 0):.2f}")
+            print(f"Max Drawdown: {result.get('max_drawdown', 0):.2f}")
+            print(f"Commands Issued: {result.get('commands_issued', 0)}")
             print(f"Отчет сохранен в data/backtest_result.json")
             print("✅ Бэктест завершен")
+        elif result:
+            print(f"\nБэктест завершен: 0 сделок за период {result.get('data_period', 'N/A')}")
         else:
-            # error("Бэктест не выполнен")
-            print(
-                f"Debug: result={bool(result)}, metrics in result={'metrics' in result if result else False}"
-            )
+            print("❌ Бэктест не выполнен (нет данных или ошибка)")
 
     except Exception as e:
         error(f"Ошибка запуска бэктеста: {e}")

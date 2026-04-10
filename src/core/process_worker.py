@@ -244,27 +244,11 @@ def setup_worker(symbol: str, ws_cache=None, ws_ready=None):
     # Check if MACDX mode — use MacdxPipeline with TradeCommand
     if STRATEGY_STYLE == "MACDX":
         info(f"📊 [{symbol}] MACDX mode — launching MacdxPipeline (TradeCommand)")
-        from src.core.strategies.macdx import MacdxPipeline
-        from src.core.commands import CommandExecutor
-        pipeline = MacdxPipeline(BOT_CONFIG)
-        cmd_executor = CommandExecutor()
-        # Run in loop
-        while True:
-            try:
-                command = pipeline.generate_command(symbol, ws_cache, ws_ready)
-                if command and command.action.is_entry:
-                    info(f"[{symbol}] Executing TradeCommand: {command.action.value}")
-                    result = cmd_executor.execute(command)
-                    if result.success:
-                        info(f"[{symbol}] Command executed: {result.message}")
-                    else:
-                        warning(f"[{symbol}] Command failed: {result.message}")
-                time.sleep(60)  # MACDX loop interval
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                error(f"[{symbol}] MACDX pipeline error: {e}")
-                time.sleep(5)
+        from src.core.trade_tracker import TradeTracker
+        from src.core.decision_journal import DecisionJournal
+        tracker = TradeTracker()
+        journal = DecisionJournal()
+        run_macdx_loop(symbol, tracker, journal, ws_cache, ws_ready)
         return True
 
     return False
