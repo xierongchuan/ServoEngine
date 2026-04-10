@@ -33,6 +33,17 @@ class BacktestEngine:
         self.data_loader = DataLoader(symbol, self.timeframe)
         self.signal_generator = SignalGenerator(strategy, self.config)
 
+        # Создаём MacdxSignalGenerator для использования should_close()
+        # чтобы бэктест использовал ту же логику выходов, что и live
+        self._macdx_signal_gen = None
+        self._exit_context: Dict[str, Any] = {}
+        if strategy.upper() == "MACDX":
+            try:
+                from ..core.signals.macdx import MacdxSignalGenerator
+                self._macdx_signal_gen = MacdxSignalGenerator(self.config)
+            except ImportError:
+                pass
+
         # Capital: CLI arg > config/backtest.json > 1000.0
         capital_config = self.backtest_config.get("capital", {})
         balance = initial_balance or capital_config.get("initial_balance", 1000.0)
@@ -107,6 +118,7 @@ class BacktestEngine:
                 sl_tp_cmd = self.simulator.check_sl_tp_command(self.symbol, current_price)
                 if sl_tp_cmd:
                     self.simulator.execute(sl_tp_cmd)
+                    self._exit_context.clear()
                     continue
 
                 # 2. Обновить unrealized P&L (без SL/TP — уже проверено выше)
@@ -119,6 +131,7 @@ class BacktestEngine:
                     result = self.simulator.execute(command)
 
                     if command.action.is_entry:
+                        self._exit_context.clear()
                         info(f"📈 {command.action.value.upper()} на {self.symbol} по {current_price:.2f}")
                 except Exception as e:
                     error(f"Ошибка на индексе {i}: {e}")
@@ -172,16 +185,53 @@ class BacktestEngine:
 
     def _check_exit_command(self, klines, index: int, current_price: float,
                             cached_indicators: Optional[Dict[str, Any]] = None) -> Optional[TradeCommand]:
-        """Проверяет стратегические условия выхода и возвращает TradeCommand.close() или None."""
+        """Проверяет стратегические условия выхода и возвращает TradeCommand.close() или None.
+
+        Для MACDX стратегии делегирует в MacdxSignalGenerator.should_close(),
+        чтобы бэктест использовал ту же 7-уровневую систему выходов, что и live.
+        """
         if self.symbol not in self.simulator.positions:
             return None
 
+        position = self.simulator.positions[self.symbol]
+        side = position["side"]
+
+        # Для MACDX используем полноценную систему выходов из live-кода
+        if self._macdx_signal_gen is not None:
+            indicators = cached_indicators or self.signal_generator.calculate_indicators(klines, index)
+
+            # Формируем analysis dict совместимый с should_close()
+            analysis = dict(indicators)
+            analysis["current_price"] = current_price
+
+            # Добавляем open_prices если отсутствуют (нужны для impulse candle detection)
+            if "open_prices" not in analysis:
+                analysis["open_prices"] = [k["openPrice"] for k in klines[:index + 1]]
+
+            # Формируем position dict совместимый с should_close()
+            bt_position = {
+                "type": side,
+                "entry": position["entry_price"],
+                "avgPrice": position["entry_price"],
+            }
+
+            close_signal = self._macdx_signal_gen.should_close(
+                analysis, bt_position, exit_context=self._exit_context
+            )
+
+            if close_signal.get("should_close"):
+                reason = close_signal.get("reason", "Strategy exit")
+                self._exit_context.clear()
+                return TradeCommand.close(
+                    symbol=self.symbol, current_price=current_price,
+                    reason=reason, strategy=self.strategy,
+                )
+            return None
+
+        # Fallback для не-MACDX стратегий: простые правила
         indicators = cached_indicators or self.signal_generator.calculate_indicators(klines, index)
         rsi = indicators.get("rsi", 50)
         macd_hist = indicators.get("macd_hist", 0)
-
-        position = self.simulator.positions[self.symbol]
-        side = position["side"]
 
         exit_rules = self.backtest_config.get("exit_rules", {})
 

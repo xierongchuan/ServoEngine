@@ -47,6 +47,8 @@ class SignalGenerator:
         # Volume ratio
         volume_ratio = volumes[-1] / (sum(volumes[-20:]) / 20) if len(volumes) >= 20 else 1
 
+        opens = [k["openPrice"] for k in klines[:index+1]]
+
         return {
             "rsi": rsi,
             "rsi_values": rsi_values,
@@ -61,7 +63,8 @@ class SignalGenerator:
             "atr": atr,
             "atr_ratio": atr_ratio,
             "volume_ratio": volume_ratio,
-            "close_prices": closes
+            "close_prices": closes,
+            "open_prices": opens,
         }
 
     def generate_signal(self, klines: List[Dict[str, Any]], index: int) -> Dict[str, Any]:
