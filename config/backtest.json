@@ -1,0 +1,41 @@
+{
+  "_description": "Backtest engine configuration",
+  "_version": "1.0.0",
+
+  "capital": {
+    "initial_balance": 1000.0,
+    "mode": "isolated",
+    "_mode_options": ["isolated", "full_capital"],
+    "_mode_description": "isolated = fixed initial_balance; full_capital = use entire balance for position sizing"
+  },
+
+  "commission": {
+    "maker_rate": 0.0002,
+    "taker_rate": 0.0005,
+    "_description": "Commission rates as decimals (0.0002 = 0.02%)"
+  },
+
+  "defaults": {
+    "sl_percent": 0.01,
+    "tp_percent": 0.03,
+    "_description": "Default SL/TP percentages when not provided by strategy signal"
+  },
+
+  "exit_rules": {
+    "macd_reversal": {
+      "enabled": true,
+      "profit_threshold": 0.005,
+      "loss_threshold": -0.01
+    },
+    "rsi_extreme": {
+      "enabled": true,
+      "long_exit_above": 80,
+      "short_exit_below": 20
+    }
+  },
+
+  "report": {
+    "save_to_file": true,
+    "output_path": "data/backtest_result.json"
+  }
+}

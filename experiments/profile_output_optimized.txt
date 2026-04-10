@@ -1,0 +1,34 @@
+✅ Loaded configuration from config/ directory (new system)
+🔧 Strategy: MACDX, Leverage: 6x (from strategy config)
+🤖 AI Provider: OpenRouter (openrouter/free)
+⚠️ WARNING: API Key for provider 'openrouter' is missing!
+🌐 BingX API endpoint: https://open-api-vst.bingx.com (Demo (VST))
+📰 Новости: ОТКЛЮЧЕНЫ
+=== Бенчмарк (337 свечей) ===
+calculate_indicators x 337 свечей: 0.08s (0.2ms/свеча)
+
+=== Профиль (337 свечей) ===
+         445174 function calls in 0.188 seconds
+
+   Ordered by: cumulative time
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      337    0.011    0.000    0.187    0.001 /tmp/gh-issue-solver-1775829167923/src/backtest/signals.py:16(calculate_indicators)
+      307    0.038    0.000    0.066    0.000 /tmp/gh-issue-solver-1775829167923/src/backtest/signals.py:263(_calculate_atr)
+      307    0.017    0.000    0.057    0.000 /tmp/gh-issue-solver-1775829167923/src/backtest/signals.py:192(_calculate_macd_with_prev)
+      307    0.031    0.000    0.039    0.000 /tmp/gh-issue-solver-1775829167923/src/backtest/signals.py:120(_calculate_rsi_series)
+      614    0.021    0.000    0.033    0.000 /tmp/gh-issue-solver-1775829167923/src/backtest/signals.py:180(_calculate_ema_series)
+   258494    0.033    0.000    0.033    0.000 {method 'append' of 'list' objects}
+   112362    0.012    0.000    0.012    0.000 {built-in method builtins.abs}
+      614    0.008    0.000    0.009    0.000 /tmp/gh-issue-solver-1775829167923/src/backtest/signals.py:171(_calculate_ema)
+    56181    0.008    0.000    0.008    0.000 {built-in method builtins.max}
+     3370    0.002    0.000    0.003    0.000 {built-in method builtins.sum}
+      307    0.001    0.000    0.003    0.000 /tmp/gh-issue-solver-1775829167923/src/backtest/signals.py:247(_calculate_bb_width)
+      307    0.002    0.000    0.003    0.000 /tmp/gh-issue-solver-1775829167923/src/backtest/signals.py:255(_calculate_adx)
+     6447    0.001    0.000    0.001    0.000 /tmp/gh-issue-solver-1775829167923/src/backtest/signals.py:251(<genexpr>)
+     4912    0.001    0.000    0.001    0.000 {built-in method builtins.len}
+      307    0.000    0.000    0.000    0.000 {built-in method math.sqrt}
+        1    0.000    0.000    0.000    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+
+
+

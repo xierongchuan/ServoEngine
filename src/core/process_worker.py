@@ -241,24 +241,14 @@ def setup_worker(symbol: str, ws_cache=None, ws_ready=None):
         engine.run()  # Blocks forever
         return True
 
-    # Check if MACDX mode — use MacdxPipeline
+    # Check if MACDX mode — use MacdxPipeline with TradeCommand
     if STRATEGY_STYLE == "MACDX":
-        info(f"📊 [{symbol}] MACDX mode — launching MacdxPipeline")
-        from src.core.strategies.macdx import MacdxPipeline
-        pipeline = MacdxPipeline(BOT_CONFIG)
-        # Run in loop
-        while True:
-            try:
-                prediction = pipeline.run_cycle(symbol, ws_cache, ws_ready)
-                if prediction:
-                    # Here we could execute prediction if needed
-                    pass
-                time.sleep(60)  # MACDX loop interval
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                error(f"[{symbol}] MACDX pipeline error: {e}")
-                time.sleep(5)
+        info(f"📊 [{symbol}] MACDX mode — launching MacdxPipeline (TradeCommand)")
+        from src.core.trade_tracker import TradeTracker
+        from src.core.decision_journal import DecisionJournal
+        tracker = TradeTracker()
+        journal = DecisionJournal()
+        run_macdx_loop(symbol, tracker, journal, ws_cache, ws_ready)
         return True
 
     return False
@@ -270,26 +260,26 @@ def get_executor():
     return Executor()
 
 def run_macdx_loop(symbol: str, tracker, journal, ws_cache=None, ws_ready=None):
-    """Запускает цикл MACDX пайплайна с исполнением сигналов."""
+    """Запускает цикл MACDX пайплайна с исполнением через TradeCommand."""
     from src.core.strategies.macdx import MacdxPipeline
+    from src.core.commands import CommandExecutor
 
     pipeline = MacdxPipeline(BOT_CONFIG)
-    executor = get_executor()
+    cmd_executor = CommandExecutor()
 
     while True:
         try:
             info(f"[{symbol}] Starting MACDX cycle")
-            prediction = pipeline.run_cycle(symbol, ws_cache, ws_ready)
-            info(f"[{symbol}] Prediction: {prediction}")
-            if prediction and prediction.get('action') in ('buy', 'sell'):
-                info(f"[{symbol}] Executing {prediction['action']} signal")
-                result = executor.execute_prediction(prediction)
-                if result:
-                    info(f"[{symbol}] Order executed: {result}")
+            command = pipeline.generate_command(symbol, ws_cache, ws_ready)
+            if command:
+                info(f"[{symbol}] TradeCommand: {command.action.value} (conf={command.confidence:.2f})")
+                result = cmd_executor.execute(command)
+                if result.success:
+                    info(f"[{symbol}] Command result: {result.message}")
                 else:
-                    warning(f"[{symbol}] Order execution failed")
+                    warning(f"[{symbol}] Command failed: {result.message}")
             else:
-                info(f"[{symbol}] No action in prediction")
+                info(f"[{symbol}] No command generated")
             time.sleep(60)  # MACDX interval
         except KeyboardInterrupt:
             break

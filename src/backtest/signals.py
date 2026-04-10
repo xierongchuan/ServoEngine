@@ -10,6 +10,8 @@ class SignalGenerator:
         self.config = config or {}
         # Параметры из конфига
         self.rules = self.config.get("signal_rules", {})
+        # Кэш последних индикаторов для повторного использования в engine
+        self.last_indicators: Dict[str, Any] = {}
 
     def calculate_indicators(self, klines: List[Dict[str, Any]], index: int) -> Dict[str, Any]:
         """Рассчитывает индикаторы на основе последних свечей."""
@@ -21,16 +23,16 @@ class SignalGenerator:
         lows = [k["lowPrice"] for k in klines[:index+1]]
         volumes = [k["volume"] for k in klines[:index+1]]
 
-        # RSI (14)
-        rsi = self._calculate_rsi(closes, 14)
+        # RSI (14) — инкрементальный расчёт серии за один проход
+        rsi_values = self._calculate_rsi_series(closes, 14)
+        rsi = rsi_values[-1] if rsi_values else 50
 
         # EMA9, EMA21
         ema9 = self._calculate_ema(closes, 9)
         ema21 = self._calculate_ema(closes, 21)
 
-        # MACD (12,26,9)
-        macd_line, macd_signal, macd_hist = self._calculate_macd(closes)
-        macd_hist_prev = self._calculate_macd_hist_prev(closes[:-1]) if len(closes) > 1 else 0
+        # MACD (12,26,9) — с hist_prev за один вызов
+        macd_line, macd_signal, macd_hist, macd_hist_prev = self._calculate_macd_with_prev(closes)
 
         # BB width
         bb_width = self._calculate_bb_width(closes, 20)
@@ -47,7 +49,7 @@ class SignalGenerator:
 
         return {
             "rsi": rsi,
-            "rsi_values": self._rsi_values(closes, 14),
+            "rsi_values": rsi_values,
             "ema9": ema9,
             "ema21": ema21,
             "macd_line": macd_line,
@@ -65,26 +67,28 @@ class SignalGenerator:
     def generate_signal(self, klines: List[Dict[str, Any]], index: int) -> Dict[str, Any]:
         """Генерирует сигнал, используя оригинальный код стратегии MACDX."""
         analysis = self.calculate_indicators(klines, index)
+        self.last_indicators = analysis
         if not analysis:
             return {"action": "HOLD", "reason": "Недостаточно данных"}
 
         # Добавить current_price и другие ключи
         analysis["current_price"] = klines[index]["closePrice"]
 
-        # Динамический импорт SignalGenerator для стратегии
-        strategy_lower = self.strategy.lower()
+        # Кэшированный импорт и создание SignalGenerator для стратегии
         try:
-            if strategy_lower == "macdx":
-                from ..core.signals.macdx import MacdxSignalGenerator as SignalGen
-            elif strategy_lower == "hybrid":
-                from ..core.signals.hybrid import HybridSignalGenerator as SignalGen
-            elif strategy_lower == "aiscalp":
-                from ..core.signals.aiscalp import AiscalpSignalGenerator as SignalGen
-            else:
-                return {"action": "HOLD", "reason": f"Unsupported strategy: {self.strategy}"}
+            if not hasattr(self, '_signal_gen_instance'):
+                strategy_lower = self.strategy.lower()
+                if strategy_lower == "macdx":
+                    from ..core.signals.macdx import MacdxSignalGenerator as SignalGen
+                elif strategy_lower == "hybrid":
+                    from ..core.signals.hybrid import HybridSignalGenerator as SignalGen
+                elif strategy_lower == "aiscalp":
+                    from ..core.signals.aiscalp import AiscalpSignalGenerator as SignalGen
+                else:
+                    return {"action": "HOLD", "reason": f"Unsupported strategy: {self.strategy}"}
+                self._signal_gen_instance = SignalGen(self.config)
 
-            generator = SignalGen(self.config)
-            result = generator.generate(analysis)
+            result = self._signal_gen_instance.generate(analysis)
         except ImportError:
             return {"action": "HOLD", "reason": f"Signal generator for {self.strategy} not found"}
         except Exception as e:
@@ -112,27 +116,61 @@ class SignalGenerator:
         return normalized
 
     # Вспомогательные методы для расчетов индикаторов
-    def _calculate_rsi(self, closes: List[float], period: int) -> float:
-        if len(closes) < period + 1:
-            return 50
-        gains = []
-        losses = []
-        for i in range(1, len(closes)):
-            change = closes[i] - closes[i-1]
-            gains.append(max(change, 0))
-            losses.append(max(-change, 0))
-        avg_gain = sum(gains[-period:]) / period
-        avg_loss = sum(losses[-period:]) / period
-        if avg_loss == 0:
-            return 100
-        rs = avg_gain / avg_loss
-        return 100 - (100 / (1 + rs))
 
-    def _rsi_values(self, closes: List[float], period: int) -> List[float]:
+    def _calculate_rsi_series(self, closes: List[float], period: int) -> List[float]:
+        """
+        Инкрементальный расчёт RSI серии за один проход O(n).
+
+        Использует скользящее окно (SMA последних `period` изменений),
+        что совпадает с оригинальным алгоритмом _calculate_rsi,
+        но без повторного расчёта на каждом подмассиве.
+        """
+        n = len(closes)
+        if n < period + 1:
+            return []
+
+        # Предварительно вычислить все gains и losses
+        gains = [0.0] * n
+        losses = [0.0] * n
+        for i in range(1, n):
+            change = closes[i] - closes[i - 1]
+            if change > 0:
+                gains[i] = change
+            else:
+                losses[i] = -change
+
         values = []
-        for i in range(period, len(closes)):
-            values.append(self._calculate_rsi(closes[:i+1], period))
+
+        # Первое окно: сумма gains[1..period] и losses[1..period]
+        sum_gain = sum(gains[1:period + 1])
+        sum_loss = sum(losses[1:period + 1])
+
+        avg_gain = sum_gain / period
+        avg_loss = sum_loss / period
+        if avg_loss == 0:
+            values.append(100.0)
+        else:
+            rs = avg_gain / avg_loss
+            values.append(100.0 - (100.0 / (1.0 + rs)))
+
+        # Скользящее окно для последующих значений
+        for i in range(period + 1, n):
+            sum_gain += gains[i] - gains[i - period]
+            sum_loss += losses[i] - losses[i - period]
+            avg_gain = sum_gain / period
+            avg_loss = sum_loss / period
+            if avg_loss == 0:
+                values.append(100.0)
+            else:
+                rs = avg_gain / avg_loss
+                values.append(100.0 - (100.0 / (1.0 + rs)))
+
         return values
+
+    def _calculate_rsi(self, closes: List[float], period: int) -> float:
+        """Возвращает последнее значение RSI (обёртка для совместимости)."""
+        series = self._calculate_rsi_series(closes, period)
+        return series[-1] if series else 50.0
 
     def _calculate_ema(self, closes: List[float], period: int) -> float:
         if len(closes) < period:
@@ -143,19 +181,72 @@ class SignalGenerator:
             ema = (price * multiplier) + (ema * (1 - multiplier))
         return ema
 
-    def _calculate_macd(self, closes: List[float]) -> Tuple[float, float, float]:
-        if len(closes) < 26:
-            return 0, 0, 0
-        ema12 = self._calculate_ema(closes, 12)
-        ema26 = self._calculate_ema(closes, 26)
-        macd_line = ema12 - ema26
-        macd_signal = self._calculate_ema([macd_line] * len(closes), 9)  # Упрощено
-        macd_hist = macd_line - macd_signal
-        return macd_line, macd_signal, macd_hist
+    def _calculate_ema_series(self, closes: List[float], period: int) -> List[float]:
+        """Рассчитывает полную серию EMA за один проход O(n)."""
+        if len(closes) < period:
+            return []
+        multiplier = 2 / (period + 1)
+        ema = sum(closes[:period]) / period
+        series = [ema]
+        for price in closes[period:]:
+            ema = (price * multiplier) + (ema * (1 - multiplier))
+            series.append(ema)
+        return series
 
-    def _calculate_macd_hist_prev(self, closes: List[float]) -> float:
-        macd_line, macd_signal, _ = self._calculate_macd(closes)
-        return macd_line - macd_signal
+    def _calculate_macd_with_prev(self, closes: List[float]) -> Tuple[float, float, float, float]:
+        """
+        Рассчитывает MACD line, signal, histogram и предыдущий histogram за один проход.
+
+        Использует инкрементальные EMA серии вместо пересчёта на каждом подмассиве.
+        Возвращает (macd_line, macd_signal, macd_hist, macd_hist_prev).
+        """
+        if len(closes) < 26:
+            return 0, 0, 0, 0
+
+        # EMA12 и EMA26 серии — O(n) каждая
+        ema12_series = self._calculate_ema_series(closes, 12)
+        ema26_series = self._calculate_ema_series(closes, 26)
+
+        # MACD line серия: EMA12[i] - EMA26[i] (выравнивание по индексам)
+        # ema12_series начинается с индекса 12, ema26_series с индекса 26
+        # MACD line начинается с индекса 26 (когда обе EMA доступны)
+        offset = 26 - 12  # = 14
+        macd_series = []
+        for i in range(len(ema26_series)):
+            macd_series.append(ema12_series[i + offset] - ema26_series[i])
+
+        if not macd_series:
+            return 0, 0, 0, 0
+
+        macd_line = macd_series[-1]
+
+        # Signal line — EMA(9) от MACD серии
+        if len(macd_series) >= 9:
+            signal_multiplier = 2 / (9 + 1)
+            signal_ema = sum(macd_series[:9]) / 9
+            for val in macd_series[9:]:
+                signal_ema = (val * signal_multiplier) + (signal_ema * (1 - signal_multiplier))
+            macd_signal = signal_ema
+        else:
+            macd_signal = macd_line
+
+        macd_hist = macd_line - macd_signal
+
+        # Предыдущий histogram (для определения пересечений)
+        if len(macd_series) >= 2:
+            # Пересчитать signal для macd_series[:-1]
+            prev_series = macd_series[:-1]
+            if len(prev_series) >= 9:
+                signal_ema_prev = sum(prev_series[:9]) / 9
+                for val in prev_series[9:]:
+                    signal_ema_prev = (val * signal_multiplier) + (signal_ema_prev * (1 - signal_multiplier))
+                macd_hist_prev = prev_series[-1] - signal_ema_prev
+            else:
+                macd_hist_prev = 0
+        else:
+            macd_hist_prev = 0
+
+        return macd_line, macd_signal, macd_hist, macd_hist_prev
 
     def _calculate_bb_width(self, closes: List[float], period: int) -> float:
         if len(closes) < period:

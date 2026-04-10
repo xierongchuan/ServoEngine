@@ -107,6 +107,12 @@ def load_active_config() -> Dict[str, Any]:
     return _load_json_file(path)
 
 
+def load_backtest_config() -> Dict[str, Any]:
+    """Load backtest engine configuration."""
+    path = _get_config_path('backtest')
+    return _load_json_file(path)
+
+
 def load_strategy_config(strategy: str) -> Dict[str, Any]:
     """Load strategy-specific configuration."""
     path = _get_config_path(f'strategy:{strategy}')
