@@ -41,6 +41,11 @@ class TradeTracker:
         except Exception:
             return {} if filepath == ACTIVE_TRADES_FILE else []
 
+    def get_active_trade(self, symbol: str):
+        """Возвращает активную позицию по символу или None."""
+        normalized = symbol.replace("-", "")
+        return self.active_trades.get(normalized)
+
     def _save_json(self, filepath, data):
         try:
             with open(filepath, 'w') as f:

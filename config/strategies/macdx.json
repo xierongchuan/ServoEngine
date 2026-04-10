@@ -1,6 +1,6 @@
 {
   "_description": "MACDX - MACD crossover strategy with 3-5 confirmations",
-  "_version": "1.0.0",
+  "_version": "2.0.0",
 
   "preset": {
     "timeframe": "1h",
@@ -39,5 +39,57 @@
     "volume_confirm_threshold": 0.8,
     "enable_risk_validation": false,
     "min_risk_reward_ratio": 1.2
+  },
+
+  "exit_rules": {
+    "macd_weakening": {
+      "enabled": true,
+      "threshold": 0.50,
+      "min_candles_after_peak": 3,
+      "min_candles_in_trade": 2,
+      "min_profit_pct": 0.5,
+      "adx_override": 30
+    },
+    "trailing_profit": {
+      "enabled": true,
+      "activation_pnl": 2.0,
+      "drawdown_levels": {
+        "high_profit": {"threshold": 5.0, "max_drawdown": 0.30},
+        "medium_profit": {"threshold": 3.0, "max_drawdown": 0.40},
+        "low_profit": {"threshold": 2.0, "max_drawdown": 0.50}
+      }
+    },
+    "impulse_candle": {
+      "enabled": true,
+      "body_atr_multiplier": 2.0,
+      "min_profit_pct": 1.5,
+      "volume_confirm_ratio": 2.5,
+      "volume_min_profit_pct": 1.0
+    },
+    "trailing_stop": {
+      "enabled": true,
+      "atr_multiplier": 1.5,
+      "activation_atr": 1.0
+    },
+    "pump_guard": {
+      "enabled": true,
+      "reversal_pct": 1.5,
+      "profit_lock_pct": 5.0,
+      "max_staleness_sec": 60,
+      "fallback_on_error": "skip"
+    },
+    "emergency": {
+      "max_loss_atr": 2.0,
+      "max_loss_pct": 3.0,
+      "max_hold_candles": 80,
+      "protect_matching_trend": true
+    },
+    "regime_adaptation": {
+      "enabled": true,
+      "TRENDING": {"weakening_threshold": 0.40, "trailing_drawdown": 0.50, "impulse_min_profit": 2.0},
+      "RANGING": {"weakening_threshold": 0.60, "trailing_drawdown": 0.35, "impulse_min_profit": 0.8},
+      "VOLATILE": {"weakening_threshold": 0.55, "trailing_drawdown": 0.30, "impulse_min_profit": 1.0},
+      "TRANSITIONAL": {"weakening_threshold": 0.50, "trailing_drawdown": 0.40, "impulse_min_profit": 1.5}
+    }
   }
 }

@@ -27,7 +27,8 @@ class MacdxPipeline(StrategyPipeline):
         self._client = get_exchange_client()
         self._macdx_settings = config.get("MACDX_SETTINGS", {})
 
-    def generate_command(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None) -> Optional[TradeCommand]:
+    def generate_command(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None,
+                         exit_context: Optional[Dict] = None) -> Optional[TradeCommand]:
         """Генерирует TradeCommand нативно (без промежуточного dict)."""
         try:
             from src.config import STRATEGY_STYLE
@@ -65,8 +66,11 @@ class MacdxPipeline(StrategyPipeline):
             signal_confidence = signal_data.get("confidence", 0.0)
             confirmations = signal_data.get("confirmations", 0)
 
-            # Check for close signal first
-            close_signal = gen.should_close(analysis_result, real_position)
+            # Check for close signal first (pass exit_context for advanced exit logic)
+            close_signal = gen.should_close(
+                analysis_result, real_position,
+                exit_context=exit_context if exit_context is not None else {}
+            )
             analysis_result["close_signal"] = close_signal
 
             command: TradeCommand
@@ -188,9 +192,10 @@ class MacdxPipeline(StrategyPipeline):
             regime=regime_label,
         )
 
-    def run_cycle(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None) -> Optional[Dict]:
+    def run_cycle(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None,
+                  exit_context: Optional[Dict] = None) -> Optional[Dict]:
         """Обратная совместимость: возвращает prediction dict."""
-        command = self.generate_command(symbol, ws_cache, ws_ready)
+        command = self.generate_command(symbol, ws_cache, ws_ready, exit_context=exit_context)
         if command is None:
             return None
         return command.to_dict()
