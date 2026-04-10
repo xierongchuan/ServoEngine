@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 
 from src.config import POSITION_SIZE_PERCENT
 from src.core import analyzer
+from src.core.commands.models import TradeCommand
 from src.core.decision_journal import DecisionJournal
 from src.core.trade_tracker import TradeTracker
 from src.core.execution.risk import calculate_dynamic_sl_tp, validate_risk_parameters, calculate_position_size
@@ -12,6 +13,8 @@ from src.core.regime import get_regime_detector
 from src.exchanges.exchange_factory import get_exchange_client
 from src.utils.logger import info, warning, error, StageTimer
 from .base import StrategyPipeline
+
+STRATEGY_NAME = "MACDX"
 
 
 class MacdxPipeline(StrategyPipeline):
@@ -24,7 +27,8 @@ class MacdxPipeline(StrategyPipeline):
         self._client = get_exchange_client()
         self._macdx_settings = config.get("MACDX_SETTINGS", {})
 
-    def run_cycle(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None) -> Optional[Dict]:
+    def generate_command(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None) -> Optional[TradeCommand]:
+        """Генерирует TradeCommand нативно (без промежуточного dict)."""
         try:
             from src.config import STRATEGY_STYLE
             from src.core.signals.macdx import MacdxSignalGenerator
@@ -65,104 +69,131 @@ class MacdxPipeline(StrategyPipeline):
             close_signal = gen.should_close(analysis_result, real_position)
             analysis_result["close_signal"] = close_signal
 
+            command: TradeCommand
+
             if real_position and close_signal.get("should_close"):
                 close_reason = close_signal.get("reason", "Deterministic exit")
                 close_urgency = close_signal.get("urgency", "medium")
                 info(f"🚨 [{symbol}] MACDX CLOSE: {close_reason} (urgency: {close_urgency})")
-                prediction = {
-                    "symbol": symbol,
-                    "action": "close",
-                    "confidence": 0.9 if close_urgency == "high" else 0.75,
-                    "score": signal_data.get("score", 0),
-                    "confirmations": confirmations,
-                    "reason": f"[MACDX] {close_reason}",
-                    "current_price": current_price,
-                }
-                # Записываем закрытие в journal
+                command = TradeCommand.close(
+                    symbol=symbol,
+                    current_price=current_price,
+                    reason=f"[MACDX] {close_reason}",
+                    confidence=0.9 if close_urgency == "high" else 0.75,
+                    strategy=STRATEGY_NAME,
+                    score=signal_data.get("score", 0),
+                    confirmations=confirmations,
+                )
                 self._journal.record_close(symbol)
             elif signal == "HOLD":
-                details = signal_data.get("details", {})
-                indicators_status = details.get("indicators_status", [])
-                ok_count = details.get("indicators_ok_count", 0)
-                total_count = details.get("indicators_total_count", 6)
-                potential_score = details.get("potential_score", 0)
-                max_possible_score = details.get("max_possible_score", 9)
-
-                if indicators_status:
-                    ok_indicators = [s for s in indicators_status if s.get("ok")]
-                    fail_indicators = [s for s in indicators_status if not s.get("ok")]
-                    ok_str = ", ".join([f"{s['name']}" for s in ok_indicators]) if ok_indicators else "Нет"
-                    macd_info = details.get('macd_hist', 0)
-                    macd_prev_info = details.get('macd_hist_prev', 0)
-                    fail_str = ", ".join([f"{s['name']}: {s.get('detail', '')}" for s in fail_indicators]) if fail_indicators else "Нет"
-                    reason = (
-                        f"[MACDX] Нет пересечения MACD (hist={macd_info:.6f}, prev={macd_prev_info:.6f}). "
-                        f"Индикаторы: {ok_count}/{total_count} подтверждены. "
-                        f"Score: {potential_score}/{max_possible_score}. "
-                        f"Подтверждены: {ok_str}. "
-                        f"Отклонены: {fail_str}. "
-                        f"[{regime_label}]"
-                    )
-                else:
-                    reason = f"[MACDX] Нет пересечения MACD [{regime_label}]"
-
-                confidence = ok_count / total_count if total_count > 0 else 0.0
-                info(f"🔧 [{symbol}] MACDX: No MACD cross (score: {potential_score}/{max_possible_score}, conf: {ok_count}/{total_count}) [{regime_label}]")
-                prediction = {
-                    "symbol": symbol,
-                    "action": "hold",
-                    "confidence": confidence,
-                    "score": potential_score,
-                    "max_score": max_possible_score,
-                    "confirmations": ok_count,
-                    "max_confirmations": total_count,
-                    "reason": reason,
-                    "current_price": current_price,
-                    "indicators_status": indicators_status,
-                }
+                command = self._build_hold_command(
+                    symbol, current_price, signal_data, regime_label
+                )
             else:
-                # Signal exists - execute directly (NO AI)
-                details = signal_data.get("details", {})
-                support = analysis_result.get("support", 0)
-                resistance = analysis_result.get("resistance", 0)
-
-                # Calculate SL/TP
-                sl, tp, size_pct = self._calculate_sl_tp_and_size(
-                    symbol, signal, current_price, analysis_result, support, resistance, regime_data, signal_quality
+                command = self._build_entry_command(
+                    symbol, signal, current_price, signal_confidence,
+                    confirmations, signal_data, signal_quality,
+                    analysis_result, regime_data, regime_label
                 )
 
-                info(f"🔧 [{symbol}] MACDX: {signal} Q:{signal_quality:.2f} conf:{confirmations} [{regime_label}] - DIRECT EXECUTION (NO AI)")
-                prediction = {
-                    "symbol": symbol,
-                    "action": signal.lower(),
-                    "confidence": signal_confidence,
-                    "score": signal_data.get("score", 0),
-                    "confirmations": confirmations,
-                    "reason": f"[MACDX] {signal} (score: {signal_data.get('score', 0)}/{signal_data.get('max_score', 9)}, conf: {confirmations}) [{regime_label}]",
-                    "current_price": current_price,
-                    "stop_loss": sl,
-                    "take_profit": tp,
-                    "size_pct": size_pct,
-                }
-
-            # Записываем решение в journal
-            info(f"[{symbol}] Recording to journal: action={prediction.get('action')}, reason={prediction.get('reason', 'N/A')}, current_price={current_price}")
+            # Записываем решение в journal (через to_dict для совместимости)
+            prediction = command.to_dict()
+            info(f"[{symbol}] Recording to journal: action={command.action.value}, reason={command.reason}, current_price={current_price}")
             self._journal.record(symbol, prediction, current_price)
 
-            # Если сигнал на открытие, фиксируем trade plan
-            action = prediction.get("action", "hold")
-            if action in ("buy", "sell"):
+            if command.action.is_entry:
                 self._journal.set_trade_plan(symbol, prediction, current_price)
 
-            # Обрезаем старые записи
             self._journal.trim_entries(symbol, STRATEGY_STYLE)
 
-            return prediction
+            return command
         except Exception as e:
             error(f"[{symbol}] MACDX pipeline error: {e}")
             import traceback
             traceback.print_exc()
             return None
+
+    def _build_hold_command(self, symbol: str, current_price: float,
+                            signal_data: Dict, regime_label: str) -> TradeCommand:
+        """Строит HOLD команду с деталями индикаторов."""
+        details = signal_data.get("details", {})
+        indicators_status = details.get("indicators_status", [])
+        ok_count = details.get("indicators_ok_count", 0)
+        total_count = details.get("indicators_total_count", 6)
+        potential_score = details.get("potential_score", 0)
+        max_possible_score = details.get("max_possible_score", 9)
+
+        if indicators_status:
+            ok_indicators = [s for s in indicators_status if s.get("ok")]
+            fail_indicators = [s for s in indicators_status if not s.get("ok")]
+            ok_str = ", ".join([f"{s['name']}" for s in ok_indicators]) if ok_indicators else "Нет"
+            macd_info = details.get('macd_hist', 0)
+            macd_prev_info = details.get('macd_hist_prev', 0)
+            fail_str = ", ".join([f"{s['name']}: {s.get('detail', '')}" for s in fail_indicators]) if fail_indicators else "Нет"
+            reason = (
+                f"[MACDX] Нет пересечения MACD (hist={macd_info:.6f}, prev={macd_prev_info:.6f}). "
+                f"Индикаторы: {ok_count}/{total_count} подтверждены. "
+                f"Score: {potential_score}/{max_possible_score}. "
+                f"Подтверждены: {ok_str}. "
+                f"Отклонены: {fail_str}. "
+                f"[{regime_label}]"
+            )
+        else:
+            reason = f"[MACDX] Нет пересечения MACD [{regime_label}]"
+
+        confidence = ok_count / total_count if total_count > 0 else 0.0
+        info(f"🔧 [{symbol}] MACDX: No MACD cross (score: {potential_score}/{max_possible_score}, conf: {ok_count}/{total_count}) [{regime_label}]")
+
+        return TradeCommand.hold(
+            symbol=symbol,
+            current_price=current_price,
+            reason=reason,
+            strategy=STRATEGY_NAME,
+            confidence=confidence,
+            score=potential_score,
+            max_score=max_possible_score,
+            confirmations=ok_count,
+            regime=regime_label,
+            metadata={"indicators_status": indicators_status, "max_confirmations": total_count},
+        )
+
+    def _build_entry_command(self, symbol: str, signal: str, current_price: float,
+                             signal_confidence: float, confirmations: int,
+                             signal_data: Dict, signal_quality: float,
+                             analysis_result: Dict, regime_data: Dict,
+                             regime_label: str) -> TradeCommand:
+        """Строит BUY/SELL команду с SL/TP и sizing."""
+        support = analysis_result.get("support", 0)
+        resistance = analysis_result.get("resistance", 0)
+
+        sl, tp, size_pct = self._calculate_sl_tp_and_size(
+            symbol, signal, current_price, analysis_result, support, resistance, regime_data, signal_quality
+        )
+
+        info(f"🔧 [{symbol}] MACDX: {signal} Q:{signal_quality:.2f} conf:{confirmations} [{regime_label}] - DIRECT EXECUTION (NO AI)")
+
+        return TradeCommand.entry(
+            symbol=symbol,
+            side=signal,
+            current_price=current_price,
+            confidence=signal_confidence,
+            reason=f"[MACDX] {signal} (score: {signal_data.get('score', 0)}/{signal_data.get('max_score', 9)}, conf: {confirmations}) [{regime_label}]",
+            stop_loss=sl,
+            take_profit=tp,
+            size_pct=size_pct,
+            strategy=STRATEGY_NAME,
+            score=signal_data.get("score", 0),
+            max_score=signal_data.get("max_score", 9),
+            confirmations=confirmations,
+            regime=regime_label,
+        )
+
+    def run_cycle(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None) -> Optional[Dict]:
+        """Обратная совместимость: возвращает prediction dict."""
+        command = self.generate_command(symbol, ws_cache, ws_ready)
+        if command is None:
+            return None
+        return command.to_dict()
 
     def _calculate_sl_tp_and_size(self, symbol, signal, current_price, analysis, support, resistance, regime, quality):
         sl, tp, size_pct = None, None, None
