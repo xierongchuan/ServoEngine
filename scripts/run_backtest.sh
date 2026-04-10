@@ -13,5 +13,3 @@ podman run --rm -v .:/app:Z -w /app python:3.12-slim sh -c "
 pip install -q requests pandas matplotlib &&
 python -m scripts.run_backtest --symbol $SYMBOL --strategy $STRATEGY --balance $BALANCE
 "
-
-echo "✅ Бэктест завершен"
