@@ -10,7 +10,7 @@
     "position_check_interval": 15,
     "atr_sl_mult": 4.0,
     "atr_tp_mult": 7.0,
-    "leverage": 7,
+    "leverage": 9,
     "cooldown_after_close_hours": 0.5
   },
 
@@ -27,7 +27,7 @@
     "enable_strengthening_trend_entry": false,
     "strengthening_trend_min_candles": 2,
 
-    "min_volume_ratio": 0.7,
+    "min_volume_ratio": 0.79,
     "ignore_volume_on_strong_trend": false,
 
     "min_atr_ratio": 0.003,
@@ -43,7 +43,7 @@
     "enable_counter_trend_filter": true,
     "counter_trend_ema_threshold": 1.0,
     "enable_volume_filter": true,
-    "volume_confirm_threshold": 0.8,
+    "volume_confirm_threshold": 0.7,
     "enable_risk_validation": false,
     "min_risk_reward_ratio": 1.2,
     "require_2_candle_confirmation": false
@@ -71,9 +71,9 @@
       "hysteresis_buffer": 0.35
     },
     "impulse_candle": {
-      "enabled": false,
+      "enabled": true,
       "body_atr_multiplier": 2.0,
-      "min_profit_pct": 1.5,
+      "min_profit_pct": 1.9,
       "volume_confirm_ratio": 2.5,
       "volume_min_profit_pct": 1.0
     },
@@ -83,7 +83,7 @@
       "activation_atr": 1.0
     },
     "pump_guard": {
-      "enabled": false,
+      "enabled": true,
       "reversal_pct": 0.5,
       "profit_lock_pct": 2.0,
       "max_staleness_sec": 60,
