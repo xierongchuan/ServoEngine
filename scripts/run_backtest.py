@@ -54,6 +54,9 @@ def main():
 
         try:
             clear_config_cache()
+            # Сброс кеша SignalGenerator для перезагрузки конфигов
+            from src.backtest.signals import SignalGenerator
+            SignalGenerator._signal_gen_instance = None
             engine = BacktestEngine(args.symbol, args.strategy, args.balance)
             result = engine.run()
         except Exception as e:

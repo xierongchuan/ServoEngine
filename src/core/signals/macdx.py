@@ -100,7 +100,22 @@ class MacdxSignalGenerator(BaseSignalGenerator):
             )
 
         enable_volume_filter = self.rules.get("enable_volume_filter", True)
-        if enable_volume_filter and volume_ratio < min_volume:
+        ignore_volume_on_strong = self.rules.get("ignore_volume_on_strong_trend", True)
+        
+        # Проверяем strengthening trend ДО проверки volume
+        macd_hist = analysis.get("macd_hist", 0)
+        macd_hist_prev = analysis.get("macd_hist_prev", 0)
+        macd_hist_2prev = analysis.get("macd_hist_2prev", 0)
+        has_strong_trend = (macd_hist > 0 and macd_hist_prev > 0) or (macd_hist < 0 and macd_hist_prev < 0)
+        has_strengthening_3 = (macd_hist > 0 and macd_hist > macd_hist_prev and macd_hist_prev > macd_hist_2prev) or (macd_hist < 0 and macd_hist < macd_hist_prev and macd_hist_prev < macd_hist_2prev)
+        has_strengthening_2 = (macd_hist > 0 and macd_hist > macd_hist_prev) or (macd_hist < 0 and macd_hist < macd_hist_prev)
+        
+        # Если есть strengthening trend 2+ свечи - пропускаем проверку volume
+        skip_volume_check = enable_volume_filter and ignore_volume_on_strong and (has_strengthening_3 or has_strengthening_2)
+        
+        print(f"[MACDX] DEBUG volume: volume_ratio={volume_ratio:.2f}, min_volume={min_volume}, enable_vol={enable_volume_filter}, ignore={ignore_volume_on_strong}, strong_trend={has_strong_trend}, str_3={has_strengthening_3}, str_2={has_strengthening_2}, skip={skip_volume_check}")
+        
+        if enable_volume_filter and volume_ratio < min_volume and not skip_volume_check:
             debug(f"[MACDX] HOLD | Low volume ({volume_ratio:.2f}x)")
             return self._hold_result(
                 max_score,
@@ -351,6 +366,38 @@ class MacdxSignalGenerator(BaseSignalGenerator):
             short_reasons.append(f"MACD\u2193 cross +{macd_cross_weight}\n")
             short_confirmations += 1
 
+        # Strengthening trend: 2+ candles in same direction (even without crossover)
+        enable_strengthening = self.rules.get("enable_strengthening_trend_entry", False)
+        print(f"[MACDX] DEBUG: enable_str={enable_strengthening}, weight={self.rules.get('strengthening_trend_weight', 2)}, hist={analysis.get('macd_hist', 0):.4f}, hist_prev={analysis.get('macd_hist_prev', 0):.4f}")
+        if enable_strengthening:
+            strengthening_weight = self.rules.get("strengthening_trend_weight", 2)
+            min_candles = self.rules.get("strengthening_trend_min_candles", 2)
+            macd_hist = analysis.get("macd_hist", 0)
+            macd_hist_prev = analysis.get("macd_hist_prev", 0)
+            macd_hist_2prev = analysis.get("macd_hist_2prev", 0)
+
+            # Check for strengthening trend (min_candles candles in same direction)
+            if min_candles >= 4:
+                strengthening_long = macd_hist > 0 and macd_hist_prev > 0 and macd_hist_2prev > 0
+                strengthening_short = macd_hist < 0 and macd_hist_prev < 0 and macd_hist_2prev < 0
+            elif min_candles >= 2:
+                strengthening_long = macd_hist > 0 and macd_hist_prev > 0
+                strengthening_short = macd_hist < 0 and macd_hist_prev < 0
+            else:
+                strengthening_long = False
+                strengthening_short = False
+
+            if strengthening_long:
+                long_score += strengthening_weight
+                long_reasons.append(f"Strengthening trend +{strengthening_weight}\n")
+                long_confirmations += 1
+                debug(f"[MACDX] Strengthening trend LONG: hist={macd_hist:.4f}")
+            if strengthening_short:
+                short_score += strengthening_weight
+                short_reasons.append(f"Strengthening trend +{strengthening_weight}\n")
+                short_confirmations += 1
+                debug(f"[MACDX] Strengthening trend SHORT: hist={macd_hist:.4f}")
+
         rsi_long_ok = rsi_long_min <= rsi <= rsi_long_max
         rsi_short_ok = rsi_short_min <= rsi <= rsi_short_max
         rsi_extreme_oversold = rsi < 30
@@ -549,22 +596,53 @@ class MacdxSignalGenerator(BaseSignalGenerator):
             reasons = short_reasons
             confirmations = short_confirmations
         elif long_score >= min_score and short_score >= min_score:
+            # Конфликт сигналов
             signal = "HOLD"
             score = max(long_score, short_score)
             reasons = [
                 f"CONFLICT L:{long_score}({long_confirmations}conf) S:{short_score}({short_confirmations}conf)"
             ]
         else:
-            signal = "HOLD"
-            score = max(long_score, short_score)
-            conf_str = (
-                f"L:{long_confirmations}/{min_confirmations}"
-                if macd_cross_long
-                else f"S:{short_confirmations}/{min_confirmations}"
-            )
-            reasons = [
-                f"Insufficient confirmations ({conf_str}) or score L:{long_score} S:{short_score} (need {min_score})"
-            ]
+            # Trend-follow вход: MACD тренд усиливается 2-3 свечи подряд, без проверки volume
+            macd_hist = analysis.get("macd_hist", 0)
+            macd_hist_prev = analysis.get("macd_hist_prev", 0)
+            macd_hist_2prev = analysis.get("macd_hist_2prev", 0)
+            enable_strengthening = self.rules.get("enable_strengthening_trend_entry", True)
+            strengthening_min_candles = self.rules.get("strengthening_trend_min_candles", 3)
+            
+            if enable_strengthening and strengthening_min_candles >= 3:
+                trend_strong_long = macd_hist > 0 and macd_hist > macd_hist_prev and macd_hist_prev > macd_hist_2prev
+                trend_strong_short = macd_hist < 0 and macd_hist < macd_hist_prev and macd_hist_prev < macd_hist_2prev
+            elif enable_strengthening and strengthening_min_candles >= 2:
+                trend_strong_long = macd_hist > 0 and macd_hist > macd_hist_prev
+                trend_strong_short = macd_hist < 0 and macd_hist < macd_hist_prev
+            else:
+                trend_strong_long = False
+                trend_strong_short = False
+            
+            if trend_strong_long:
+                signal = "BUY"
+                score = long_score
+                reasons = ["MACD trend 2-3 candles +"]
+                confirmations = 1
+                print(f"[MACDX] DEBUG trend_follow: signal=BUY hist={macd_hist:.4f}")
+            elif trend_strong_short:
+                signal = "SELL"
+                score = short_score
+                reasons = ["MACD trend 2-3 candles +"]
+                confirmations = 1
+                print(f"[MACDX] DEBUG trend_follow: signal=SELL hist={macd_hist:.4f}")
+            else:
+                signal = "HOLD"
+                score = max(long_score, short_score)
+                conf_str = (
+                    f"L:{long_confirmations}/{min_confirmations}"
+                    if macd_cross_long
+                    else f"S:{short_confirmations}/{min_confirmations}"
+                )
+                reasons = [
+                    f"Insufficient confirmations ({conf_str}) or score L:{long_score} S:{short_score} (need {min_score})"
+                ]
 
         info(
             f"[MACDX] Final signal: {signal}, score={score}, confirmations={confirmations}, reasons={''.join(reasons).strip()}"
@@ -573,6 +651,8 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         if signal != "HOLD" and max_score > min_score:
             raw_quality = (score - min_score) / (max_score - min_score)
             quality = max(0.1, min(1.0, 0.1 + raw_quality * 0.9))
+        elif signal != "HOLD":
+            quality = 0.5
         else:
             quality = 0.0
 

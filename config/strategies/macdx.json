@@ -18,12 +18,18 @@
     "macd_cross_weight": 3,
     "rsi_zone_weight": 1,
     "ema_alignment_weight": 2,
+    "strengthening_trend_weight": 3,
     "not_sideways_weight": 2,
     "no_exhaustion_weight": 1,
     "volume_weight": 2,
     "min_score_for_signal": 4,
 
+    "enable_strengthening_trend_entry": false,
+    "strengthening_trend_min_candles": 2,
+
     "min_volume_ratio": 0.7,
+    "ignore_volume_on_strong_trend": false,
+
     "min_atr_ratio": 0.003,
     "rsi_long_max": 95,
     "rsi_long_min": 30,
