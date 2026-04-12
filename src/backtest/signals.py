@@ -1,9 +1,19 @@
 import math
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Optional, Tuple
 from ..core.predict import get_prediction
 
 class SignalGenerator:
-    """Генерирует сигналы для детерминированных стратегий, таких как MACDX."""
+    """
+    Генерирует сигналы для стратегий через единый интерфейс.
+
+    Работает как адаптер между стратегией и BacktestEngine:
+    - Рассчитывает индикаторы
+    - Делегирует генерацию сигнала в реальный генератор стратегии
+    - Проверяет условия выхода (should_close) когда есть открытая позиция
+
+    Это обеспечивает strategy-agnostic DTO поток:
+    SignalGenerator.generate_signal() → {action, score, reason} → TradeCommand
+    """
 
     def __init__(self, strategy: str = "MACDX", config: Dict[str, Any] = None):
         self.strategy = strategy
@@ -12,6 +22,8 @@ class SignalGenerator:
         self.rules = self.config.get("signal_rules", {})
         # Кэш последних индикаторов для повторного использования в engine
         self.last_indicators: Dict[str, Any] = {}
+        # Exit context — состояние выхода, сохраняется между свечами
+        self._exit_context: Dict[str, Any] = {}
 
     def calculate_indicators(self, klines: List[Dict[str, Any]], index: int) -> Dict[str, Any]:
         """Рассчитывает индикаторы на основе последних свечей."""
@@ -32,7 +44,7 @@ class SignalGenerator:
         ema21 = self._calculate_ema(closes, 21)
 
         # MACD (12,26,9) — с hist_prev за один вызов
-        macd_line, macd_signal, macd_hist, macd_hist_prev = self._calculate_macd_with_prev(closes)
+        macd_line, macd_signal, macd_hist, macd_hist_prev, macd_hist_prev_prev = self._calculate_macd_with_prev(closes)
 
         # BB width
         bb_width = self._calculate_bb_width(closes, 20)
@@ -47,6 +59,8 @@ class SignalGenerator:
         # Volume ratio
         volume_ratio = volumes[-1] / (sum(volumes[-20:]) / 20) if len(volumes) >= 20 else 1
 
+        opens = [k["openPrice"] for k in klines[:index+1]]
+
         return {
             "rsi": rsi,
             "rsi_values": rsi_values,
@@ -56,39 +70,68 @@ class SignalGenerator:
             "macd_signal": macd_signal,
             "macd_hist": macd_hist,
             "macd_hist_prev": macd_hist_prev,
+            "macd_hist_2prev": macd_hist_prev_prev,
             "bb_width": bb_width,
             "adx": adx,
             "atr": atr,
             "atr_ratio": atr_ratio,
             "volume_ratio": volume_ratio,
-            "close_prices": closes
+            "close_prices": closes,
+            "open_prices": opens,
         }
 
-    def generate_signal(self, klines: List[Dict[str, Any]], index: int) -> Dict[str, Any]:
-        """Генерирует сигнал, используя оригинальный код стратегии MACDX."""
+    def _get_signal_gen(self):
+        """Ленивая инициализация генератора сигналов стратегии."""
+        # Всегда пересоздавать для учёта новых весов из конфига
+        strategy_lower = self.strategy.lower()
+        if strategy_lower == "macdx":
+            from ..core.signals.macdx import MacdxSignalGenerator as SignalGen
+        elif strategy_lower == "hybrid":
+            from ..core.signals.hybrid import HybridSignalGenerator as SignalGen
+        elif strategy_lower == "aiscalp":
+            from ..core.signals.aiscalp import AiscalpSignalGenerator as SignalGen
+        else:
+            self._signal_gen_instance = None
+            return None
+        self._signal_gen_instance = SignalGen(self.config)
+        return self._signal_gen_instance
+
+    def generate_signal(self, klines: List[Dict[str, Any]], index: int,
+                        position: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Генерирует единый сигнал через DTO — входы и выходы через один интерфейс.
+
+        Когда position != None и стратегия поддерживает should_close(),
+        сначала проверяются условия выхода. Если should_close() срабатывает,
+        возвращается {action: "CLOSE", reason: ...}. Иначе — обычный сигнал.
+
+        Это позволяет BacktestEngine оставаться strategy-agnostic:
+        engine вызывает generate_signal() → получает единый dict → конвертирует в TradeCommand.
+
+        Args:
+            klines: массив свечей
+            index: индекс текущей свечи
+            position: открытая позиция {side: "LONG"/"SHORT", entry_price: float} или None
+        """
         analysis = self.calculate_indicators(klines, index)
         self.last_indicators = analysis
         if not analysis:
             return {"action": "HOLD", "reason": "Недостаточно данных"}
 
-        # Добавить current_price и другие ключи
         analysis["current_price"] = klines[index]["closePrice"]
 
-        # Кэшированный импорт и создание SignalGenerator для стратегии
         try:
-            if not hasattr(self, '_signal_gen_instance'):
-                strategy_lower = self.strategy.lower()
-                if strategy_lower == "macdx":
-                    from ..core.signals.macdx import MacdxSignalGenerator as SignalGen
-                elif strategy_lower == "hybrid":
-                    from ..core.signals.hybrid import HybridSignalGenerator as SignalGen
-                elif strategy_lower == "aiscalp":
-                    from ..core.signals.aiscalp import AiscalpSignalGenerator as SignalGen
-                else:
-                    return {"action": "HOLD", "reason": f"Unsupported strategy: {self.strategy}"}
-                self._signal_gen_instance = SignalGen(self.config)
+            gen = self._get_signal_gen()
+            if gen is None:
+                return {"action": "HOLD", "reason": f"Unsupported strategy: {self.strategy}"}
 
-            result = self._signal_gen_instance.generate(analysis)
+            # Проверить условия выхода, если есть открытая позиция
+            if position and hasattr(gen, 'should_close'):
+                close_signal = self._check_exit(gen, analysis, position)
+                if close_signal:
+                    return close_signal
+
+            result = gen.generate(analysis)
         except ImportError:
             return {"action": "HOLD", "reason": f"Signal generator for {self.strategy} not found"}
         except Exception as e:
@@ -114,6 +157,50 @@ class SignalGenerator:
                 normalized = {"action": "HOLD", "reason": f"AI changed signal to {ai_decision}"}
 
         return normalized
+
+    def _check_exit(self, gen, analysis: Dict[str, Any],
+                    position: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Проверяет условия выхода через should_close() стратегии.
+
+        Формирует position dict в формате, совместимом с should_close(),
+        и передаёт exit_context для отслеживания состояния между свечами.
+
+        Returns:
+            {action: "CLOSE", reason: ...} если нужно закрыть, иначе None
+        """
+        side = position.get("side", "LONG")
+        entry_price = position.get("entry_price", 0)
+
+        # Формируем position dict совместимый с should_close()
+        bt_position = {
+            "type": side.replace("LONG", "BUY").replace("SHORT", "SELL"),
+            "entry": entry_price,
+            "avgPrice": entry_price,
+        }
+
+        try:
+            close_signal = gen.should_close(
+                analysis, bt_position, exit_context=self._exit_context
+            )
+
+            if close_signal.get("should_close"):
+                reason = close_signal.get("reason", "Strategy exit")
+                return {
+                    "action": "CLOSE",
+                    "reason": reason,
+                    "score": 0,
+                    "urgency": close_signal.get("urgency", "medium"),
+                }
+        except Exception as e:
+            # Если should_close() падает — не блокируем работу, просто логируем
+            pass
+
+        return None
+
+    def reset_exit_context(self):
+        """Сбрасывает exit_context (вызывается после закрытия позиции)."""
+        self._exit_context.clear()
 
     # Вспомогательные методы для расчетов индикаторов
 
@@ -193,7 +280,7 @@ class SignalGenerator:
             series.append(ema)
         return series
 
-    def _calculate_macd_with_prev(self, closes: List[float]) -> Tuple[float, float, float, float]:
+    def _calculate_macd_with_prev(self, closes: List[float]) -> Tuple[float, float, float, float, float]:
         """
         Рассчитывает MACD line, signal, histogram и предыдущий histogram за один проход.
 
@@ -201,7 +288,7 @@ class SignalGenerator:
         Возвращает (macd_line, macd_signal, macd_hist, macd_hist_prev).
         """
         if len(closes) < 26:
-            return 0, 0, 0, 0
+            return 0, 0, 0, 0, 0
 
         # EMA12 и EMA26 серии — O(n) каждая
         ema12_series = self._calculate_ema_series(closes, 12)
@@ -216,7 +303,7 @@ class SignalGenerator:
             macd_series.append(ema12_series[i + offset] - ema26_series[i])
 
         if not macd_series:
-            return 0, 0, 0, 0
+            return 0, 0, 0, 0, 0
 
         macd_line = macd_series[-1]
 
@@ -246,7 +333,20 @@ class SignalGenerator:
         else:
             macd_hist_prev = 0
 
-        return macd_line, macd_signal, macd_hist, macd_hist_prev
+        # Histogram 2 свечи назад
+        if len(macd_series) >= 3:
+            prev_prev_series = macd_series[:-2]
+            if len(prev_prev_series) >= 9:
+                signal_ema_prev_prev = sum(prev_prev_series[:9]) / 9
+                for val in prev_prev_series[9:]:
+                    signal_ema_prev_prev = (val * signal_multiplier) + (signal_ema_prev_prev * (1 - signal_multiplier))
+                macd_hist_prev_prev = prev_prev_series[-1] - signal_ema_prev_prev
+            else:
+                macd_hist_prev_prev = 0
+        else:
+            macd_hist_prev_prev = 0
+
+        return macd_line, macd_signal, macd_hist, macd_hist_prev, macd_hist_prev_prev
 
     def _calculate_bb_width(self, closes: List[float], period: int) -> float:
         if len(closes) < period:

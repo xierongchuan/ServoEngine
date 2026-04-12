@@ -260,27 +260,86 @@ def get_executor():
     return Executor()
 
 def run_macdx_loop(symbol: str, tracker, journal, ws_cache=None, ws_ready=None):
-    """Запускает цикл MACDX пайплайна с исполнением через TradeCommand."""
+    """Запускает цикл MACDX пайплайна с исполнением через TradeCommand.
+
+    Двухуровневая архитектура:
+    - Основной цикл (loop_interval): анализ закрытых свечей, MACD, вход/выход
+    - Быстрый цикл (position_check_interval): мониторинг при открытой позиции
+      через WebSocket кэш (без REST запросов)
+    """
     from src.core.strategies.macdx import MacdxPipeline
     from src.core.commands import CommandExecutor
+    from src.core.signals.macdx import position_guard_check
 
     pipeline = MacdxPipeline(BOT_CONFIG)
     cmd_executor = CommandExecutor()
 
+    # Загружаем конфиг MACDX для быстрого цикла
+    macdx_settings = BOT_CONFIG.get("MACDX_SETTINGS", {})
+    preset = macdx_settings.get("preset", {})
+    exit_rules = macdx_settings.get("exit_rules", {})
+    loop_interval = preset.get("loop_interval", 60)
+    check_interval = preset.get("position_check_interval", 15)
+
+    # exit_context хранится per-symbol в памяти процесса
+    exit_context = {}
+
     while True:
         try:
             info(f"[{symbol}] Starting MACDX cycle")
-            command = pipeline.generate_command(symbol, ws_cache, ws_ready)
+            command = pipeline.generate_command(
+                symbol, ws_cache, ws_ready, exit_context=exit_context
+            )
             if command:
                 info(f"[{symbol}] TradeCommand: {command.action.value} (conf={command.confidence:.2f})")
                 result = cmd_executor.execute(command)
                 if result.success:
                     info(f"[{symbol}] Command result: {result.message}")
+                    # Очищаем exit_context при закрытии позиции
+                    if command.action.value == "CLOSE":
+                        exit_context.clear()
                 else:
                     warning(f"[{symbol}] Command failed: {result.message}")
             else:
                 info(f"[{symbol}] No command generated")
-            time.sleep(60)  # MACDX interval
+
+            # Быстрый мониторинг при открытой позиции через WebSocket кэш
+            position = tracker.get_active_trade(symbol)
+            if position and ws_cache and exit_rules.get("pump_guard", {}).get("enabled", True):
+                remaining_time = loop_interval
+                while remaining_time > 0:
+                    sleep_time = min(check_interval, remaining_time)
+                    time.sleep(sleep_time)
+                    remaining_time -= check_interval
+
+                    # Перепроверяем наличие позиции
+                    position = tracker.get_active_trade(symbol)
+                    if not position:
+                        break
+
+                    guard_result = position_guard_check(
+                        symbol, position, exit_context,
+                        ws_cache, exit_rules, preset
+                    )
+                    if guard_result.get("should_close"):
+                        info(f"🚨 [{symbol}] GUARD CLOSE: {guard_result['reason']} (urgency: {guard_result.get('urgency', 'high')})")
+                        from src.core.commands.models import TradeCommand
+                        close_cmd = TradeCommand.close(
+                            symbol=symbol,
+                            current_price=0,  # будет обновлена executor'ом
+                            reason=f"[MACDX-GUARD] {guard_result['reason']}",
+                            confidence=0.95 if guard_result.get("urgency") == "critical" else 0.85,
+                            strategy="MACDX",
+                        )
+                        close_result = cmd_executor.execute(close_cmd)
+                        if close_result.success:
+                            info(f"[{symbol}] Guard close result: {close_result.message}")
+                            exit_context.clear()
+                        else:
+                            warning(f"[{symbol}] Guard close failed: {close_result.message}")
+                        break
+            else:
+                time.sleep(loop_interval)
         except KeyboardInterrupt:
             break
         except Exception as e:

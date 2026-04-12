@@ -3,6 +3,8 @@ __pycache__
 .claude
 .env
 *.log
+.cache
+.local/
 
 # ========================================
 # OpenProducer Project Specific

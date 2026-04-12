@@ -3,7 +3,7 @@
   "_version": "1.0.0",
 
   "position": {
-    "size_percent": 32,
+    "size_percent": 100,
     "min_trade_amount_usdt": 10
   },
 
@@ -21,7 +21,8 @@
     "enable_parallel_mode": true,
     "enable_ai_skip_on_rsi": false,
     "enable_low_volume_filter": false,
-    "aggressive_mode": false
+    "aggressive_mode": false,
+    "enable_immediate_reentry_after_exit": false
   },
 
   "aggressive_settings": {

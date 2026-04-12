@@ -2,7 +2,14 @@ import os
 import json
 import logging
 import datetime
-from typing import Dict, Any, Optional
+import traceback
+from typing import Dict, Any, Optional, List
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+
 from .data_loader import DataLoader
 from .signals import SignalGenerator
 from .simulator import BacktestSimulator
@@ -14,8 +21,13 @@ class BacktestEngine:
     """
     Основной движок бэктеста, объединяет все компоненты.
 
-    Работает через единый TradeCommand DTO:
-    SignalGenerator → TradeCommand → BacktestSimulator.execute()
+    Работает через единый TradeCommand DTO — strategy-agnostic:
+    SignalGenerator.generate_signal(position=...) → TradeCommand → BacktestSimulator.execute()
+
+    SignalGenerator является адаптером, который:
+    - Генерирует сигналы входа через стратегию (generate)
+    - Проверяет условия выхода через стратегию (should_close)
+    - Возвращает единый dict {action: BUY/SELL/HOLD/CLOSE, ...}
 
     BacktestSimulator реализует BaseCommandExecutor, поэтому
     тот же интерфейс исполнения используется и в реальной торговле,
@@ -58,6 +70,9 @@ class BacktestEngine:
             default_tp_percent=default_tp,
             capital_mode=capital_mode,
         )
+        # Equity tracking for chart generation
+        self._equity_curve: List[Dict[str, Any]] = []
+        self._trade_markers: List[Dict[str, Any]] = []
         self._setup_logging()
 
     def _load_config(self) -> Dict[str, Any]:
@@ -81,14 +96,18 @@ class BacktestEngine:
 
     def run(self) -> Dict[str, Any]:
         """
-        Запускает бэктест через единый TradeCommand поток.
+        Запускает бэктест через единый strategy-agnostic TradeCommand поток.
 
         Для каждой свечи:
         1. Проверить SL/TP → TradeCommand.close()
         2. Обновить unrealized P&L
-        3. Сгенерировать сигнал → TradeCommand
+        3. Сгенерировать сигнал (entry + exit через единый generate_signal) → TradeCommand
         4. Исполнить через BacktestSimulator.execute()
-        5. Проверить стратегические условия выхода
+
+        Выходы из позиции обрабатываются ВНУТРИ SignalGenerator.generate_signal():
+        если есть открытая позиция, SignalGenerator сначала проверяет should_close()
+        стратегии и возвращает {action: "CLOSE"} если нужно закрыть.
+        Движок не знает о деталях стратегии — только о TradeCommand DTO.
         """
         try:
             info(f"🚀 Запуск бэктеста для {self.symbol} стратегии {self.strategy}")
@@ -102,35 +121,53 @@ class BacktestEngine:
 
             for i, kline in enumerate(klines):
                 current_price = kline["closePrice"]
+                kline_time = kline.get("snapshotTimeUTC", "")
 
                 # 1. Проверить SL/TP через TradeCommand
                 sl_tp_cmd = self.simulator.check_sl_tp_command(self.symbol, current_price)
                 if sl_tp_cmd:
                     self.simulator.execute(sl_tp_cmd)
+                    self.signal_generator.reset_exit_context()
+                    self._record_equity(kline_time, current_price)
+                    self._record_trade_marker(kline_time, current_price, "close", sl_tp_cmd.reason or "SL/TP")
                     continue
 
                 # 2. Обновить unrealized P&L (без SL/TP — уже проверено выше)
                 self.simulator.update_unrealized_pnl({self.symbol: current_price})
 
-                # 3. Сгенерировать сигнал и конвертировать в TradeCommand
+                # 3. Сгенерировать сигнал (entry + exit) через единый интерфейс
+                #    SignalGenerator сам проверит should_close() если есть позиция
                 try:
-                    signal = self.signal_generator.generate_signal(klines, i)
+                    position = self.simulator.positions.get(self.symbol)
+                    signal = self.signal_generator.generate_signal(klines, i, position=position)
                     command = self._signal_to_command(signal, current_price)
                     result = self.simulator.execute(command)
 
                     if command.action.is_entry:
+                        self.signal_generator.reset_exit_context()
+                        side = "BUY" if command.action == TradeAction.BUY else "SELL"
+                        self._record_trade_marker(kline_time, current_price, side.lower(), signal.get("reason", ""))
                         info(f"📈 {command.action.value.upper()} на {self.symbol} по {current_price:.2f}")
+                    elif command.action.is_exit:
+                        self.signal_generator.reset_exit_context()
+                        self._record_trade_marker(kline_time, current_price, "close", signal.get("reason", "strategy"))
+                        # После закрытия — сразу проверить сигнал для новой позиции (если включено в конфиге)
+                        reentry_enabled = self.config.get("features", {}).get("enable_immediate_reentry_after_exit", True)
+                        if reentry_enabled:
+                            position = None
+                            signal2 = self.signal_generator.generate_signal(klines, i, position=position)
+                            command2 = self._signal_to_command(signal2, current_price)
+                            if command2.action.is_entry:
+                                result2 = self.simulator.execute(command2)
+                                side = "BUY" if command2.action == TradeAction.BUY else "SELL"
+                                self.signal_generator.reset_exit_context()
+                                self._record_trade_marker(kline_time, current_price, side.lower(), signal2.get("reason", ""))
+                                info(f"📈 {command2.action.value.upper()} на {self.symbol} по {current_price:.2f} (after exit)")
                 except Exception as e:
                     error(f"Ошибка на индексе {i}: {e}")
                     continue
 
-                # 4. Проверить стратегические условия выхода → TradeCommand
-                #    Используем кэшированные индикаторы из generate_signal,
-                #    чтобы не пересчитывать их дважды
-                exit_cmd = self._check_exit_command(klines, i, current_price,
-                                                     cached_indicators=self.signal_generator.last_indicators)
-                if exit_cmd:
-                    self.simulator.execute(exit_cmd)
+                self._record_equity(kline_time, current_price)
 
             # Закрыть все открытые позиции
             for symbol in list(self.simulator.positions.keys()):
@@ -145,14 +182,30 @@ class BacktestEngine:
             return self._build_result(klines)
 
         except Exception as e:
-            error(f"❌ Ошибка в бэктесте: {e}")
+            error(f"❌ Ошибка в бэктесте: {e}\n{traceback.format_exc()}")
+            print(f"❌ Ошибка в бэктесте: {e}")
+            traceback.print_exc()
             return {}
 
     def _signal_to_command(self, signal: Dict[str, Any], current_price: float) -> TradeCommand:
-        """Конвертирует сигнал от SignalGenerator в TradeCommand."""
+        """
+        Конвертирует сигнал от SignalGenerator в TradeCommand.
+
+        Поддерживает все типы действий:
+        - BUY/SELL → TradeCommand.entry()
+        - CLOSE → TradeCommand.close()
+        - HOLD → TradeCommand.hold()
+        """
         action = signal.get("action", "HOLD")
 
-        if action in ("BUY", "SELL"):
+        if action == "CLOSE":
+            return TradeCommand.close(
+                symbol=self.symbol,
+                current_price=current_price,
+                reason=signal.get("reason", "Strategy exit"),
+                strategy=self.strategy,
+            )
+        elif action in ("BUY", "SELL"):
             return TradeCommand.entry(
                 symbol=self.symbol,
                 side=action,
@@ -170,47 +223,136 @@ class BacktestEngine:
                 strategy=self.strategy,
             )
 
-    def _check_exit_command(self, klines, index: int, current_price: float,
-                            cached_indicators: Optional[Dict[str, Any]] = None) -> Optional[TradeCommand]:
-        """Проверяет стратегические условия выхода и возвращает TradeCommand.close() или None."""
-        if self.symbol not in self.simulator.positions:
+    def _record_equity(self, time_str: str, current_price: float):
+        """Записывает точку кривой эквити."""
+        unrealized = 0.0
+        for pos in self.simulator.positions.values():
+            unrealized += pos.get("unrealized_pnl", 0.0)
+        self._equity_curve.append({
+            "time": time_str,
+            "balance": self.simulator.balance + unrealized,
+            "price": current_price,
+        })
+
+    def _record_trade_marker(self, time_str: str, price: float, action: str, reason: str):
+        """Записывает маркер сделки для графика."""
+        self._trade_markers.append({
+            "time": time_str,
+            "price": price,
+            "action": action,
+            "reason": reason,
+        })
+
+    def _generate_charts(self, klines, result: Dict[str, Any]) -> Optional[str]:
+        """Генерирует графики бэктеста: эквити + цена с маркерами сделок."""
+        if not self._equity_curve:
             return None
 
-        indicators = cached_indicators or self.signal_generator.calculate_indicators(klines, index)
-        rsi = indicators.get("rsi", 50)
-        macd_hist = indicators.get("macd_hist", 0)
+        try:
+            charts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                                      "data", "charts")
+            os.makedirs(charts_dir, exist_ok=True)
 
-        position = self.simulator.positions[self.symbol]
-        side = position["side"]
+            # Парсинг времени
+            def parse_time(t):
+                for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
+                    try:
+                        return datetime.datetime.strptime(t, fmt)
+                    except ValueError:
+                        continue
+                return None
 
-        exit_rules = self.backtest_config.get("exit_rules", {})
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10), gridspec_kw={"height_ratios": [1, 1]})
+            fig.suptitle(f"Backtest: {self.symbol} / {self.strategy}", fontsize=14, fontweight="bold")
 
-        # MACD reversal
-        macd_rules = exit_rules.get("macd_reversal", {})
-        if macd_rules.get("enabled", True):
-            profit_threshold = macd_rules.get("profit_threshold", 0.005)
-            loss_threshold = macd_rules.get("loss_threshold", -0.01)
-            macd_hist_prev = position.get("macd_hist_prev", 0)
-            if (side == "LONG" and macd_hist < 0 and macd_hist_prev >= 0) or \
-               (side == "SHORT" and macd_hist > 0 and macd_hist_prev <= 0):
-                if position["unrealized_pnl"] >= profit_threshold or position["unrealized_pnl"] < loss_threshold:
-                    return TradeCommand.close(
-                        symbol=self.symbol, current_price=current_price,
-                        reason="MACD reversal", strategy=self.strategy,
-                    )
+            # --- Верхний график: цена + сделки ---
+            prices_t = []
+            prices_v = []
+            for k in klines:
+                t = parse_time(k.get("snapshotTimeUTC", ""))
+                if t:
+                    prices_t.append(t)
+                    prices_v.append(k["closePrice"])
 
-        # RSI extreme
-        rsi_rules = exit_rules.get("rsi_extreme", {})
-        if rsi_rules.get("enabled", True):
-            long_exit = rsi_rules.get("long_exit_above", 80)
-            short_exit = rsi_rules.get("short_exit_below", 20)
-            if (side == "LONG" and rsi > long_exit) or (side == "SHORT" and rsi < short_exit):
-                return TradeCommand.close(
-                    symbol=self.symbol, current_price=current_price,
-                    reason="RSI extreme", strategy=self.strategy,
-                )
+            if prices_t:
+                ax1.plot(prices_t, prices_v, color="#555555", linewidth=0.8, alpha=0.8, label="Price")
 
-        return None
+            # Маркеры сделок
+            buy_t, buy_p = [], []
+            sell_t, sell_p = [], []
+            close_t, close_p = [], []
+            for m in self._trade_markers:
+                t = parse_time(m["time"])
+                if not t:
+                    continue
+                if m["action"] == "buy":
+                    buy_t.append(t)
+                    buy_p.append(m["price"])
+                elif m["action"] == "sell":
+                    sell_t.append(t)
+                    sell_p.append(m["price"])
+                elif m["action"] == "close":
+                    close_t.append(t)
+                    close_p.append(m["price"])
+
+            if buy_t:
+                ax1.scatter(buy_t, buy_p, marker="^", color="green", s=50, zorder=5, label="BUY")
+            if sell_t:
+                ax1.scatter(sell_t, sell_p, marker="v", color="red", s=50, zorder=5, label="SELL")
+            if close_t:
+                ax1.scatter(close_t, close_p, marker="x", color="orange", s=40, zorder=5, label="CLOSE")
+
+            ax1.set_ylabel("Price (USDT)")
+            ax1.legend(loc="upper left", fontsize=8)
+            ax1.grid(True, alpha=0.3)
+            ax1.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+
+            # --- Нижний график: кривая эквити ---
+            eq_t = []
+            eq_v = []
+            for pt in self._equity_curve:
+                t = parse_time(pt["time"])
+                if t:
+                    eq_t.append(t)
+                    eq_v.append(pt["balance"])
+
+            if eq_t:
+                initial = self.simulator.initial_balance
+                colors = ["green" if v >= initial else "red" for v in eq_v]
+                ax2.plot(eq_t, eq_v, color="#2196F3", linewidth=1.0, label="Equity")
+                ax2.axhline(y=initial, color="gray", linestyle="--", linewidth=0.8, label=f"Initial ({initial:.0f})")
+                ax2.fill_between(eq_t, eq_v, initial, where=[v >= initial for v in eq_v],
+                                 color="green", alpha=0.1)
+                ax2.fill_between(eq_t, eq_v, initial, where=[v < initial for v in eq_v],
+                                 color="red", alpha=0.1)
+
+            ax2.set_ylabel("Balance (USDT)")
+            ax2.set_xlabel("Date")
+            ax2.legend(loc="upper left", fontsize=8)
+            ax2.grid(True, alpha=0.3)
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+
+            # Статистика на графике
+            stats_text = (
+                f"Trades: {result.get('total_trades', 0)} | "
+                f"Win: {result.get('win_rate', 0):.0%} | "
+                f"Net P&L: {result.get('net_pnl', 0):.2f} | "
+                f"MaxDD: {result.get('max_drawdown', 0):.2f}"
+            )
+            fig.text(0.5, 0.01, stats_text, ha="center", fontsize=9, color="#666666")
+
+            plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+            chart_path = os.path.join(charts_dir, f"backtest_{self.symbol}_{self.strategy}.png")
+            fig.savefig(chart_path, dpi=120, bbox_inches="tight")
+            plt.close(fig)
+
+            print(f"📊 График сохранен: {chart_path}")
+            return chart_path
+
+        except Exception as e:
+            error(f"Ошибка генерации графиков: {e}")
+            print(f"⚠️ Не удалось создать график: {e}")
+            return None
 
     def _build_result(self, klines) -> Dict[str, Any]:
         """Формирует результат бэктеста."""
@@ -242,6 +384,12 @@ class BacktestEngine:
             "commands_issued": len(self.simulator.command_history),
         }
         result["description"] = self._generate_description(result)
+
+        # Генерация графиков
+        chart_path = self._generate_charts(klines, result)
+        if chart_path:
+            result["chart_path"] = chart_path
+
         self._save_report(result)
         return result
 

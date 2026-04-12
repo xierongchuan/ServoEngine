@@ -1,17 +1,24 @@
-import os
 import json
-from typing import List, Dict, Any
+import os
+from typing import Any, Dict, List
+
 from ..exchanges.bingx_client import BingXClient
-from ..utils.logger import info, warning, error
+from ..utils.logger import error, info, warning
+
 
 class DataLoader:
     """Загружает и управляет историческими данными для бэктеста."""
 
-    def __init__(self, symbol: str, timeframe: str = "15m", limit: int = 1000):
+    def __init__(self, symbol: str, timeframe: str = "15m", limit: int = 1300):
         self.symbol = symbol.replace("-", "")  # Для файла: BTCUSDT
         self.timeframe = timeframe
         self.limit = limit
-        self.data_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "prices", f"{self.symbol}.json")
+        self.data_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "data",
+            "prices",
+            f"{self.symbol}.json",
+        )
         self.klines: List[Dict[str, Any]] = []
 
     def fetch_data_from_exchange(self) -> List[Dict[str, Any]]:
@@ -24,13 +31,24 @@ class DataLoader:
                 os.makedirs(os.path.dirname(self.data_path), exist_ok=True)
                 with open(self.data_path, "w") as f:
                     json.dump(klines, f, indent=2)
-                info(f"✅ Данные для {self.symbol} получены и сохранены в {self.data_path}")
+                info(
+                    f"✅ Данные для {self.symbol} получены и сохранены в {self.data_path}"
+                )
                 return klines
             else:
                 warning(f"⚠️ Не удалось получить данные для {self.symbol}")
+                print(f"⚠️ Не удалось получить данные с биржи для {self.symbol}.")
+                print(
+                    f"   Проверьте: 1) API ключи в .env  2) сетевое подключение  3) SELinux (pasta)"
+                )
+                print(f"   Или положите данные вручную в {self.data_path}")
                 return []
         except Exception as e:
             error(f"❌ Ошибка при получении данных: {e}")
+            print(f"❌ Ошибка при получении данных с биржи: {e}")
+            print(
+                f"   Если SELinux блокирует pasta, используйте: --security-opt label=disable"
+            )
             return []
 
     def load_data(self, fetch_if_missing: bool = True) -> List[Dict[str, Any]]:
@@ -39,7 +57,9 @@ class DataLoader:
             try:
                 with open(self.data_path, "r") as f:
                     self.klines = json.load(f)
-                print(f"✅ Данные загружены из {self.data_path}: {len(self.klines)} свечей")
+                print(
+                    f"✅ Данные загружены из {self.data_path}: {len(self.klines)} свечей"
+                )
             except Exception as e:
                 error(f"❌ Ошибка загрузки данных: {e}")
                 self.klines = []

@@ -16,19 +16,19 @@
   },
 
   "defaults": {
-    "sl_percent": 0.01,
-    "tp_percent": 0.03,
+    "sl_percent": 10.0,
+    "tp_percent": 10.0,
     "_description": "Default SL/TP percentages when not provided by strategy signal"
   },
 
   "exit_rules": {
     "macd_reversal": {
-      "enabled": true,
+      "enabled": false,
       "profit_threshold": 0.005,
       "loss_threshold": -0.01
     },
     "rsi_extreme": {
-      "enabled": true,
+      "enabled": false,
       "long_exit_above": 80,
       "short_exit_below": 20
     }

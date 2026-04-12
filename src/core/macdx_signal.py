@@ -210,7 +210,7 @@ class MACDXSignalGenerator:
             bb_width = 0
             if bb_upper > 0 and bb_lower > 0 and bb_middle > 0:
                 bb_width = (bb_upper - bb_lower) / bb_middle * 100
-                if bb_width < bb_width_threshold and adx < adx_threshold:
+                if bb_width < bb_width_threshold or adx < adx_threshold:
                     is_sideways = True
 
             close_prices = analysis.get("close_prices", [])
@@ -419,7 +419,7 @@ class MACDXSignalGenerator:
         if bb_upper > 0 and bb_lower > 0 and bb_middle > 0:
             bb_width = (bb_upper - bb_lower) / bb_middle * 100
             # Sideways = narrow BB width AND low ADX
-            if bb_width < bb_width_threshold and adx < adx_threshold:
+            if bb_width < bb_width_threshold or adx < adx_threshold:
                 is_sideways = True
 
         if not is_sideways:

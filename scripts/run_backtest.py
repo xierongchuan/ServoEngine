@@ -11,11 +11,11 @@ import argparse
 import os
 import sys
 
-# Добавить src в путь
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+# Добавить корень проекта в путь
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.backtest.engine import BacktestEngine
-from src.config_loader import load_backtest_config
+from src.config_loader import load_backtest_config, clear_config_cache
 from src.utils.logger import error, info
 
 
@@ -53,10 +53,16 @@ def main():
         )
 
         try:
+            clear_config_cache()
+            # Сброс кеша SignalGenerator для перезагрузки конфигов
+            from src.backtest.signals import SignalGenerator
+            SignalGenerator._signal_gen_instance = None
             engine = BacktestEngine(args.symbol, args.strategy, args.balance)
             result = engine.run()
         except Exception as e:
+            import traceback
             error(f"Exception in backtest: {e}")
+            traceback.print_exc()
             result = {}
 
         if result and result.get("total_trades", 0) > 0:
@@ -73,12 +79,19 @@ def main():
             print(f"Sharpe Ratio: {result.get('sharpe_ratio', 0):.2f}")
             print(f"Max Drawdown: {result.get('max_drawdown', 0):.2f}")
             print(f"Commands Issued: {result.get('commands_issued', 0)}")
+            if result.get("chart_path"):
+                print(f"📊 График: {result['chart_path']}")
             print(f"Отчет сохранен в data/backtest_result.json")
             print("✅ Бэктест завершен")
         elif result:
             print(f"\nБэктест завершен: 0 сделок за период {result.get('data_period', 'N/A')}")
         else:
             print("❌ Бэктест не выполнен (нет данных или ошибка)")
+            print("   Возможные причины:")
+            print("   1. Нет данных свечей — проверьте data/prices/{SYMBOL}.json")
+            print("   2. Нет API ключей — проверьте .env файл (BINGX_API_KEY, BINGX_SECRET_KEY)")
+            print("   3. SELinux блокирует сеть — проверьте наличие ошибок pasta/udmabuf")
+            print("      Решение: добавьте --security-opt label=disable в podman run")
 
     except Exception as e:
         error(f"Ошибка запуска бэктеста: {e}")
