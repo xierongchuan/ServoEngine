@@ -189,28 +189,9 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
         ws_cache: Shared WebSocket cache dict (multiprocessing.Manager proxy)
         ws_ready: Shared ready flags dict (multiprocessing.Manager proxy)
     """
-    try:
-        # Setup worker
-        if setup_worker(symbol, ws_cache, ws_ready):
-            return  # SCALP mode handled
-
-        # Initialize components
-        from src.core.trade_tracker import TradeTracker
-        from src.core.decision_journal import DecisionJournal
-
-        tracker = TradeTracker()
-        journal = DecisionJournal()
-
-        # Run MACDX loop
-        run_macdx_loop(symbol, tracker, journal, ws_cache, ws_ready)
-
-    except KeyboardInterrupt:
-        from src.utils.logger import info
-        info(f"🛑 [{symbol}] Process terminated.")
-    except Exception as e:
-        error(f"CRITICAL WORKER INIT ERROR {symbol}: {e}")
-        import traceback
-        traceback.print_exc()
+    from src.core.pipeline import PipelineOrchestrator
+    orchestrator = PipelineOrchestrator()
+    orchestrator.run_symbol_pipeline(symbol, ws_cache, ws_ready)
 
 
 def setup_worker(symbol: str, ws_cache=None, ws_ready=None):

@@ -24,10 +24,10 @@
     "volume_weight": 2,
     "min_score_for_signal": 4,
 
-    "enable_strengthening_trend_entry": false,
+    "enable_strengthening_trend_entry": true,
     "strengthening_trend_min_candles": 2,
 
-    "min_volume_ratio": 0.79,
+    "min_volume_ratio": 0.7,
     "ignore_volume_on_strong_trend": false,
 
     "min_atr_ratio": 0.003,

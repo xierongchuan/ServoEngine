@@ -12,10 +12,7 @@
       "DOGEUSDT",
       "DOTUSDT",
       "AVAXUSDT",
-      "LTCUSDT",
-      "LINKUSDT",
-      "UNIUSDT",
-      "ATOMUSDT"
+      "LTCUSDT"
     ]
   },
   "symbol_profiles": {
@@ -27,10 +24,7 @@
     "DOGEUSDT": "default",
     "DOTUSDT": "default",
     "AVAXUSDT": "default",
-    "LTCUSDT": "default",
-    "LINKUSDT": "default",
-    "UNIUSDT": "default",
-    "ATOMUSDT": "default"
+    "LTCUSDT": "default"
   },
   "disabled_symbols": []
 }
