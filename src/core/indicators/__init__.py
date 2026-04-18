@@ -6,6 +6,8 @@ from .trend import (
     calculate_seb,
     calculate_seb_series,
     calculate_sma_series,
+    calculate_adx,
+    calculate_adx_series,
 )
 from .momentum import (
     calculate_macd,
@@ -32,6 +34,8 @@ __all__ = [
     "calculate_ema_series",
     "calculate_seb",
     "calculate_seb_series",
+    "calculate_adx",
+    "calculate_adx_series",
     # momentum
     "calculate_macd",
     "calculate_rsi_series",

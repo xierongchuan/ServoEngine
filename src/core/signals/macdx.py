@@ -1,5 +1,6 @@
 """MACDX — детерминированный генератор сигналов на основе MACD-кроссовера."""
 
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from src.utils.logger import debug, info, warning
@@ -32,6 +33,11 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         self.rules = self.settings.get("signal_rules", {})
         self.exit_rules = self.settings.get("exit_rules", {})
         self.preset = self.settings.get("preset", {})
+        self._last_close_time: Optional[str] = None
+
+    def set_last_close_time(self, close_time: str):
+        """Устанавливает время последнего закрытия для cooldown."""
+        self._last_close_time = close_time
 
     def generate(self, analysis: Dict, regime: Optional[Dict] = None) -> Dict:
         # Minimal logging for backtest
@@ -67,8 +73,12 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         rsi_short_max = self.rules.get("rsi_short_max", 75)
         rsi_short_min = self.rules.get("rsi_short_min", 35)
         bb_width_threshold = self.rules.get("bb_width_threshold", 0.5)
-        adx_threshold = self.rules.get("adx_threshold", 20)
+        adx_threshold = self.rules.get("adx_threshold", 25)
 
+        enable_volume_filter = self.rules.get("enable_volume_filter", True)
+        enable_strengthening = self.rules.get("enable_strengthening_trend_entry", False)
+        strengthening_weight = self.rules.get("strengthening_trend_weight", 2) if enable_strengthening else 0
+        
         max_score_base = (
             macd_cross_weight
             + rsi_weight
@@ -77,10 +87,9 @@ class MacdxSignalGenerator(BaseSignalGenerator):
             + no_exhaustion_weight
             + volume_weight
         )
-        enable_volume_filter = self.rules.get("enable_volume_filter", True)
         if not enable_volume_filter:
             max_score_base -= volume_weight
-        max_score = max_score_base
+        max_score = max_score_base + strengthening_weight
 
         if regime and regime.get("recommended_min_score"):
             min_score = regime["recommended_min_score"]
@@ -98,6 +107,28 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 },
                 regime,
             )
+
+        cooldown_hours = self.preset.get("cooldown_after_close_hours", 0)
+        if cooldown_hours > 0 and self._last_close_time:
+            try:
+                close_dt = datetime.strptime(self._last_close_time, "%Y-%m-%d %H:%M:%S")
+                hours_since = (datetime.now() - close_dt).total_seconds() / 3600
+                if hours_since < cooldown_hours:
+                    remaining = cooldown_hours - hours_since
+                    debug(f"[MACDX] HOLD | Cooldown: {remaining:.1f}h remaining")
+                    return self._hold_result(
+                        max_score,
+                        [f"Cooldown: {remaining:.1f}h remaining"],
+                        {
+                            "filter": "cooldown",
+                            "hours_remaining": remaining,
+                            "confirmations": 0,
+                            "potential_score": 0,
+                        },
+                        regime,
+                    )
+            except Exception:
+                pass
 
         enable_volume_filter = self.rules.get("enable_volume_filter", True)
         ignore_volume_on_strong = self.rules.get("ignore_volume_on_strong_trend", True)
@@ -151,6 +182,35 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         else:
             potential_long = macd_hist > 0 and macd_hist_prev <= 0
             potential_short = macd_hist < 0 and macd_hist_prev >= 0
+
+        trend_alignment_filter = self.rules.get("trend_alignment_filter", True)
+        if trend_alignment_filter:
+            if last_5_direction in ["STRONG_UP", "UP"] and potential_short:
+                debug(f"[MACDX] HOLD | Counter-trend: last_5={last_5_direction}, trying SHORT")
+                return self._hold_result(
+                    max_score,
+                    [f"Counter-trend: {last_5_direction} trend, SHORT blocked"],
+                    {
+                        "last_5_direction": last_5_direction,
+                        "filter": "counter_trend",
+                        "confirmations": 0,
+                        "potential_score": 0,
+                    },
+                    regime,
+                )
+            if last_5_direction in ["STRONG_DOWN", "DOWN"] and potential_long:
+                debug(f"[MACDX] HOLD | Counter-trend: last_5={last_5_direction}, trying LONG")
+                return self._hold_result(
+                    max_score,
+                    [f"Counter-trend: {last_5_direction} trend, LONG blocked"],
+                    {
+                        "last_5_direction": last_5_direction,
+                        "filter": "counter_trend",
+                        "confirmations": 0,
+                        "potential_score": 0,
+                    },
+                    regime,
+                )
 
         if consecutive_red_filter and potential_long:
             has_consecutive_reds = last_5_direction in ["STRONG_DOWN", "DOWN"]
@@ -399,20 +459,22 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 debug(f"[MACDX] Strengthening trend SHORT: hist={macd_hist:.4f}")
 
         rsi_long_ok = rsi_long_min <= rsi <= rsi_long_max
+        debug(f"[MACDX] RSI check: rsi={rsi}, zone=[{rsi_long_min}-{rsi_long_max}], ok={rsi_long_ok}, weight={rsi_weight}")
         rsi_short_ok = rsi_short_min <= rsi <= rsi_short_max
-        rsi_extreme_oversold = rsi < 30
-        rsi_extreme_overbought = rsi > 70
+        rsi_extreme_oversold = rsi < 20
+        rsi_extreme_overbought = rsi > 80
         long_blocked = False
         short_blocked = False
 
         if macd_cross_long:
-            if rsi_extreme_overbought:
-                long_reasons.append(
-                    f"RSI {rsi:.0f} EXTREME OVERBOUGHT - блокируем LONG\n"
-                )
-                long_score = 0
-                long_blocked = True
-                debug(f"[MACDX] RSI blocks LONG: extreme overbought ({rsi:.0f})")
+            if rsi_extreme_oversold:
+                long_reasons.append(f"RSI {rsi:.0f} EXTREME OVERSOLD - +1 за экстрим\n")
+                long_score += rsi_weight
+                long_confirmations += 1
+                debug(f"[MACDX] RSI LONG: extreme oversold boost ({rsi:.0f})")
+            elif rsi_extreme_overbought:
+                long_reasons.append(f"RSI {rsi:.0f} EXTREME OVERBOUGHT - без блокировки\n")
+                debug(f"[MACDX] RSI LONG: extreme overbought but allowed ({rsi:.0f})")
             elif rsi_long_ok:
                 long_score += rsi_weight
                 long_reasons.append(f"RSI {rsi:.0f} in zone +{rsi_weight}\n")
@@ -425,14 +487,14 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 debug(f"[MACDX] RSI rejects LONG: {rsi:.0f} outside zone")
 
         if macd_cross_short:
-            if rsi_extreme_oversold:
-                short_reasons.append(
-                    f"RSI {rsi:.0f} EXTREME OVERSOLD - блокируем SELL\n"
-                )
-                short_score = 0
-                short_confirmations = 0
-                short_blocked = True
-                debug(f"[MACDX] RSI blocks SHORT: extreme oversold ({rsi:.0f})")
+            if rsi_extreme_overbought:
+                short_reasons.append(f"RSI {rsi:.0f} EXTREME OVERBOUGHT - +1 за экстрим\n")
+                short_score += rsi_weight
+                short_confirmations += 1
+                debug(f"[MACDX] RSI SHORT: extreme overbought boost ({rsi:.0f})")
+            elif rsi_extreme_oversold:
+                short_reasons.append(f"RSI {rsi:.0f} EXTREME OVERSOLD - без блокировки\n")
+                debug(f"[MACDX] RSI SHORT: extreme oversold but allowed ({rsi:.0f})")
             elif rsi_short_ok:
                 short_score += rsi_weight
                 short_reasons.append(f"RSI {rsi:.0f} in zone +{rsi_weight}\n")
@@ -473,18 +535,27 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 debug(f"[MACDX] EMA neutral: flat")
 
         if macd_cross_long and ema_short:
-            long_reasons.append("EMA counter-trend (caution)\n")
+            long_score -= ema_weight
+            long_reasons.append(f"EMA counter-trend (9<21) -{ema_weight}\n")
+            debug(f"[MACDX] EMA counter-trend PENALTY for LONG: -{ema_weight}")
         if macd_cross_short and ema_long:
-            short_reasons.append("EMA counter-trend (caution)\n")
+            short_score -= ema_weight
+            short_reasons.append(f"EMA counter-trend (9>21) -{ema_weight}\n")
+            debug(f"[MACDX] EMA counter-trend PENALTY for SHORT: -{ema_weight}")
 
         is_sideways = False
         bb_width = 0
         sideways_block_signals = self.rules.get("sideways_block_signals", False)
+        min_adx_for_trend = self.rules.get("min_adx_for_entry", 20)
 
         if bb_upper > 0 and bb_lower > 0 and bb_middle > 0:
             bb_width = (bb_upper - bb_lower) / bb_middle * 100
             if bb_width < bb_width_threshold or adx < adx_threshold:
                 is_sideways = True
+        
+        if last_5_direction == "MIXED" and adx < min_adx_for_trend:
+            is_sideways = True
+            debug(f"[MACDX] Sideways: MIXED direction + low ADX ({adx:.0f})")
 
         debug(
             f"[MACDX] Sideways check: BB={bb_width:.1f}%, ADX={adx:.0f}, is_sideways={is_sideways}, block_signals={sideways_block_signals}"
@@ -512,14 +583,23 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 debug(f"[MACDX] Not sideways confirms SHORT: +{not_sideways_weight}")
         else:
             debug(f"[MACDX] Sideways market detected")
-            if macd_cross_long:
-                long_reasons.append(
-                    f"Sideways market (BB:{bb_width:.1f}% ADX:{adx:.0f})\n"
-                )
-            if macd_cross_short:
-                short_reasons.append(
-                    f"Sideways market (BB:{bb_width:.1f}% ADX:{adx:.0f})\n"
-                )
+
+        debug(f"[MACDX] RSI check: rsi_long_min={rsi_long_min}, rsi_long_max={rsi_long_max}")
+
+        if macd_cross_long:
+            if rsi_extreme_overbought:
+                long_reasons.append(f"RSI {rsi:.0f} EXTREME OVERBOUGHT - блокируем LONG\n")
+                long_score = 0
+                long_blocked = True
+                debug(f"[MACDX] RSI blocks LONG: extreme overbought ({rsi:.0f})")
+            elif rsi_long_ok:
+                long_score += rsi_weight
+                long_reasons.append(f"RSI {rsi:.0f} in zone +{rsi_weight}\n")
+                long_confirmations += 1
+                debug(f"[MACDX] RSI confirms LONG: {rsi:.0f} in zone, +{rsi_weight}")
+            else:
+                long_reasons.append(f"RSI {rsi:.0f} outside zone (need {rsi_long_min}-{rsi_long_max})\n")
+                debug(f"[MACDX] RSI rejects LONG: {rsi:.0f} outside zone")
 
         close_prices = analysis.get("close_prices", [])
         rsi_values = analysis.get("rsi_values", [])
@@ -565,6 +645,26 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 debug(f"[MACDX] Volume confirms SHORT: +{volume_weight}")
         else:
             debug(f"[MACDX] Volume insufficient for confirmation")
+
+        # ADX Penalty - штраф за боковой рынок
+        adx_enabled = self.rules.get("adx_enabled", True)
+        adx_penalty = self.rules.get("adx_penalty", 0)
+
+        debug(f"[MACDX] ADX penalty: enabled={adx_enabled}, penalty={adx_penalty}, adx={adx}, threshold={adx_threshold}")
+        
+        if adx_enabled and adx_penalty != 0 and adx < adx_threshold:
+            long_score_adjusted = long_score + adx_penalty
+            short_score_adjusted = short_score + adx_penalty
+
+            if adx_penalty < 0:
+                if macd_cross_long and long_score > 0:
+                    long_reasons.append(f"ADX={adx:.0f}<{adx_threshold} ({adx_penalty})\n")
+                if macd_cross_short and short_score > 0:
+                    short_reasons.append(f"ADX={adx:.0f}<{adx_threshold} ({adx_penalty})\n")
+
+            long_score = max(0, long_score_adjusted)
+            short_score = max(0, short_score_adjusted)
+            debug(f"[MACDX] ADX penalty applied: {adx_penalty} (ADX={adx:.0f}, threshold={adx_threshold})")
 
         min_confirmations = self.rules.get("min_confirmations", 3)
 
@@ -621,17 +721,31 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 trend_strong_short = False
             
             if trend_strong_long:
-                signal = "BUY"
-                score = long_score
-                reasons = ["MACD trend 2-3 candles +"]
-                confirmations = 1
-                print(f"[MACDX] DEBUG trend_follow: signal=BUY hist={macd_hist:.4f}")
+                if adx < adx_threshold:
+                    signal = "HOLD"
+                    score = max(long_score, short_score)
+                    reasons = [f"ADX={adx:.0f}<{adx_threshold} blocks trend-follow LONG\n"]
+                    confirmations = 0
+                    debug(f"[MACDX] Trend-follow LONG blocked: ADX={adx:.0f}<{adx_threshold}")
+                else:
+                    signal = "BUY"
+                    score = long_score
+                    reasons = ["MACD trend 2-3 candles +"]
+                    confirmations = 1
+                    print(f"[MACDX] DEBUG trend_follow: signal=BUY hist={macd_hist:.4f}")
             elif trend_strong_short:
-                signal = "SELL"
-                score = short_score
-                reasons = ["MACD trend 2-3 candles +"]
-                confirmations = 1
-                print(f"[MACDX] DEBUG trend_follow: signal=SELL hist={macd_hist:.4f}")
+                if adx < adx_threshold:
+                    signal = "HOLD"
+                    score = max(long_score, short_score)
+                    reasons = [f"ADX={adx:.0f}<{adx_threshold} blocks trend-follow SHORT\n"]
+                    confirmations = 0
+                    debug(f"[MACDX] Trend-follow SHORT blocked: ADX={adx:.0f}<{adx_threshold}")
+                else:
+                    signal = "SELL"
+                    score = short_score
+                    reasons = ["MACD trend 2-3 candles +"]
+                    confirmations = 1
+                    print(f"[MACDX] DEBUG trend_follow: signal=SELL hist={macd_hist:.4f}")
             else:
                 signal = "HOLD"
                 score = max(long_score, short_score)

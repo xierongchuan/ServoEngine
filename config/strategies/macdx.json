@@ -1,6 +1,6 @@
 {
   "_description": "MACDX - MACD crossover strategy with 3-5 confirmations",
-  "_version": "2.0.0",
+  "_version": "2.1.0",
 
   "preset": {
     "timeframe": "15m",
@@ -8,10 +8,10 @@
     "plotter_period": "1D",
     "loop_interval": 60,
     "position_check_interval": 15,
-    "atr_sl_mult": 4.0,
-    "atr_tp_mult": 7.0,
-    "leverage": 9,
-    "cooldown_after_close_hours": 0.5
+    "atr_sl_mult": 0.0,
+    "atr_tp_mult": 5.0,
+    "leverage": 5,
+    "cooldown_after_close_hours": 3.5
   },
 
   "signal_rules": {
@@ -19,68 +19,73 @@
     "rsi_zone_weight": 1,
     "ema_alignment_weight": 2,
     "strengthening_trend_weight": 3,
-    "not_sideways_weight": 2,
+    "not_sideways_weight": 3,
     "no_exhaustion_weight": 1,
-    "volume_weight": 2,
-    "min_score_for_signal": 4,
 
+    "adx_penalty": -3,
+    "adx_threshold": 25,
+    "adx_enabled": false,
+    "volume_weight": 1,
+
+    "min_score_for_signal": 8,
     "enable_strengthening_trend_entry": true,
     "strengthening_trend_min_candles": 2,
 
-    "min_volume_ratio": 0.7,
+    "min_volume_ratio": 0.5,
     "ignore_volume_on_strong_trend": false,
 
-    "min_atr_ratio": 0.003,
-    "rsi_long_max": 95,
+    "min_atr_ratio": 0.0005,
+    "rsi_long_max": 70,
     "rsi_long_min": 30,
-    "rsi_short_max": 75,
-    "rsi_short_min": 35,
-    "bb_width_threshold": 0.5,
-    "adx_threshold": 25,
+    "rsi_short_max": 70,
+    "rsi_short_min": 30,
+    "bb_width_threshold": 2.5,
     "sideways_block_signals": true,
+    "trend_alignment_filter": true,
+    "min_adx_for_entry": 28,
     "consecutive_red_filter": true,
     "min_consecutive_for_block": 3,
-    "enable_counter_trend_filter": true,
+    "enable_counter_trend_filter": false,
     "counter_trend_ema_threshold": 1.0,
     "enable_volume_filter": true,
-    "volume_confirm_threshold": 0.7,
+    "volume_confirm_threshold": 0.8,
     "enable_risk_validation": false,
-    "min_risk_reward_ratio": 1.2,
+    "min_risk_reward_ratio": 1.5,
     "require_2_candle_confirmation": false
   },
 
   "exit_rules": {
     "macd_weakening": {
-      "enabled": false,
-      "threshold": 0.5,
-      "min_candles_after_peak": 6,
-      "min_candles_in_trade": 6,
-      "min_profit_pct": 1.0,
-      "adx_override": 45,
-      "confirmation_candles": 3,
-      "trend_strength_min": 0.7
+      "enabled": true,
+      "threshold": 0.3,
+      "min_candles_after_peak": 4,
+      "min_candles_in_trade": 4,
+      "min_profit_pct": 2.0,
+      "adx_override": 35,
+      "confirmation_candles": 2,
+      "trend_strength_min": 0.5
     },
     "trailing_profit": {
-      "enabled": false,
-      "activation_pnl": 1.3,
+      "enabled": true,
+      "activation_pnl": 2.5,
       "drawdown_levels": {
-        "high_profit": { "threshold": 8.0, "max_drawdown": 0.4 },
-        "medium_profit": { "threshold": 5.0, "max_drawdown": 0.5 },
-        "low_profit": { "threshold": 3.0, "max_drawdown": 0.6 }
+        "high_profit": { "threshold": 6.0, "max_drawdown": 0.3 },
+        "medium_profit": { "threshold": 4.0, "max_drawdown": 0.4 },
+        "low_profit": { "threshold": 2.5, "max_drawdown": 0.5 }
       },
-      "hysteresis_buffer": 0.35
+      "hysteresis_buffer": 0.25
     },
     "impulse_candle": {
-      "enabled": true,
-      "body_atr_multiplier": 2.0,
-      "min_profit_pct": 1.9,
-      "volume_confirm_ratio": 2.5,
-      "volume_min_profit_pct": 1.0
+      "enabled": false,
+      "body_atr_multiplier": 2.5,
+      "min_profit_pct": 5.0,
+      "volume_confirm_ratio": 3.0,
+      "volume_min_profit_pct": 3.0
     },
     "trailing_stop": {
-      "enabled": false,
-      "atr_multiplier": 1.5,
-      "activation_atr": 1.0
+      "enabled": true,
+      "atr_multiplier": 2.0,
+      "activation_atr": 1.5
     },
     "pump_guard": {
       "enabled": true,
@@ -91,32 +96,32 @@
     },
     "emergency": {
       "enabled": true,
-      "max_loss_atr": 3.0,
-      "max_loss_pct": 3.0,
-      "max_hold_candles": 25,
-      "protect_matching_trend": true
+      "max_loss_atr": 5.0,
+      "max_loss_pct": 8.0,
+      "max_hold_candles": 38,
+      "protect_matching_trend": false
     },
     "regime_adaptation": {
-      "enabled": false,
+      "enabled": true,
       "TRENDING": {
-        "weakening_threshold": 0.4,
-        "trailing_drawdown": 0.5,
-        "impulse_min_profit": 2.0
+        "weakening_threshold": 0.3,
+        "trailing_drawdown": 0.25,
+        "impulse_min_profit": 3.0
       },
       "RANGING": {
-        "weakening_threshold": 0.6,
-        "trailing_drawdown": 0.35,
-        "impulse_min_profit": 0.8
+        "weakening_threshold": 0.5,
+        "trailing_drawdown": 0.15,
+        "impulse_min_profit": 1.5
       },
       "VOLATILE": {
-        "weakening_threshold": 0.55,
-        "trailing_drawdown": 0.3,
-        "impulse_min_profit": 1.0
+        "weakening_threshold": 0.4,
+        "trailing_drawdown": 0.2,
+        "impulse_min_profit": 2.0
       },
       "TRANSITIONAL": {
-        "weakening_threshold": 0.5,
-        "trailing_drawdown": 0.4,
-        "impulse_min_profit": 1.5
+        "weakening_threshold": 0.4,
+        "trailing_drawdown": 0.25,
+        "impulse_min_profit": 2.5
       }
     },
     "standard_exits": {

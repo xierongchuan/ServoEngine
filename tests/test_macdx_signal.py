@@ -369,10 +369,10 @@ class TestSidewaysDetection:
             ema9=50200,
             ema21=50000,
             rsi=40,
-            bb_upper=50100,
-            bb_lower=49900,
+            bb_upper=51000,
+            bb_lower=49000,
             bb_middle=50000,
-            adx=25,
+            adx=30,
             volume_ratio=1.0,
         )
         result = generator.generate_signal(analysis)
@@ -390,7 +390,7 @@ class TestSidewaysDetection:
             bb_upper=52000,
             bb_lower=48000,
             bb_middle=50000,
-            adx=15,
+            adx=30,
             volume_ratio=1.0,
         )
         result = generator.generate_signal(analysis)

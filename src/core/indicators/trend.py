@@ -1,6 +1,6 @@
-"""Индикаторы тренда: EMA, SMA, SEB (Standard Error Bands)."""
+"""Индикаторы тренда: EMA, SMA, SEB, ADX."""
 
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 
 def calculate_ema(prices: List[float], period: int) -> float:
@@ -136,3 +136,175 @@ def calculate_seb_series(
         lower_series[i - 1] = reg_val - (mult * std_err)
 
     return linreg_series, upper_series, lower_series
+
+
+def _wilder_smooth(values: List[float], period: int) -> List[float]:
+    """Wilder's smoothing method (Wilders Exponential Moving Average)."""
+    if len(values) < period:
+        return []
+    smoothed = [sum(values[:period])]
+    for i in range(period, len(values)):
+        smoothed.append(smoothed[-1] - (smoothed[-1] / period) + values[i])
+    return smoothed
+
+
+def calculate_adx(
+    klines: List[Dict], period: int = 14
+) -> Dict:
+    """
+    Рассчитывает ADX (Average Directional Index) и +DI/-DI.
+    Оптимален для таймфреймов 15м, 1ч и выше.
+
+    Args:
+        klines: Список свечей с highPrice, lowPrice, closePrice
+        period: Период расчёта (по умолчанию 14)
+
+    Returns:
+        {"adx": float, "plus_di": float, "minus_di": float, "trend": str}
+    """
+    if len(klines) < period + 1:
+        return {"adx": 0.0, "plus_di": 0.0, "minus_di": 0.0, "trend": "UNKNOWN"}
+
+    plus_dm, minus_dm, tr_values = [], [], []
+
+    for i in range(1, len(klines)):
+        high = klines[i]["highPrice"]
+        low = klines[i]["lowPrice"]
+        prev_high = klines[i - 1]["highPrice"]
+        prev_low = klines[i - 1]["lowPrice"]
+        prev_close = klines[i - 1]["closePrice"]
+
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        tr_values.append(tr)
+
+        up_move = high - prev_high
+        down_move = prev_low - low
+
+        plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0)
+        minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0)
+
+    smoothed_tr = _wilder_smooth(tr_values, period)
+    smoothed_plus_dm = _wilder_smooth(plus_dm, period)
+    smoothed_minus_dm = _wilder_smooth(minus_dm, period)
+
+    if not smoothed_tr or smoothed_tr[-1] == 0:
+        return {"adx": 0.0, "plus_di": 0.0, "minus_di": 0.0, "trend": "UNKNOWN"}
+
+    plus_di_values, minus_di_values, dx_values = [], [], []
+
+    for i in range(len(smoothed_tr)):
+        if smoothed_tr[i] > 0:
+            plus_di = 100 * smoothed_plus_dm[i] / smoothed_tr[i]
+            minus_di = 100 * smoothed_minus_dm[i] / smoothed_tr[i]
+        else:
+            plus_di, minus_di = 0.0, 0.0
+
+        plus_di_values.append(plus_di)
+        minus_di_values.append(minus_di)
+
+        di_sum = plus_di + minus_di
+        dx = 100 * abs(plus_di - minus_di) / di_sum if di_sum > 0 else 0.0
+        dx_values.append(dx)
+
+    if len(dx_values) >= period:
+        adx = sum(dx_values[-period:]) / period
+    else:
+        adx = sum(dx_values) / len(dx_values) if dx_values else 0.0
+
+    plus_di = plus_di_values[-1] if plus_di_values else 0.0
+    minus_di = minus_di_values[-1] if minus_di_values else 0.0
+
+    if adx < 20:
+        trend = "RANGING"
+    elif adx < 25:
+        trend = "WEAK_TREND"
+    elif adx < 40:
+        trend = "TRENDING_UP" if plus_di > minus_di else "TRENDING_DOWN"
+    else:
+        trend = "STRONG_TREND_UP" if plus_di > minus_di else "STRONG_TREND_DOWN"
+
+    return {"adx": round(adx, 2), "plus_di": round(plus_di, 2), "minus_di": round(minus_di, 2), "trend": trend}
+
+
+def calculate_adx_series(
+    klines: List[Dict], period: int = 14
+) -> Dict[str, List[float]]:
+    """
+    Рассчитывает полную историю ADX для визуализации.
+    Возвращает массивы значений, выровненные по времени с входными данными.
+
+    Args:
+        klines: Список свечей с highPrice, lowPrice, closePrice
+        period: Период расчёта (по умолчанию 14)
+
+    Returns:
+        {"adx": List[float], "plus_di": List[float], "minus_di": List[float], "trend": List[str]}
+    """
+    n = len(klines)
+    if n < period + 1:
+        return {"adx": [0.0] * n, "plus_di": [0.0] * n, "minus_di": [0.0] * n, "trend": ["UNKNOWN"] * n}
+
+    plus_dm, minus_dm, tr_values = [], [], []
+
+    for i in range(1, n):
+        high = klines[i]["highPrice"]
+        low = klines[i]["lowPrice"]
+        prev_high = klines[i - 1]["highPrice"]
+        prev_low = klines[i - 1]["lowPrice"]
+        prev_close = klines[i - 1]["closePrice"]
+
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        tr_values.append(tr)
+
+        up_move = high - prev_high
+        down_move = prev_low - low
+
+        plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0)
+        minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0)
+
+    smoothed_tr = _wilder_smooth(tr_values, period)
+    smoothed_plus_dm = _wilder_smooth(plus_dm, period)
+    smoothed_minus_dm = _wilder_smooth(minus_dm, period)
+
+    adx_series = [0.0] * n
+    plus_di_series = [0.0] * n
+    minus_di_series = [0.0] * n
+    trend_series = ["UNKNOWN"] * n
+
+    if not smoothed_tr:
+        return {"adx": adx_series, "plus_di": plus_di_series, "minus_di": minus_di_series, "trend": trend_series}
+
+    plus_di_values, minus_di_values, dx_values = [], [], []
+
+    for i in range(len(smoothed_tr)):
+        if smoothed_tr[i] > 0:
+            plus_di = 100 * smoothed_plus_dm[i] / smoothed_tr[i]
+            minus_di = 100 * smoothed_minus_dm[i] / smoothed_tr[i]
+        else:
+            plus_di, minus_di = 0.0, 0.0
+
+        plus_di_values.append(plus_di)
+        minus_di_values.append(minus_di)
+
+        di_sum = plus_di + minus_di
+        dx = 100 * abs(plus_di - minus_di) / di_sum if di_sum > 0 else 0.0
+        dx_values.append(dx)
+
+    for i in range(len(dx_values)):
+        start_idx = max(0, i - period + 1)
+        window = dx_values[start_idx:i + 1]
+        adx_val = sum(window) / len(window)
+        adx_series[i + 1] = round(adx_val, 2)
+        plus_di_series[i + 1] = round(plus_di_values[i], 2)
+        minus_di_series[i + 1] = round(minus_di_values[i], 2)
+
+        if adx_val < 20:
+            trend_series[i + 1] = "RANGING"
+        elif adx_val < 25:
+            trend_series[i + 1] = "WEAK_TREND"
+        elif adx_val < 40:
+            trend_series[i + 1] = "TRENDING_UP" if plus_di_values[i] > minus_di_values[i] else "TRENDING_DOWN"
+        else:
+            trend_series[i + 1] = "STRONG_TREND_UP" if plus_di_values[i] > minus_di_values[i] else "STRONG_TREND_DOWN"
+
+    return {"adx": adx_series, "plus_di": plus_di_series, "minus_di": minus_di_series, "trend": trend_series}

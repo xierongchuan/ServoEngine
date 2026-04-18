@@ -128,6 +128,7 @@ class BacktestEngine:
                 if sl_tp_cmd:
                     self.simulator.execute(sl_tp_cmd)
                     self.signal_generator.reset_exit_context()
+                    self.signal_generator.set_last_close_time(kline_time)
                     self._record_equity(kline_time, current_price)
                     self._record_trade_marker(kline_time, current_price, "close", sl_tp_cmd.reason or "SL/TP")
                     continue
@@ -150,9 +151,10 @@ class BacktestEngine:
                         info(f"📈 {command.action.value.upper()} на {self.symbol} по {current_price:.2f}")
                     elif command.action.is_exit:
                         self.signal_generator.reset_exit_context()
+                        self.signal_generator.set_last_close_time(kline_time)
                         self._record_trade_marker(kline_time, current_price, "close", signal.get("reason", "strategy"))
                         # После закрытия — сразу проверить сигнал для новой позиции (если включено в конфиге)
-                        reentry_enabled = self.config.get("features", {}).get("enable_immediate_reentry_after_exit", True)
+                        reentry_enabled = self.config.get("features", {}).get("enable_immediate_reentry_after_exit", False)
                         if reentry_enabled:
                             position = None
                             signal2 = self.signal_generator.generate_signal(klines, i, position=position)

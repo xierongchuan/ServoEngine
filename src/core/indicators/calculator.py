@@ -3,7 +3,7 @@
 from typing import Dict, List, Tuple
 
 from src.config import AI_THRESHOLDS, TECHNICAL_ANALYSIS
-from .trend import calculate_ema_series
+from .trend import calculate_ema_series, calculate_adx, calculate_adx_series
 from .momentum import calculate_rsi_series
 
 
@@ -53,3 +53,13 @@ def calculate_indicator_series(closes: List[float]) -> Dict:
         "ema9": ema9_series,
         "ema21": ema21_series,
     }
+
+
+def calculate_adx_from_klines(klines: List[Dict], period: int = 14) -> Dict:
+    """Удобная обёртка для расчёта ADX из свечей."""
+    return calculate_adx(klines, period)
+
+
+def calculate_adx_series_from_klines(klines: List[Dict], period: int = 14) -> Dict:
+    """Удобная обёртка для расчёта серии ADX из свечей."""
+    return calculate_adx_series(klines, period)

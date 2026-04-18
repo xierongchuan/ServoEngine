@@ -1,6 +1,9 @@
 import math
-from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
 from ..core.predict import get_prediction
+
 
 class SignalGenerator:
     """
@@ -24,16 +27,25 @@ class SignalGenerator:
         self.last_indicators: Dict[str, Any] = {}
         # Exit context — состояние выхода, сохраняется между свечами
         self._exit_context: Dict[str, Any] = {}
+        # Cooldown tracking для backtest
+        self._last_close_time: Optional[str] = None
+        self._cooldown_hours: float = (
+            config.get("preset", {}).get("cooldown_after_close_hours", 0)
+            if config
+            else 0
+        )
 
-    def calculate_indicators(self, klines: List[Dict[str, Any]], index: int) -> Dict[str, Any]:
+    def calculate_indicators(
+        self, klines: List[Dict[str, Any]], index: int
+    ) -> Dict[str, Any]:
         """Рассчитывает индикаторы на основе последних свечей."""
         if index < 30:  # Минимум данных
             return {}
 
-        closes = [k["closePrice"] for k in klines[:index+1]]
-        highs = [k["highPrice"] for k in klines[:index+1]]
-        lows = [k["lowPrice"] for k in klines[:index+1]]
-        volumes = [k["volume"] for k in klines[:index+1]]
+        closes = [k["closePrice"] for k in klines[: index + 1]]
+        highs = [k["highPrice"] for k in klines[: index + 1]]
+        lows = [k["lowPrice"] for k in klines[: index + 1]]
+        volumes = [k["volume"] for k in klines[: index + 1]]
 
         # RSI (14) — инкрементальный расчёт серии за один проход
         rsi_values = self._calculate_rsi_series(closes, 14)
@@ -44,7 +56,9 @@ class SignalGenerator:
         ema21 = self._calculate_ema(closes, 21)
 
         # MACD (12,26,9) — с hist_prev за один вызов
-        macd_line, macd_signal, macd_hist, macd_hist_prev, macd_hist_prev_prev = self._calculate_macd_with_prev(closes)
+        macd_line, macd_signal, macd_hist, macd_hist_prev, macd_hist_prev_prev = (
+            self._calculate_macd_with_prev(closes)
+        )
 
         # BB width
         bb_width = self._calculate_bb_width(closes, 20)
@@ -57,9 +71,33 @@ class SignalGenerator:
         atr_ratio = atr / closes[-1] if closes[-1] > 0 else 0
 
         # Volume ratio
-        volume_ratio = volumes[-1] / (sum(volumes[-20:]) / 20) if len(volumes) >= 20 else 1
+        volume_ratio = (
+            volumes[-1] / (sum(volumes[-20:]) / 20) if len(volumes) >= 20 else 1
+        )
 
-        opens = [k["openPrice"] for k in klines[:index+1]]
+        opens = [k["openPrice"] for k in klines[: index + 1]]
+
+        # Last 5 direction
+        last_5_closes = closes[-5:] if len(closes) >= 5 else closes
+        if len(last_5_closes) >= 2:
+            up_candles = sum(
+                1
+                for i in range(1, len(last_5_closes))
+                if last_5_closes[i] > last_5_closes[i - 1]
+            )
+            down_candles = len(last_5_closes) - 1 - up_candles
+            if up_candles >= 4:
+                last_5_direction = "STRONG UP"
+            elif up_candles >= 3:
+                last_5_direction = "UP"
+            elif down_candles >= 4:
+                last_5_direction = "STRONG DOWN"
+            elif down_candles >= 3:
+                last_5_direction = "DOWN"
+            else:
+                last_5_direction = "MIXED"
+        else:
+            last_5_direction = "MIXED"
 
         return {
             "rsi": rsi,
@@ -78,6 +116,7 @@ class SignalGenerator:
             "volume_ratio": volume_ratio,
             "close_prices": closes,
             "open_prices": opens,
+            "last_5_direction": last_5_direction,
         }
 
     def _get_signal_gen(self):
@@ -96,8 +135,16 @@ class SignalGenerator:
         self._signal_gen_instance = SignalGen(self.config)
         return self._signal_gen_instance
 
-    def generate_signal(self, klines: List[Dict[str, Any]], index: int,
-                        position: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def set_last_close_time(self, close_time: str):
+        """Устанавливает время последнего закрытия для cooldown в backtest."""
+        self._last_close_time = close_time
+
+    def generate_signal(
+        self,
+        klines: List[Dict[str, Any]],
+        index: int,
+        position: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Генерирует единый сигнал через DTO — входы и выходы через один интерфейс.
 
@@ -120,20 +167,56 @@ class SignalGenerator:
 
         analysis["current_price"] = klines[index]["closePrice"]
 
+        # Cooldown check для backtest
+        if self._cooldown_hours > 0 and self._last_close_time:
+            try:
+                # Поддержка ISO и классического формата
+                close_str = self._last_close_time.replace("T", " ")
+                close_dt = datetime.strptime(close_str, "%Y-%m-%d %H:%M:%S")
+                kline_time = klines[index].get("snapshotTimeUTC", "")
+                if kline_time:
+                    # Backtest использует snapshotTimeUTC в формате ISO
+                    if isinstance(kline_time, (int, float)):
+                        kline_dt = datetime.fromtimestamp(kline_time / 1000)
+                    else:
+                        kline_dt = datetime.strptime(
+                            str(kline_time).replace("T", " "), "%Y-%m-%d %H:%M:%S"
+                        )
+                    hours_since = (kline_dt - close_dt).total_seconds() / 3600
+                    if hours_since < self._cooldown_hours:
+                        remaining = self._cooldown_hours - hours_since
+                        return {
+                            "action": "HOLD",
+                            "reason": f"Cooldown: {remaining:.1f}h remaining",
+                            "score": 0,
+                        }
+            except Exception:
+                pass
+
         try:
             gen = self._get_signal_gen()
             if gen is None:
-                return {"action": "HOLD", "reason": f"Unsupported strategy: {self.strategy}"}
+                return {
+                    "action": "HOLD",
+                    "reason": f"Unsupported strategy: {self.strategy}",
+                }
+
+            # Передать last_close_time в генератор для cooldown
+            if self._last_close_time and hasattr(gen, "set_last_close_time"):
+                gen.set_last_close_time(self._last_close_time)
 
             # Проверить условия выхода, если есть открытая позиция
-            if position and hasattr(gen, 'should_close'):
+            if position and hasattr(gen, "should_close"):
                 close_signal = self._check_exit(gen, analysis, position)
                 if close_signal:
                     return close_signal
 
             result = gen.generate(analysis)
         except ImportError:
-            return {"action": "HOLD", "reason": f"Signal generator for {self.strategy} not found"}
+            return {
+                "action": "HOLD",
+                "reason": f"Signal generator for {self.strategy} not found",
+            }
         except Exception as e:
             return {"action": "HOLD", "reason": f"Error generating signal: {e}"}
 
@@ -141,25 +224,38 @@ class SignalGenerator:
         normalized = {
             "action": result.get("signal", "HOLD"),
             "score": result.get("score", 0),
-            "reason": result.get("reasons", ["нет"])[0] if result.get("reasons") else "нет"
+            "reason": result.get("reasons", ["нет"])[0]
+            if result.get("reasons")
+            else "нет",
         }
 
         # Если есть AI, добавить подтверждение
-        if self.strategy.upper() in ["HYBRID", "HYBRID_VETO"] and normalized["action"] in ["BUY", "SELL"]:
+        if self.strategy.upper() in ["HYBRID", "HYBRID_VETO"] and normalized[
+            "action"
+        ] in ["BUY", "SELL"]:
             signal = normalized["action"]
             score = normalized["score"]
             ai_decision = self._get_ai_confirmation(signal, score, klines, index)
             if ai_decision == "hold":
-                normalized = {"action": "HOLD", "reason": f"AI rejected {signal.lower()} signal"}
+                normalized = {
+                    "action": "HOLD",
+                    "reason": f"AI rejected {signal.lower()} signal",
+                }
             elif ai_decision == signal.lower():
-                normalized["reason"] = (normalized.get("reason", "") + " (AI approved)").strip()
+                normalized["reason"] = (
+                    normalized.get("reason", "") + " (AI approved)"
+                ).strip()
             else:
-                normalized = {"action": "HOLD", "reason": f"AI changed signal to {ai_decision}"}
+                normalized = {
+                    "action": "HOLD",
+                    "reason": f"AI changed signal to {ai_decision}",
+                }
 
         return normalized
 
-    def _check_exit(self, gen, analysis: Dict[str, Any],
-                    position: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _check_exit(
+        self, gen, analysis: Dict[str, Any], position: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
         """
         Проверяет условия выхода через should_close() стратегии.
 
@@ -229,8 +325,8 @@ class SignalGenerator:
         values = []
 
         # Первое окно: сумма gains[1..period] и losses[1..period]
-        sum_gain = sum(gains[1:period + 1])
-        sum_loss = sum(losses[1:period + 1])
+        sum_gain = sum(gains[1 : period + 1])
+        sum_loss = sum(losses[1 : period + 1])
 
         avg_gain = sum_gain / period
         avg_loss = sum_loss / period
@@ -280,7 +376,9 @@ class SignalGenerator:
             series.append(ema)
         return series
 
-    def _calculate_macd_with_prev(self, closes: List[float]) -> Tuple[float, float, float, float, float]:
+    def _calculate_macd_with_prev(
+        self, closes: List[float]
+    ) -> Tuple[float, float, float, float, float]:
         """
         Рассчитывает MACD line, signal, histogram и предыдущий histogram за один проход.
 
@@ -312,7 +410,9 @@ class SignalGenerator:
             signal_multiplier = 2 / (9 + 1)
             signal_ema = sum(macd_series[:9]) / 9
             for val in macd_series[9:]:
-                signal_ema = (val * signal_multiplier) + (signal_ema * (1 - signal_multiplier))
+                signal_ema = (val * signal_multiplier) + (
+                    signal_ema * (1 - signal_multiplier)
+                )
             macd_signal = signal_ema
         else:
             macd_signal = macd_line
@@ -326,7 +426,9 @@ class SignalGenerator:
             if len(prev_series) >= 9:
                 signal_ema_prev = sum(prev_series[:9]) / 9
                 for val in prev_series[9:]:
-                    signal_ema_prev = (val * signal_multiplier) + (signal_ema_prev * (1 - signal_multiplier))
+                    signal_ema_prev = (val * signal_multiplier) + (
+                        signal_ema_prev * (1 - signal_multiplier)
+                    )
                 macd_hist_prev = prev_series[-1] - signal_ema_prev
             else:
                 macd_hist_prev = 0
@@ -339,7 +441,9 @@ class SignalGenerator:
             if len(prev_prev_series) >= 9:
                 signal_ema_prev_prev = sum(prev_prev_series[:9]) / 9
                 for val in prev_prev_series[9:]:
-                    signal_ema_prev_prev = (val * signal_multiplier) + (signal_ema_prev_prev * (1 - signal_multiplier))
+                    signal_ema_prev_prev = (val * signal_multiplier) + (
+                        signal_ema_prev_prev * (1 - signal_multiplier)
+                    )
                 macd_hist_prev_prev = prev_prev_series[-1] - signal_ema_prev_prev
             else:
                 macd_hist_prev_prev = 0
@@ -356,31 +460,60 @@ class SignalGenerator:
         std = math.sqrt(variance)
         return (std / sma) * 100 if sma > 0 else 0
 
-    def _calculate_adx(self, highs: List[float], lows: List[float], closes: List[float], period: int) -> float:
-        # Упрощенный ADX (требует DM+/DM-)
-        if len(highs) < period:
+    def _calculate_adx(
+        self, highs: List[float], lows: List[float], closes: List[float], period: int
+    ) -> float:
+        """Рассчитывает настоящий ADX с использованием core/indicators."""
+        if len(highs) < period + 1:
             return 0
-        # Полная реализация сложна, упрощаем до среднего диапазона
-        ranges = [highs[i] - lows[i] for i in range(len(highs))]
-        return sum(ranges[-period:]) / period
 
-    def _calculate_atr(self, highs: List[float], lows: List[float], closes: List[float], period: int) -> float:
+        klines = []
+        for i in range(len(highs)):
+            klines.append(
+                {
+                    "highPrice": highs[i],
+                    "lowPrice": lows[i],
+                    "closePrice": closes[i],
+                }
+            )
+
+        try:
+            from src.core.indicators import calculate_adx
+
+            result = calculate_adx(klines, period)
+            return result.get("adx", 0)
+        except Exception:
+            ranges = [highs[i] - lows[i] for i in range(len(highs))]
+            return sum(ranges[-period:]) / period
+
+    def _calculate_atr(
+        self, highs: List[float], lows: List[float], closes: List[float], period: int
+    ) -> float:
         if len(highs) < period:
             return 0
         trs = []
         for i in range(1, len(highs)):
-            tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+            tr = max(
+                highs[i] - lows[i],
+                abs(highs[i] - closes[i - 1]),
+                abs(lows[i] - closes[i - 1]),
+            )
             trs.append(tr)
         return sum(trs[-period:]) / period
 
-    def _get_ai_confirmation(self, signal: str, score: int, klines: List[Dict[str, Any]], index: int) -> str:
+    def _get_ai_confirmation(
+        self, signal: str, score: int, klines: List[Dict[str, Any]], index: int
+    ) -> str:
         """Получить подтверждение от AI."""
         try:
             from ..prompts.strategies.hybrid import HybridStrategy
+
             strategy = HybridStrategy()
             current_price = klines[index]["closePrice"]
             rsi = self.calculate_indicators(klines, index).get("rsi", 50)
-            volume_ratio = self.calculate_indicators(klines, index).get("volume_ratio", 1.0)
+            volume_ratio = self.calculate_indicators(klines, index).get(
+                "volume_ratio", 1.0
+            )
 
             ctx = {
                 "signal_data": {
@@ -389,7 +522,10 @@ class SignalGenerator:
                     "max_score": self.rules.get("max_score", 8),
                     "quality": score / self.rules.get("max_score", 8),
                     "reasons": [f"Score {score}"],
-                    "details": {"long_score": score if signal == "BUY" else 0, "short_score": score if signal == "SELL" else 0}
+                    "details": {
+                        "long_score": score if signal == "BUY" else 0,
+                        "short_score": score if signal == "SELL" else 0,
+                    },
                 },
                 "current_price": current_price,
                 "rsi": rsi,
@@ -405,15 +541,24 @@ class SignalGenerator:
                 "long_sl": current_price * 0.99,
                 "long_tp": current_price * 1.03,
                 "short_sl": current_price * 1.01,
-                "short_tp": current_price * 0.97
+                "short_tp": current_price * 0.97,
             }
 
-            prompt = strategy.get_role() + "\n\n" + strategy.get_objective() + "\n\n" + strategy.get_time_horizon() + "\n\n" + strategy.get_strategy_section(ctx)
-            prompt += "\n\nОтветь только JSON: {\"action\": \"buy\" или \"sell\" или \"hold\"}"
+            prompt = (
+                strategy.get_role()
+                + "\n\n"
+                + strategy.get_objective()
+                + "\n\n"
+                + strategy.get_time_horizon()
+                + "\n\n"
+                + strategy.get_strategy_section(ctx)
+            )
+            prompt += '\n\nОтветь только JSON: {"action": "buy" или "sell" или "hold"}'
 
             response = get_prediction(prompt)
             # Парсить JSON из ответа
             import json
+
             try:
                 ai_response = json.loads(response.strip())
                 return ai_response.get("action", "hold").lower()
