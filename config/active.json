@@ -1,7 +1,7 @@
 {
   "_description": "Active runtime configuration - strategy and symbol profile mapping",
   "_version": "1.0.0",
-  "strategy": "SWING",
+  "strategy": "HYBRID",
   "symbols": {
     "bingx": [
       "BTCUSDT",
