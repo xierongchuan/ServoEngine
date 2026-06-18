@@ -36,6 +36,5 @@
     "BTCUSDT": "default",
     "BNBUSDT": "default",
     "LTCUSDT": "default"
-  },
-  "disabled_symbols": []
+  }
 }
