@@ -69,6 +69,7 @@ cp .env.example .env
 
 ```bash
 ./scripts/start_panel.sh [ngrok|tunnel|prod]
+./scripts/restart_panel.sh [ngrok|prod]  # Рестарт с обязательной пересборкой
 ```
 
 ---
@@ -190,6 +191,7 @@ src/
 # Запуск
 ./scripts/run_trading_bot.sh              # Торговый бот
 ./scripts/start_panel.sh [ngrok|tunnel|prod]  # Telegram Panel
+./scripts/restart_panel.sh [ngrok|prod]   # Рестарт панели с обязательным build
 ./scripts/stop_panel.sh                   # Остановка панели
 ./scripts/tunnel.sh start|stop|status      # Cloudflare туннель
 ./scripts/monitor_logs.sh                  # Интерактивный мониторинг логов
@@ -198,6 +200,10 @@ src/
 podman-compose up --build -d               # Запуск
 podman-compose down                         # Остановка
 podman-compose logs -f                     # Логи
+
+# Важно: не используйте podman-compose restart для панели —
+# он не делает build и может оставить старую frontend-сборку.
+# Рестарт панели: ./scripts/restart_panel.sh [ngrok|prod]
 
 # Генерация графиков через podman
 podman run --rm -v .:/app:Z -w /app python:3.12-slim \
@@ -309,6 +315,7 @@ Factory, Strategy, Singleton, Template Method, Observer, Adapter.
 ./scripts/start_panel.sh ngrok        # Локальная разработка через ngrok
 ./scripts/start_panel.sh tunnel       # VPS tunnel (SSH + cloudflared)
 ./scripts/start_panel.sh prod         # Продакшен (URL в .env)
+./scripts/restart_panel.sh prod       # Рестарт с обязательной пересборкой
 ```
 
 ### Команды Telegram бота
