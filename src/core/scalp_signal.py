@@ -480,19 +480,27 @@ class ScalpSignalGenerator:
         return "generic"
 
 
+def _get_order_book_levels(order_book) -> tuple:
+    """Возвращает bids/asks из dict или DTO OrderBook."""
+    if not order_book:
+        return [], []
+    if isinstance(order_book, dict):
+        return order_book.get("bids", []), order_book.get("asks", [])
+    return getattr(order_book, "bids", []) or [], getattr(order_book, "asks", []) or []
+
+
 def calculate_ob_imbalance(order_book: Dict, levels: int = 10) -> float:
     """
     Calculate order book imbalance from exchange order book data.
 
     Args:
-        order_book: Dict with "bids": [[price, qty], ...] and "asks": [[price, qty], ...]
+        order_book: Dict or OrderBook with bids/asks levels.
         levels: Number of levels to consider
 
     Returns:
         float in [-1.0, 1.0]: positive = more bids (bullish), negative = more asks (bearish)
     """
-    bids = order_book.get("bids", [])
-    asks = order_book.get("asks", [])
+    bids, asks = _get_order_book_levels(order_book)
 
     if not bids or not asks:
         return 0.0
@@ -512,13 +520,12 @@ def calculate_ob_spread_bps(order_book: Dict) -> float:
     Calculate bid-ask spread in basis points from order book data.
 
     Args:
-        order_book: Dict with "bids": [[price, qty], ...] and "asks": [[price, qty], ...]
+        order_book: Dict or OrderBook with bids/asks levels.
 
     Returns:
         float: spread in basis points (1 bp = 0.01%)
     """
-    bids = order_book.get("bids", [])
-    asks = order_book.get("asks", [])
+    bids, asks = _get_order_book_levels(order_book)
 
     if not bids or not asks:
         return 0.0

@@ -450,6 +450,19 @@ class TestOrderBookUtils:
         assert calculate_ob_imbalance({}) == 0.0
         assert calculate_ob_imbalance({"bids": [], "asks": []}) == 0.0
 
+    def test_ob_imbalance_accepts_order_book_dto(self):
+        from src.core.scalp_signal import calculate_ob_imbalance, calculate_ob_spread_bps
+        from src.exchanges.dto import OrderBook
+
+        ob = OrderBook(
+            symbol="BTCUSDT",
+            bids=[[50000, 10], [49999, 8]],
+            asks=[[50002, 3], [50003, 2]],
+        )
+
+        assert calculate_ob_imbalance(ob, levels=2) > 0
+        assert calculate_ob_spread_bps(ob) > 0
+
     def test_ob_spread_bps(self):
         from src.core.scalp_signal import calculate_ob_spread_bps
         ob = {

@@ -918,19 +918,11 @@ class ScalpEngine:
             if not ob:
                 return
 
-            from src.core.scalp_signal import calculate_ob_imbalance
+            from src.core.scalp_signal import calculate_ob_imbalance, calculate_ob_spread_bps
             imbalance = calculate_ob_imbalance(ob)
 
             # Calculate bid-ask spread in basis points
-            bids = ob.get("bids", [])
-            asks = ob.get("asks", [])
-            spread_bps = 0.0
-            if bids and asks:
-                best_bid = float(bids[0][0])
-                best_ask = float(asks[0][0])
-                mid = (best_bid + best_ask) / 2
-                if mid > 0:
-                    spread_bps = (best_ask - best_bid) / mid * 10000
+            spread_bps = calculate_ob_spread_bps(ob)
 
             with self._lock:
                 self._ob_imbalance = imbalance

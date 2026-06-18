@@ -13,7 +13,7 @@
     {
       "id": "bnbusdt_hybrid",
       "symbol": "BNBUSDT",
-      "strategy": "HYBRID",
+      "strategy": "MACDX",
       "profile": "default",
       "enabled": true
     },
