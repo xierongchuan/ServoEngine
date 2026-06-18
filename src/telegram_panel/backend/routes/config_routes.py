@@ -11,6 +11,7 @@ Provides endpoints for:
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -50,7 +51,7 @@ HOT_RELOADABLE_KEYS = {
 # Settings that require process restart
 RESTART_REQUIRED_KEYS = {
     "EXCHANGE_SYMBOLS", "CHART_RANGES", "ENABLE_PARALLEL_MODE", "GRID_SETTINGS",
-    "symbols",
+    "symbols", "strategy_instances",
 }
 
 # Validation rules: (key, type, min, max)
@@ -67,6 +68,7 @@ VALIDATION_RULES = {
 
 # Available strategies
 AVAILABLE_STRATEGIES = ["SCALP", "AISCALP", "SWING", "GRID", "HYBRID", "MACDX"]
+INSTANCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
 
 
 def _use_new_config_system() -> bool:
@@ -96,6 +98,97 @@ def _save_json(path: Path, data: dict) -> None:
     """Save JSON file with pretty formatting."""
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def _normalize_symbol_key(symbol: str) -> str:
+    """Normalize symbol for config identity: BTC-USDT/BTCUSDT -> BTCUSDT."""
+    return str(symbol or "").replace("-", "").replace("/", "").upper()
+
+
+def _default_instance_id(symbol: str, strategy: str) -> str:
+    return f"{_normalize_symbol_key(symbol)}_{strategy.upper()}".lower()
+
+
+def _profile_exists(profile: str) -> bool:
+    return profile == "default" or (PROFILES_DIR / f"{profile}.json").exists()
+
+
+def _validate_strategy_instance(raw: dict) -> dict:
+    """Validate and normalize one strategy instance from active.json/UI."""
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="strategy instance must be an object")
+
+    symbol = _normalize_symbol_key(raw.get("symbol", ""))
+    strategy = str(raw.get("strategy", "")).upper()
+    profile = str(raw.get("profile", "default") or "default")
+    enabled = bool(raw.get("enabled", True))
+    instance_id = str(raw.get("id") or _default_instance_id(symbol, strategy)).lower()
+
+    if not symbol:
+        raise HTTPException(status_code=400, detail="strategy instance symbol is required")
+    if strategy not in AVAILABLE_STRATEGIES:
+        raise HTTPException(status_code=400, detail=f"Invalid strategy for instance {instance_id}: {strategy}")
+    if not INSTANCE_ID_RE.match(instance_id):
+        raise HTTPException(status_code=400, detail=f"Invalid strategy instance id: {instance_id}")
+    if not _profile_exists(profile):
+        raise HTTPException(status_code=400, detail=f"Profile not found: {profile}")
+
+    return {
+        "id": instance_id,
+        "symbol": symbol,
+        "strategy": strategy,
+        "profile": profile,
+        "enabled": enabled,
+    }
+
+
+def _get_strategy_instances(active: dict, exchange: str = "bingx") -> list[dict]:
+    """Return normalized strategy instances, with fallback from legacy active fields."""
+    raw_instances = active.get("strategy_instances") or []
+    if raw_instances:
+        return [_validate_strategy_instance(item) for item in raw_instances]
+
+    symbols = active.get("symbols", {}).get(exchange, [])
+    strategy = str(active.get("strategy", "MACDX")).upper()
+    symbol_profiles = active.get("symbol_profiles", {})
+    return [
+        _validate_strategy_instance({
+            "id": _default_instance_id(symbol, strategy),
+            "symbol": symbol,
+            "strategy": strategy,
+            "profile": symbol_profiles.get(_normalize_symbol_key(symbol), "default"),
+            "enabled": True,
+        })
+        for symbol in symbols
+    ]
+
+
+def _sync_active_legacy_fields(active: dict, exchange: str = "bingx") -> dict:
+    """
+    Keep legacy active fields in sync with strategy_instances.
+
+    Старые части панели и бота всё ещё читают active.strategy/symbols/symbol_profiles.
+    При нескольких инстансах одного символа symbol_profiles хранит только первый профиль,
+    а точная настройка остаётся в strategy_instances.
+    """
+    instances = _get_strategy_instances(active, exchange)
+    if not instances:
+        return active
+
+    active["strategy_instances"] = instances
+    enabled_instances = [item for item in instances if item.get("enabled", True)]
+    visible_instances = enabled_instances or instances
+    symbols = sorted({_normalize_symbol_key(item["symbol"]) for item in visible_instances})
+
+    active["symbols"] = {**active.get("symbols", {}), exchange: symbols}
+    active["strategy"] = visible_instances[0]["strategy"]
+
+    symbol_profiles = dict(active.get("symbol_profiles", {}))
+    for item in visible_instances:
+        symbol_profiles.setdefault(item["symbol"], item.get("profile", "default"))
+    active["symbol_profiles"] = symbol_profiles
+    active.setdefault("disabled_symbols", [])
+    return active
 
 
 def validate_config_values(config: dict) -> list[str]:
@@ -172,10 +265,14 @@ def _build_merged_config() -> dict:
         trading = _load_json(CONFIG_DIR / "trading.json")
         active = _load_json(CONFIG_DIR / "active.json")
 
+        instances = _get_strategy_instances(active)
+        symbols = sorted({item["symbol"] for item in instances if item.get("enabled", True)})
+
         # Map new config keys to legacy format for backward compat
-        merged["STRATEGY_STYLE"] = active.get("strategy", "MACDX")
-        merged["EXCHANGE_SYMBOLS"] = active.get("symbols", {})
+        merged["STRATEGY_STYLE"] = active.get("strategy") or (instances[0]["strategy"] if instances else "MACDX")
+        merged["EXCHANGE_SYMBOLS"] = active.get("symbols") or {"bingx": symbols}
         merged["DISABLED_SYMBOLS"] = active.get("disabled_symbols", [])
+        merged["STRATEGY_INSTANCES"] = instances
 
         # Trading params
         pos = trading.get("position", {})
@@ -283,7 +380,7 @@ async def update_config(request: Request, _user: dict = Depends(get_current_user
     if _use_new_config_system():
         try:
             # Route changes to appropriate config files
-            active_keys = {"STRATEGY_STYLE", "EXCHANGE_SYMBOLS", "DISABLED_SYMBOLS"}
+            active_keys = {"STRATEGY_STYLE", "EXCHANGE_SYMBOLS", "DISABLED_SYMBOLS", "STRATEGY_INSTANCES"}
             trading_keys = {
                 "POSITION_SIZE_PERCENT", "MIN_TRADE_AMOUNT_USDT",
                 "MIN_CONFIDENCE_THRESHOLD", "MIN_RISK_REWARD_RATIO",
@@ -301,6 +398,12 @@ async def update_config(request: Request, _user: dict = Depends(get_current_user
                     active["symbols"] = active_changes["EXCHANGE_SYMBOLS"]
                 if "DISABLED_SYMBOLS" in active_changes:
                     active["disabled_symbols"] = active_changes["DISABLED_SYMBOLS"]
+                if "STRATEGY_INSTANCES" in active_changes:
+                    active["strategy_instances"] = [
+                        _validate_strategy_instance(item)
+                        for item in active_changes["STRATEGY_INSTANCES"]
+                    ]
+                    active = _sync_active_legacy_fields(active)
                 _save_json(CONFIG_DIR / "active.json", active)
 
             # Update trading.json
@@ -387,14 +490,18 @@ async def get_active_config(_user: dict = Depends(get_current_user)) -> dict:
     if not _use_new_config_system():
         # Return data from legacy config
         legacy = reader.read_config()
-        return {
+        legacy_active = {
             "strategy": legacy.get("STRATEGY_STYLE", "HYBRID"),
             "symbols": legacy.get("EXCHANGE_SYMBOLS", {}),
             "symbol_profiles": {},
             "disabled_symbols": legacy.get("DISABLED_SYMBOLS", []),
         }
+        legacy_active["strategy_instances"] = _get_strategy_instances(legacy_active)
+        return legacy_active
 
-    return _load_json(CONFIG_DIR / "active.json")
+    active = _load_json(CONFIG_DIR / "active.json")
+    active["strategy_instances"] = _get_strategy_instances(active)
+    return active
 
 
 @router.put("/active")
@@ -419,8 +526,19 @@ async def update_active_config(request: Request, _user: dict = Depends(get_curre
             raise HTTPException(status_code=400, detail=f"Invalid strategy: {strategy}")
         new_data["strategy"] = strategy
 
+    if "strategy_instances" in new_data:
+        raw_instances = new_data.get("strategy_instances") or []
+        if not isinstance(raw_instances, list):
+            raise HTTPException(status_code=400, detail="strategy_instances must be a list")
+        normalized_instances = [_validate_strategy_instance(item) for item in raw_instances]
+        ids = [item["id"] for item in normalized_instances]
+        if len(ids) != len(set(ids)):
+            raise HTTPException(status_code=400, detail="strategy instance ids must be unique")
+        new_data["strategy_instances"] = normalized_instances
+
     # Merge with current
     current.update(new_data)
+    current = _sync_active_legacy_fields(current)
 
     try:
         _save_json(active_path, current)
@@ -552,11 +670,26 @@ async def add_active_symbol(request: Request, _user: dict = Depends(get_current_
         symbols[exchange] = exchange_symbols
         active["symbols"] = symbols
 
-        try:
-            _save_json(active_path, active)
-            logger.info("Symbol %s added to %s", symbol_upper, exchange)
-        except OSError as e:
-            raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
+    instances = _get_strategy_instances(active, exchange)
+    strategy = str(data.get("strategy") or active.get("strategy") or "HYBRID").upper()
+    profile = str(data.get("profile") or active.get("symbol_profiles", {}).get(_normalize_symbol_key(symbol_upper), "default"))
+    new_instance = _validate_strategy_instance({
+        "id": data.get("id") or _default_instance_id(symbol_upper, strategy),
+        "symbol": symbol_upper,
+        "strategy": strategy,
+        "profile": profile,
+        "enabled": bool(data.get("enabled", True)),
+    })
+    if not any(item["id"] == new_instance["id"] for item in instances):
+        instances.append(new_instance)
+    active["strategy_instances"] = instances
+    active = _sync_active_legacy_fields(active, exchange)
+
+    try:
+        _save_json(active_path, active)
+        logger.info("Symbol %s added to %s", symbol_upper, exchange)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
 
     return {"status": "ok", "symbols": symbols}
 
@@ -579,13 +712,153 @@ async def remove_active_symbol(symbol: str, exchange: str = "bingx", _user: dict
         symbols[exchange] = exchange_symbols
         active["symbols"] = symbols
 
-        try:
-            _save_json(active_path, active)
-            logger.info("Symbol %s removed from %s", symbol_upper, exchange)
-        except OSError as e:
-            raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
+    instances = [
+        item for item in _get_strategy_instances(active, exchange)
+        if _normalize_symbol_key(item["symbol"]) != _normalize_symbol_key(symbol_upper)
+    ]
+    active["strategy_instances"] = instances
+    symbol_profiles = active.get("symbol_profiles", {})
+    symbol_profiles.pop(_normalize_symbol_key(symbol_upper), None)
+    active["symbol_profiles"] = symbol_profiles
+    active = _sync_active_legacy_fields(active, exchange) if instances else active
+
+    try:
+        _save_json(active_path, active)
+        logger.info("Symbol %s removed from %s", symbol_upper, exchange)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
 
     return {"status": "ok", "symbols": symbols}
+
+
+@router.get("/strategy-instances")
+async def list_strategy_instances(_user: dict = Depends(get_current_user)) -> dict:
+    """List configured strategy instances."""
+    if not _use_new_config_system():
+        legacy = reader.read_config()
+        active = {
+            "strategy": legacy.get("STRATEGY_STYLE", "HYBRID"),
+            "symbols": legacy.get("EXCHANGE_SYMBOLS", {}),
+            "symbol_profiles": {},
+            "disabled_symbols": legacy.get("DISABLED_SYMBOLS", []),
+        }
+        instances = _get_strategy_instances(active)
+    else:
+        active = _load_json(CONFIG_DIR / "active.json")
+        instances = _get_strategy_instances(active)
+
+    return {
+        "strategy_instances": instances,
+        "available": [item["id"] for item in instances],
+    }
+
+
+@router.post("/strategy-instances")
+async def create_strategy_instance(request: Request, _user: dict = Depends(get_current_user)) -> dict:
+    """Create one strategy instance in active.json."""
+    if not _use_new_config_system():
+        raise HTTPException(status_code=400, detail="New config system not available")
+
+    try:
+        body = await request.body()
+        data = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    new_instance = _validate_strategy_instance(data)
+    active_path = CONFIG_DIR / "active.json"
+    active = _load_json(active_path)
+    instances = _get_strategy_instances(active)
+
+    if any(item["id"] == new_instance["id"] for item in instances):
+        raise HTTPException(status_code=400, detail=f"Strategy instance already exists: {new_instance['id']}")
+
+    instances.append(new_instance)
+    active["strategy_instances"] = instances
+    active = _sync_active_legacy_fields(active)
+
+    try:
+        _save_json(active_path, active)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
+
+    return {"status": "ok", "instance": new_instance, "config": active}
+
+
+@router.put("/strategy-instances/{instance_id}")
+async def update_strategy_instance(instance_id: str, request: Request, _user: dict = Depends(get_current_user)) -> dict:
+    """Update one strategy instance."""
+    if not _use_new_config_system():
+        raise HTTPException(status_code=400, detail="New config system not available")
+
+    try:
+        body = await request.body()
+        data = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    active_path = CONFIG_DIR / "active.json"
+    active = _load_json(active_path)
+    instances = _get_strategy_instances(active)
+    target_id = instance_id.lower()
+
+    found = False
+    updated_instances = []
+    for item in instances:
+        if item["id"] != target_id:
+            updated_instances.append(item)
+            continue
+        merged = {**item, **data, "id": data.get("id", item["id"])}
+        updated = _validate_strategy_instance(merged)
+        updated_instances.append(updated)
+        found = True
+
+    if not found:
+        raise HTTPException(status_code=404, detail=f"Strategy instance not found: {instance_id}")
+
+    ids = [item["id"] for item in updated_instances]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(status_code=400, detail="strategy instance ids must be unique")
+
+    active["strategy_instances"] = updated_instances
+    active = _sync_active_legacy_fields(active)
+
+    try:
+        _save_json(active_path, active)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
+
+    return {"status": "ok", "instances": updated_instances, "config": active}
+
+
+@router.delete("/strategy-instances/{instance_id}")
+async def delete_strategy_instance(instance_id: str, _user: dict = Depends(get_current_user)) -> dict:
+    """Delete one strategy instance."""
+    if not _use_new_config_system():
+        raise HTTPException(status_code=400, detail="New config system not available")
+
+    active_path = CONFIG_DIR / "active.json"
+    active = _load_json(active_path)
+    instances = _get_strategy_instances(active)
+    target_id = instance_id.lower()
+    updated_instances = [item for item in instances if item["id"] != target_id]
+
+    if len(updated_instances) == len(instances):
+        raise HTTPException(status_code=404, detail=f"Strategy instance not found: {instance_id}")
+
+    active["strategy_instances"] = updated_instances
+    if updated_instances:
+        active = _sync_active_legacy_fields(active)
+    else:
+        active["symbols"] = {"bingx": []}
+        active["symbol_profiles"] = {}
+
+    try:
+        _save_json(active_path, active)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
+
+    return {"status": "ok", "instances": updated_instances, "config": active}
 
 
 # ============================================================================
@@ -1058,14 +1331,21 @@ async def auto_create_profile(
     if switch_from_default:
         active_path = CONFIG_DIR / "active.json"
         active = _load_json(active_path)
+        instances = _get_strategy_instances(active)
 
         symbol_profiles = active.get("symbol_profiles", {})
         symbols_to_switch = []
+        instance_ids_to_switch = []
 
         # Find symbols using 'default'
         for symbol, prof in symbol_profiles.items():
             if prof == "default":
                 symbols_to_switch.append(symbol)
+
+        for instance in instances:
+            if instance.get("profile", "default") == "default":
+                instance_ids_to_switch.append(instance["id"])
+                symbols_to_switch.append(instance["symbol"])
 
         # Also check active symbols without explicit profile (implicitly default)
         symbols_config = active.get("symbols", {})
@@ -1083,6 +1363,13 @@ async def auto_create_profile(
             for symbol in switched_symbols:
                 symbol_profiles[symbol] = profile_name
             active["symbol_profiles"] = symbol_profiles
+
+            if instance_ids_to_switch:
+                for instance in instances:
+                    if instance["id"] in instance_ids_to_switch:
+                        instance["profile"] = profile_name
+                active["strategy_instances"] = instances
+                active = _sync_active_legacy_fields(active)
 
             try:
                 _save_json(active_path, active)
@@ -1115,9 +1402,21 @@ async def get_profile_usage(
 
     active = _load_json(CONFIG_DIR / "active.json")
     symbol_profiles = active.get("symbol_profiles", {})
+    instances = _get_strategy_instances(active)
 
     # Find all symbols using this profile
     symbols = [s for s, p in symbol_profiles.items() if p == name]
+    used_instances = [
+        {
+            "id": item["id"],
+            "symbol": item["symbol"],
+            "strategy": item["strategy"],
+            "enabled": item.get("enabled", True),
+        }
+        for item in instances
+        if item.get("profile", "default") == name
+    ]
+    symbols.extend(item["symbol"] for item in used_instances)
 
     # Also check implicit default
     if name == "default":
@@ -1129,12 +1428,17 @@ async def get_profile_usage(
         for symbol in all_active_symbols:
             if symbol not in symbol_profiles:
                 symbols.append(symbol)
+        symbols.extend(
+            item["symbol"] for item in instances
+            if item.get("profile", "default") == "default"
+        )
 
     return {
         "profile": name,
         "symbols": sorted(set(symbols)),
-        "isUsed": len(symbols) > 0,
-        "usageCount": len(symbols)
+        "instances": used_instances,
+        "isUsed": len(symbols) > 0 or len(used_instances) > 0,
+        "usageCount": len(set(symbols)) + len(used_instances)
     }
 
 
@@ -1149,13 +1453,21 @@ async def get_symbol_profiles(_user: dict = Depends(get_current_user)) -> dict:
         return {"symbol_profiles": {}, "symbols": []}
 
     active = _load_json(CONFIG_DIR / "active.json")
+    instances = _get_strategy_instances(active)
     symbols_config = active.get("symbols", {})
-    all_symbols = []
+    all_symbols = [item["symbol"] for item in instances]
     for exchange_symbols in symbols_config.values():
         all_symbols.extend(exchange_symbols)
 
+    instance_profiles = {
+        item["id"]: item.get("profile", "default")
+        for item in instances
+    }
+
     return {
         "symbol_profiles": active.get("symbol_profiles", {}),
+        "instance_profiles": instance_profiles,
+        "strategy_instances": instances,
         "symbols": sorted(set(all_symbols)),
         "disabled_symbols": active.get("disabled_symbols", []),
     }
@@ -1171,6 +1483,7 @@ async def set_symbol_profile(symbol: str, request: Request, _user: dict = Depend
         body = await request.body()
         data = json.loads(body)
         profile = data.get("profile", "default")
+        instance_id = data.get("instance_id")
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
@@ -1182,9 +1495,31 @@ async def set_symbol_profile(symbol: str, request: Request, _user: dict = Depend
 
     active_path = CONFIG_DIR / "active.json"
     active = _load_json(active_path)
+    instances = _get_strategy_instances(active)
+
+    if instance_id:
+        target_id = str(instance_id).lower()
+        updated = False
+        for instance in instances:
+            if instance["id"] == target_id:
+                instance["profile"] = profile
+                updated = True
+                break
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"Strategy instance not found: {instance_id}")
+        active["strategy_instances"] = instances
+        active = _sync_active_legacy_fields(active)
+    else:
+        symbol_key = _normalize_symbol_key(symbol)
+        for instance in instances:
+            if _normalize_symbol_key(instance["symbol"]) == symbol_key:
+                instance["profile"] = profile
+        if instances:
+            active["strategy_instances"] = instances
+            active = _sync_active_legacy_fields(active)
 
     symbol_profiles = active.get("symbol_profiles", {})
-    symbol_profiles[symbol.upper()] = profile
+    symbol_profiles[_normalize_symbol_key(symbol)] = profile
     active["symbol_profiles"] = symbol_profiles
 
     try:

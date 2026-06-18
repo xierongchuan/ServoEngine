@@ -13,6 +13,10 @@ reader = DataReader()
 _CONFIG_DIR = CONFIG_PATH.parent
 
 
+def _normalize_symbol(symbol: str) -> str:
+    return str(symbol or "").replace("-", "").replace("/", "").upper()
+
+
 def _get_symbols_and_strategy() -> tuple[list[str], str]:
     """Get symbols and strategy from new config system or legacy config."""
     active_path = _CONFIG_DIR / "active.json"
@@ -20,10 +24,18 @@ def _get_symbols_and_strategy() -> tuple[list[str], str]:
         try:
             with open(active_path, "r", encoding="utf-8") as f:
                 active_cfg = json.load(f)
+            instances = active_cfg.get("strategy_instances") or []
+            if instances:
+                enabled = [item for item in instances if item.get("enabled", True)]
+                visible = enabled or instances
+                symbols = sorted({_normalize_symbol(item.get("symbol", "")) for item in visible})
+                strategies = sorted({str(item.get("strategy", "UNKNOWN")).upper() for item in visible})
+                return symbols, ", ".join(strategies)
+
             symbols_map = active_cfg.get("symbols", {})
             symbols = []
             for syms in symbols_map.values():
-                symbols.extend(syms)
+                symbols.extend(_normalize_symbol(item) for item in syms)
             strategy = active_cfg.get("strategy", "UNKNOWN")
             return symbols, strategy
         except Exception:

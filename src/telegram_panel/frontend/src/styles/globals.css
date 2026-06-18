@@ -35,6 +35,45 @@ body {
   background-color: var(--tg-theme-bg-color, #1a1a2e);
   color: var(--tg-theme-text-color, #e0e0e0);
   -webkit-font-smoothing: antialiased;
+  color-scheme: dark;
+}
+
+input,
+select,
+textarea {
+  color-scheme: dark;
+}
+
+select option {
+  background-color: var(--tg-theme-section-bg-color, #18181b);
+  color: var(--tg-theme-text-color, #fafafa);
+}
+
+.tg-control {
+  width: 100%;
+  background-color: var(--tg-theme-section-bg-color, #18181b);
+  color: var(--tg-theme-text-color, #fafafa);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  outline: none;
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.tg-control:focus {
+  border-color: var(--tg-theme-button-color, #ffffff);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.tg-control:disabled {
+  opacity: 0.5;
+}
+
+select.tg-control {
+  appearance: none;
+  padding-right: 2.25rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' viewBox='0 0 24 24' stroke='%23a1a1aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 1rem;
 }
 
 /* Custom scrollbar */

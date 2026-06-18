@@ -185,6 +185,7 @@ export interface ActiveConfig {
   symbols: Record<string, string[]>;
   symbol_profiles: Record<string, string>;
   disabled_symbols: string[];
+  strategy_instances?: StrategyInstance[];
 }
 
 export interface TradingConfig {
@@ -241,8 +242,18 @@ export interface ProfilesResponse {
   available: string[];
 }
 
+export interface StrategyInstance {
+  id: string;
+  symbol: string;
+  strategy: string;
+  profile: string;
+  enabled: boolean;
+}
+
 export interface SymbolProfilesResponse {
   symbol_profiles: Record<string, string>;
+  instance_profiles?: Record<string, string>;
+  strategy_instances?: StrategyInstance[];
   symbols: string[];
   disabled_symbols: string[];
 }
@@ -297,6 +308,30 @@ export function removeSymbol(symbol: string, exchange: string = 'bingx') {
   });
 }
 
+export function getStrategyInstances() {
+  return fetchAPI<{ strategy_instances: StrategyInstance[]; available: string[] }>('/api/config/strategy-instances');
+}
+
+export function createStrategyInstance(data: Partial<StrategyInstance>) {
+  return fetchAPI<{ status: string; instance: StrategyInstance; config: ActiveConfig }>('/api/config/strategy-instances', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateStrategyInstance(instanceId: string, data: Partial<StrategyInstance>) {
+  return fetchAPI<{ status: string; instances: StrategyInstance[]; config: ActiveConfig }>(`/api/config/strategy-instances/${encodeURIComponent(instanceId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export function deleteStrategyInstance(instanceId: string) {
+  return fetchAPI<{ status: string; instances: StrategyInstance[]; config: ActiveConfig }>(`/api/config/strategy-instances/${encodeURIComponent(instanceId)}`, {
+    method: 'DELETE',
+  });
+}
+
 export function getStrategies() {
   return fetchAPI<StrategiesResponse>('/api/config/strategies');
 }
@@ -337,16 +372,17 @@ export function getSymbolProfiles() {
   return fetchAPI<SymbolProfilesResponse>('/api/config/symbol-profiles');
 }
 
-export function setSymbolProfile(symbol: string, profile: string) {
+export function setSymbolProfile(symbol: string, profile: string, instanceId?: string) {
   return fetchAPI<{ status: string; symbol: string; profile: string }>(`/api/config/symbol-profiles/${encodeURIComponent(symbol)}`, {
     method: 'PUT',
-    body: JSON.stringify({ profile }),
+    body: JSON.stringify({ profile, instance_id: instanceId }),
   });
 }
 
 export interface ProfileUsageResponse {
   profile: string;
   symbols: string[];
+  instances?: { id: string; symbol: string; strategy: string; enabled: boolean }[];
   isUsed: boolean;
   usageCount: number;
 }

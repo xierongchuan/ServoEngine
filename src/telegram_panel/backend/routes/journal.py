@@ -20,7 +20,10 @@ def _get_strategy_cooldown() -> tuple[str, float]:
         try:
             with open(active_path, "r", encoding="utf-8") as f:
                 active = json.load(f)
-            strategy = active.get("strategy", "MACDX")
+            instances = active.get("strategy_instances") or []
+            enabled = [item for item in instances if item.get("enabled", True)]
+            visible = enabled or instances
+            strategy = str((visible[0] if visible else {}).get("strategy") or active.get("strategy", "MACDX")).upper()
             # Read preset from strategy file
             strat_path = _CONFIG_DIR / "strategies" / f"{strategy.lower()}.json"
             if strat_path.exists():

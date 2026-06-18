@@ -108,6 +108,50 @@ def calc_roe_pct(trade: dict) -> float | None:
     return (pnl / margin) * 100 if margin else None
 
 
+def normalize_symbol_key(symbol: str) -> str:
+    """Normalize symbol for active config keys."""
+    return str(symbol or "").replace("-", "").replace("/", "").upper()
+
+
+def get_config_strategy_summary(config: dict) -> str:
+    """Return strategy summary for legacy or strategy_instances config."""
+    instances = config.get("strategy_instances") or []
+    if instances:
+        enabled = [item for item in instances if item.get("enabled", True)]
+        items = enabled or instances
+        strategies = sorted({str(item.get("strategy", "?")).upper() for item in items})
+        return ", ".join(strategies)
+    return config.get("strategy") or config.get("STRATEGY_STYLE", "N/A")
+
+
+def get_config_symbols(config: dict) -> list[str]:
+    """Return configured symbols from strategy_instances or legacy fields."""
+    instances = config.get("strategy_instances") or []
+    if instances:
+        return sorted({normalize_symbol_key(item.get("symbol", "")) for item in instances if item.get("enabled", True)})
+
+    exchange_symbols = config.get("symbols") or config.get("EXCHANGE_SYMBOLS") or {}
+    all_symbols: list[str] = []
+    for syms in exchange_symbols.values():
+        if isinstance(syms, list):
+            all_symbols.extend(normalize_symbol_key(item) for item in syms)
+    return sorted(set(all_symbols))
+
+
+def get_disabled_symbols(config: dict) -> list[str]:
+    """Read disabled symbols from new or legacy active config."""
+    disabled = config.get("disabled_symbols")
+    if disabled is None:
+        disabled = config.get("DISABLED_SYMBOLS", [])
+    return [normalize_symbol_key(item) for item in disabled]
+
+
+def set_disabled_symbols(config: dict, disabled: list[str]) -> None:
+    """Write disabled symbols preserving active.json new schema."""
+    key = "disabled_symbols" if "disabled_symbols" in config or CONFIG_PATH.name == "active.json" else "DISABLED_SYMBOLS"
+    config[key] = sorted(set(normalize_symbol_key(item) for item in disabled))
+
+
 # ---------------------------------------------------------------------------
 # Auth decorator
 # ---------------------------------------------------------------------------
@@ -160,7 +204,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not isinstance(active, dict):
         active = {}
 
-    strategy = config.get("STRATEGY_STYLE", "N/A")
+    strategy = get_config_strategy_summary(config)
     count = len(active)
     symbols = ", ".join(active.keys()) if active else "none"
 
@@ -207,12 +251,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         symbol = context.args[0].upper()
     else:
         config = read_json(CONFIG_PATH) or {}
-        exchange_symbols = config.get("EXCHANGE_SYMBOLS", {})
-        # Flatten all symbol lists
-        all_symbols: list[str] = []
-        for syms in exchange_symbols.values():
-            if isinstance(syms, list):
-                all_symbols.extend(syms)
+        all_symbols = get_config_symbols(config)
         symbol = all_symbols[0] if all_symbols else "BTCUSDT"
 
     chart_path = find_latest_chart(symbol)
@@ -258,7 +297,7 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     trading = read_json(config_dir / "trading.json") or {}
     base = read_json(config_dir / "base.json") or {}
 
-    strategy = active.get("strategy", "N/A")
+    strategy = get_config_strategy_summary(active)
     pos = trading.get("position", {})
     risk = trading.get("risk", {})
     ai = base.get("ai", {})
@@ -269,17 +308,16 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     # Get leverage from strategy preset
     leverage = "N/A"
-    strat_path = config_dir / "strategies" / f"{strategy.lower()}.json"
+    first_strategy = strategy.split(",")[0].strip() if strategy else "N/A"
+    strat_path = config_dir / "strategies" / f"{first_strategy.lower()}.json"
     strat = read_json(strat_path) or {}
     leverage = strat.get("preset", {}).get("leverage", "N/A")
 
     # Symbols
-    exchange_symbols = active.get("symbols", {})
-    all_symbols: list[str] = []
-    for syms in exchange_symbols.values():
-        if isinstance(syms, list):
-            all_symbols.extend(syms)
+    all_symbols = get_config_symbols(active)
     symbols_str = ", ".join(all_symbols) if all_symbols else "none"
+    instances = active.get("strategy_instances") or []
+    instances_str = f"\nInstances: {len(instances)}" if instances else ""
 
     text = (
         f"Strategy: {strategy}\n"
@@ -288,6 +326,7 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"Confidence threshold: {confidence}\n"
         f"AI model: {model}\n"
         f"Symbols: {symbols_str}"
+        f"{instances_str}"
     )
     await update.message.reply_text(text)  # type: ignore[union-attr]
 
@@ -435,14 +474,14 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Read current config
     config = read_json(CONFIG_PATH) or {}
-    disabled = config.get("DISABLED_SYMBOLS", [])
+    disabled = get_disabled_symbols(config)
 
     if symbol in disabled:
         await update.message.reply_text(f"⚠️ {symbol} is already disabled")  # type: ignore[union-attr]
         return
 
     disabled.append(symbol)
-    config["DISABLED_SYMBOLS"] = disabled
+    set_disabled_symbols(config, disabled)
 
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -463,14 +502,14 @@ async def cmd_start_trading(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     # Read current config
     config = read_json(CONFIG_PATH) or {}
-    disabled = config.get("DISABLED_SYMBOLS", [])
+    disabled = get_disabled_symbols(config)
 
     if symbol not in disabled:
         await update.message.reply_text(f"⚠️ {symbol} is already enabled")  # type: ignore[union-attr]
         return
 
     disabled.remove(symbol)
-    config["DISABLED_SYMBOLS"] = disabled
+    set_disabled_symbols(config, disabled)
 
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:

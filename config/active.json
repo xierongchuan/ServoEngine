@@ -1,12 +1,12 @@
 {
   "_description": "Active runtime configuration - strategy and symbol profile mapping",
   "_version": "1.0.0",
-  "strategy": "HYBRID",
+  "strategy": "MACDX",
   "strategy_instances": [
     {
       "id": "btcusdt_hybrid",
       "symbol": "BTCUSDT",
-      "strategy": "HYBRID",
+      "strategy": "MACDX",
       "profile": "default",
       "enabled": true
     },
@@ -27,8 +27,8 @@
   ],
   "symbols": {
     "bingx": [
-      "BTCUSDT",
       "BNBUSDT",
+      "BTCUSDT",
       "LTCUSDT"
     ]
   },
