@@ -240,37 +240,27 @@ class BingXClient(ExchangeClient):
         Получает исторические данные свечей.
         Сначала пробует WebSocket кэш, потом REST API.
         """
-        print(f"[DEBUG get_kline_data] START for {symbol}")  # Force stdout
-
         # 1. Try WebSocket shared cache first
         ws_cache_result = None
         try:
             from src.exchanges.bingx_ws_data_provider import is_cache_ready, get_klines_from_shared_cache
 
-            # Debug: check if cache is accessible
-            from src.exchanges.bingx_ws_data_provider import _shared_cache, _shared_ready
-            debug_msg = f"[KLINE] _shared_cache={type(_shared_cache)}, _shared_ready={type(_shared_ready)}"
-            print(debug_msg)  # Force stdout
-
             cache_ready = is_cache_ready(symbol)
-            print(f"[KLINE] Cache ready for {symbol}: {cache_ready}")  # Force stdout
 
             if cache_ready:
                 cached = get_klines_from_shared_cache(symbol, limit)
-                print(f"[KLINE] Got {len(cached)} candles from cache")  # Force stdout
                 if len(cached) >= limit * 0.8:  # 80% data available
                     ws_cache_result = cached
         except ImportError as ie:
-            print(f"[KLINE] ImportError: {ie}")  # Force stdout
+            warning(f"⚠️ WS cache import failed for {symbol}: {ie}")
         except Exception as e:
-            print(f"[KLINE] Exception: {e}")  # Force stdout
+            warning(f"⚠️ WS cache error for {symbol}: {e}")
 
         if ws_cache_result is not None:
-            print(f"[KLINE] Returning {len(ws_cache_result)} from cache")  # Force stdout
+            info(f"📊 [WS CACHE] Using {len(ws_cache_result)} candles for {symbol}")
             return ws_cache_result
 
         # 2. Fallback to REST API
-        print(f"[KLINE] Falling back to REST for {symbol}")  # Force stdout
         return self._fetch_klines_rest(symbol, interval, limit)
 
     def _fetch_klines_rest(self, symbol, interval="5m", limit=288):

@@ -59,6 +59,34 @@ def test_market_data_keeps_rest_intervals_compact(monkeypatch):
     assert [call["params"]["interval"] for call in calls] == ["15m", "1h"]
 
 
+def test_market_data_maps_verbose_intervals_to_compact(monkeypatch):
+    calls = []
+    monkeypatch.setenv("BINGX_MARKET_API_URL", "https://market.example.test")
+
+    def fake_get(url, params=None, timeout=6):
+        calls.append({"url": url, "params": params, "timeout": timeout})
+        return _FakeResponse()
+
+    monkeypatch.setattr("src.exchanges.impl.bingx_client.requests.get", fake_get)
+
+    client = BingXClient(BingXConfig(is_demo=True))
+    client.get_kline_data("BTCUSDT", interval="MINUTE_5", limit=1)
+    client.get_kline_data("BTCUSDT", interval="HOUR_1", limit=1)
+    client.get_kline_data("BTCUSDT", interval="DAY_1", limit=1)
+
+    assert [call["params"]["interval"] for call in calls] == ["5m", "1h", "1d"]
+
+
+def test_config_intervals_expose_public_compact_values_only():
+    intervals = BingXConfig(is_demo=True).to_dict()["intervals"]
+
+    assert "5m" in intervals
+    assert "15m" in intervals
+    assert "1h" in intervals
+    assert "MINUTE_5" not in intervals
+    assert "HOUR_1" not in intervals
+
+
 def test_market_data_logs_bingx_api_error(monkeypatch, caplog):
     class ErrorResponse:
         status_code = 200

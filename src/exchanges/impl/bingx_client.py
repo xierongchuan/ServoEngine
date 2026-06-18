@@ -43,6 +43,25 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+_KLINE_INTERVAL_ALIASES = {
+    "MINUTE_1": "1m",
+    "MINUTE_3": "3m",
+    "MINUTE_5": "5m",
+    "MINUTE_15": "15m",
+    "MINUTE_30": "30m",
+    "HOUR_1": "1h",
+    "HOUR_2": "2h",
+    "HOUR_4": "4h",
+    "HOUR_6": "6h",
+    "HOUR_8": "8h",
+    "HOUR_12": "12h",
+    "DAY_1": "1d",
+    "DAY_3": "3d",
+    "WEEK_1": "1w",
+    "MONTH_1": "1M",
+}
+
+
 def _preview_payload(value, limit: int = 300) -> str:
     """Return a compact log preview without dumping large market responses."""
     try:
@@ -177,9 +196,12 @@ class BingXClient(ExchangeClient):
         """REST API fallback для получения свечей."""
         formatted_symbol = self._format_symbol(symbol)
 
-        # Map verbose interval constants to BingX format
-        interval_map = self._config.supported_intervals
-        bingx_interval = interval_map.get(interval, interval)
+        # Map internal verbose constants to the compact interval format accepted
+        # by BingX swap v3 klines.
+        bingx_interval = _KLINE_INTERVAL_ALIASES.get(
+            interval,
+            self._config.supported_intervals.get(interval, interval),
+        )
 
         market_url = f"{self.market_base_url}/openApi/swap/v3/quote/klines"
 
@@ -201,7 +223,11 @@ class BingXClient(ExchangeClient):
                 status_code = response.status_code
 
                 if response.status_code == 429:
-                    retry_after = int(response.headers.get("Retry-After", retry_delay))
+                    retry_after_header = response.headers.get("Retry-After")
+                    try:
+                        retry_after = int(retry_after_header or retry_delay)
+                    except (TypeError, ValueError):
+                        retry_after = retry_delay
                     warning(
                         f"⚠️ BingX klines rate limited: symbol={formatted_symbol}, "
                         f"interval={bingx_interval}, limit={limit}, retry_after={retry_after}s"
