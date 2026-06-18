@@ -16,25 +16,29 @@ config/
     grid.json
     hybrid.json
     macdx.json
-  profiles/           # Per-symbol profiles (overrides)
+  profiles/           # Per-instance profiles (overrides)
     _templates/       # Profile templates (optional)
     default.json      # Default profile (works with any strategy)
     btc_aggressive.json
     eth_conservative.json
-  active.json         # Runtime selection (strategy + profile mapping)
+  active.json         # Runtime strategy instances + legacy fallback
 ```
 
 ## Configuration Resolution Order
 
-Configuration is resolved in the following order (later overrides earlier):
+`config/active.json` selects the enabled runtime instances. For each enabled `StrategyInstance`, configuration is resolved in the following order (later overrides earlier):
 ```
+instance = active.strategy_instances[]
+
 effective_config = deep_merge(
     base.json,           # 1. Infrastructure defaults
     trading.json,        # 2. Trading defaults
-    strategies/{strategy}.json,  # 3. Strategy-specific settings
-    profiles/{profile}.json      # 4. Symbol-specific overrides
+    strategies/{instance.strategy}.json,  # 3. Strategy-specific settings
+    profiles/{instance.profile}.json      # 4. Instance-specific overrides
 )
 ```
+
+The legacy `strategy` + `symbols` format is converted to strategy instances internally and remains supported as a fallback.
 
 ## Configuration Categories
 
@@ -82,7 +86,7 @@ Each file contains the complete configuration for one strategy:
 | GRID | Grid trading | 1m | Optional | grid_levels, grid_spacing_pct |
 
 ### 4. Profile Configurations (`config/profiles/*.json`)
-Per-symbol override system with strategy binding:
+Per-instance override system with strategy binding:
 
 #### Profile Fields
 | Field | Type | Required | Description |
@@ -117,7 +121,7 @@ Per-symbol override system with strategy binding:
 ```
 
 #### Special Profiles
-- **`default`** - Universal profile with `_strategy: null`. Works with any strategy. Use when you don't need symbol-specific overrides.
+- **`default`** - Universal profile with `_strategy: null`. Works with any strategy. Use when you don't need instance-specific overrides.
 - **`_templates/`** - Future: reusable profile templates for common configurations (aggressive, conservative, balanced)
 
 ### 5. Active Configuration (`config/active.json`)
@@ -155,6 +159,8 @@ Preferred format for multi-strategy runtime:
 
 Runtime rule: if multiple strategy instances trade the same symbol, only the instance that opened the current position owns it. Other instances for that symbol wait until the owner closes the position. Ownership is stored in `data/position_owners.json` and synchronized with real exchange positions.
 
+`id` must be stable and unique. It is used in logs, Telegram Panel, position ownership, and runtime process names.
+
 Legacy fallback format is still supported:
 ```json
 {
@@ -188,7 +194,7 @@ Setting `min_score_for_signal: 3` means different things for different strategie
 ### How It Works
 
 1. Each profile has a `_strategy` field specifying which strategy it belongs to
-2. When loading symbol config, the system validates profile-strategy compatibility
+2. When loading instance config, the system validates profile-strategy compatibility
 3. If incompatible, an error is raised at startup:
    ```
    ❌ Profile 'btc_aggressive' belongs to strategy 'SCALP',
@@ -198,7 +204,7 @@ Setting `min_score_for_signal: 3` means different things for different strategie
 
 ### Creating New Profiles
 
-Always specify `_strategy` for symbol-specific profiles:
+Always specify `_strategy` for strategy-specific profiles:
 
 ```json
 {
@@ -223,7 +229,7 @@ Profiles use a layered inheritance model:
 1. `config/base.json` - Infrastructure defaults
 2. `config/trading.json` - Trading defaults
 3. `config/strategies/{strategy}.json` - Strategy-specific defaults
-4. `config/profiles/{profile}.json` - Symbol-specific overrides
+4. `config/profiles/{profile}.json` - Instance-specific overrides
 
 ### Inheritance Example
 ```json
@@ -246,13 +252,14 @@ The config loader validates:
 - Numeric ranges are valid
 - No conflicting parameters at the same level
 - Profile references exist
-- **Profile matches the symbol's strategy** (NEW!)
+- **Profile matches the instance strategy**
 
 ## Hot-Reload
 
 The system supports hot-reload for:
 - `config/active.json` - Strategy and profile changes
 - `config/trading.json` - Trading parameter adjustments
-- Profile files - Per-symbol tuning
+
+Changing `strategy_instances`, assigning profiles, enabling/disabling instances, and editing `disabled_symbols` is done through `config/active.json` and is checked by workers every 30 seconds.
 
 Changes to `config/base.json` and strategy files require restart.

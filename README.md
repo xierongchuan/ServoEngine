@@ -43,7 +43,7 @@
 ### 1. Клонирование и настройка
 
 ```bash
-git clone <repo> && cd Servo Engine
+git clone <repo> && cd ServoEngine
 cp .env.example .env
 ```
 
@@ -80,12 +80,14 @@ cp .env.example .env
 - **Multi-Model AI Core**: Поддержка Gemini, Claude, DeepSeek и других моделей через единый интерфейс OpenRouter.
 - **Детерминированные сигналы + AI**: В режиме HYBRID/AISCALP сигналы генерируются математически (scoring system), AI лишь подтверждает или отклоняет.
 - **Market Regime Detection**: Автоклассификация рынка (TRENDING / RANGING / VOLATILE / TRANSITIONAL) с адаптацией всех параметров.
+- **Multi-Strategy Runtime**: Один символ может иметь несколько strategy instances с разными стратегиями и профилями.
+- **Position Ownership Lock**: Если один instance открыл позицию по символу, остальные instances этого символа ждут закрытия позиции и не открывают конкурирующие сделки.
 - **Multi-Timeframe Analysis**: AISCALP стратегия использует HTF (1H) для определения глобального тренда и сессионную фильтрацию.
 - **Smart Sampling**: Сжатие исторических данных для AI-контекста с сохранением экстремумов.
 
 ### Высокая производительность
 
-- **True Multiprocessing**: Каждый торговый актив работает в отдельном изолированном процессе ОС.
+- **True Multiprocessing**: Каждый enabled strategy instance работает в отдельном изолированном процессе ОС.
 - **WebSocket Cache**: Опциональный реальном-время кэш свечей через WebSocket с автоматическим fallback на REST.
 - **Hot-Reload Config**: `config/active.json` и `config/trading.json` проверяются каждые 30 секунд, изменения применяются без перезапуска.
 - **Dynamic Loop**: Частота анализа адаптируется под стиль (1.5s SCALP → 60s AISCALP → 4h SWING).
@@ -114,7 +116,8 @@ cp .env.example .env
 
 ## <a id="strategies"></a>Стратегии торговли
 
-Настройка активной стратегии: `config/active.json` → `strategy`.
+Активные торговые запуски задаются в `config/active.json` через `strategy_instances`.
+Каждый instance содержит `id`, `symbol`, `strategy`, `profile` и `enabled`.
 
 Стратегии реализованы как отдельные конфигурации в `config/strategies/` и промпт-шаблоны в `src/prompts/strategies/`.
 
@@ -140,12 +143,10 @@ cp .env.example .env
 - Мультипликаторы SL/TP
 - Размер позиции
 
-### Маркет-режим
+### Одновременные стратегии на одном символе
 
-Автоматическая классификация (TRENDING, RANGING, VOLATILE, TRANSITIONAL) влияет на:
-- Минимальный score для открытия сделки
-- Мультипликаторы SL/TP
-- Размер позиции
+Пример: `BTCUSDT` может одновременно запускать `MACDX` и `HYBRID`, а `ETHUSDT` — один или несколько других instances.
+При этом открытая позиция по символу имеет владельца (`strategy_instance_id`). Пока позиция открыта, остальные instances этого символа не открывают новую позицию. Состояние владения хранится в `data/position_owners.json` и сверяется с реальными позициями биржи.
 
 ---
 
@@ -155,7 +156,7 @@ cp .env.example .env
 
 - **OS**: Linux (рекомендуется), macOS, Windows (через WSL)
 - **Python**: 3.12+
-- **Podman** или **Docker**: Для контейнерного запуска
+- **Podman**: Для контейнерного запуска, сборки и тестов
 - **Аккаунт BingX**: Standard Futures для торговли
 - **OpenRouter API key**: Для AI-анализа
 
@@ -171,9 +172,9 @@ config/
 ├── strategies/         # Настройки стратегий
 │   ├── scalp.json, aiscalp.json, swing.json
 │   ├── grid.json, hybrid.json, macdx.json
-├── profiles/           # Per-symbol переопределения
+├── profiles/           # Профили переопределений для strategy instances
 │   ├── default.json
-└── active.json         # Активная стратегия + символы
+└── active.json         # Runtime strategy instances + legacy fallback
 
 src/
 ├── core/               # Ядро: worker, collector, analyzer, risk manager
@@ -198,10 +199,9 @@ podman-compose up --build -d               # Запуск
 podman-compose down                         # Остановка
 podman-compose logs -f                     # Логи
 
-# Генерация графиков (в контейнере)
-python3 src/core/plotter.py 2H    # за 2 часа
-python3 src/core/plotter.py 1D    # за 1 день
-python3 src/core/plotter.py 1W    # за 1 неделю
+# Генерация графиков через podman
+podman run --rm -v .:/app:Z -w /app python:3.12-slim \
+  sh -c "pip install -q requests pandas matplotlib && python src/core/plotter.py 2H"
 
 # Тесты
 podman run --rm -v .:/app:Z -w /app python:3.12-slim \
@@ -217,16 +217,16 @@ podman run --rm -v .:/app:Z -w /app python:3.12-slim \
 
 ### Порядок загрузки
 
-Конфигурация загружается в следующем порядке (позже переопределяет ранее):
+Для каждого enabled strategy instance конфигурация собирается в следующем порядке (позже переопределяет ранее):
 
 ```
 1. .env файл (переменные окружения)
 2. hardcoded defaults (src/config.py)
 3. config/base.json (инфраструктура)
 4. config/trading.json (торговые параметры)
-5. config/strategies/{strategy}.json (настройки стратегии)
-6. config/profiles/{profile}.json (символьные профили)
-7. config/active.json (runtime выбор стратегии и профилей)
+5. config/active.json (выбор instance: symbol + strategy + profile)
+6. config/strategies/{instance.strategy}.json (настройки стратегии)
+7. config/profiles/{instance.profile}.json (переопределения профиля)
 ```
 
 ### Hot-reload
@@ -239,7 +239,8 @@ podman run --rm -v .:/app:Z -w /app python:3.12-slim \
 - Deep merge конфигов
 - Наследование профилей (`_inherits`)
 - Валидацию (`_strategy`)
-- Разрешение конфигурации для конкретного символа (`get_symbol_config(symbol)`)
+- Разрешение конфигурации для конкретного strategy instance (`resolve_strategy_instance_config(instance)`)
+- Legacy fallback из старой схемы `strategy` + `symbols`
 
 ---
 
@@ -247,18 +248,18 @@ podman run --rm -v .:/app:Z -w /app python:3.12-slim \
 
 ### Мультипроцессная архитектура
 
-Каждый торговый символ работает в отдельном изолированном процессе:
+Каждый enabled strategy instance работает в отдельном изолированном процессе. Несколько instances могут использовать один символ, но позиция по символу имеет единственного владельца:
 
 ```
 run.py → src/main.py (spawns processes)
-  ├── Worker per symbol (src/core/process_worker.py)
+  ├── Worker per strategy instance (src/core/process_worker.py)
   ├── Chart Worker (src/core/chart_worker.py)
   └── WebSocket Provider (src/exchanges/ws_data_provider.py)
 ```
 
 ### Стратегические конвейеры
 
-`process_worker` выбирает конвейер на основе активной стратегии:
+`process_worker` выбирает конвейер на основе стратегии конкретного instance:
 
 - **SCALP** → `ScalpEngine` (dual-loop: fast 1.5s + slow 45s)
 - **HYBRID** → условная AI-вето (auto-approve высококачественные сигналы)
@@ -272,6 +273,8 @@ run.py → src/main.py (spawns processes)
 | Директория | Назначение |
 |------------|------------|
 | `src/core/` | process_worker, collector, analyzer, regime detector, risk manager, executor |
+| `src/runtime.py` | модель `StrategyInstance` и legacy-конвертация runtime config |
+| `src/core/position_ownership.py` | владение открытой позицией между instances одного символа |
 | `src/exchanges/` | bingx_client (кэширование, retry), ws_data_provider (WebSocket) |
 | `src/prompts/` | builder, blocks, strategies (REGISTRY) |
 | `src/telegram_panel/` | FastAPI backend + Telegram bot + React frontend |
@@ -301,7 +304,7 @@ Factory, Strategy, Singleton, Template Method, Observer, Adapter.
 | Команда | Описание |
 |---------|----------|
 | `/start` | Приветствие + кнопка Mini App |
-| `/status` | Стратегия, позиции, символы |
+| `/status` | Strategy instances, позиции, символы |
 | `/trades` | История сделок с PnL |
 | `/chart` | Последний график |
 | `/logs` | Последние строки логов |
@@ -312,12 +315,12 @@ Factory, Strategy, Singleton, Template Method, Observer, Adapter.
 
 ### Web Dashboard (Mini App)
 
-- **Dashboard** — обзор позиций и стратегии
+- **Dashboard** — обзор позиций, символов и активных instances
 - **Trades** — история, фильтры, статистика
 - **Charts** — галерея PNG графиков
 - **Logs** — просмотр логов в реальном времени
 - **Journal** — журнал AI-решений
-- **Settings** — редактор конфигурации
+- **Settings** — Runtime instances, Position & Risk, Profiles, AI Settings
 
 ### Настройка
 
@@ -340,6 +343,7 @@ PANEL_PORT=8080
 | Файл/Папка | Описание |
 |------------|----------|
 | `active_trades.json` | Открытые позиции (с entry regime/score/quality) |
+| `position_owners.json` | Владелец открытой позиции по символу (`strategy_instance_id`) |
 | `trade_history.json` | Закрытые сделки (с net PnL и fees) |
 | `decision_journal.json` | История AI-решений, trade plans, cooldowns |
 | `calibration_suggestions.json` | Рекомендации от PerformanceTracker |
@@ -371,8 +375,9 @@ tail -f data/steps.log           # системные события
 1. **Проверьте `MIN_RISK_REWARD_RATIO`**: Сигналы могут отсеиваться. Ищите `[AUTO-FIX: Low R/R]` в логах.
 2. **Проверьте `MIN_CONFIDENCE_THRESHOLD`**: AI может давать low-confidence ответы (по умолчанию 0.55).
 3. **Проверьте режим рынка**: В RANGING/VOLATILE режимах min_score повышается (5-7).
-4. **Проверьте `DISABLED_SYMBOLS`**: Символ может быть заблокирован.
+4. **Проверьте `disabled_symbols` и `enabled` у instance**: Символ или конкретный strategy instance может быть выключен.
 5. **Проверьте баланс**: На VST счете должны быть средства.
+6. **Проверьте ownership**: Если другая стратегия уже открыла позицию по этому символу, остальные instances ждут её закрытия.
 
 ### Signature Validation Failed (BingX)
 
