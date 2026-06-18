@@ -1,0 +1,15 @@
+{
+  "_description": "Conservative profile for ETH on MACDX",
+  "_version": "1.0.0",
+  "_inherits": "default",
+  "_strategy": "MACDX",
+  "preset": {
+    "leverage": 5
+  },
+  "position": {
+    "size_percent": 10
+  },
+  "risk": {
+    "min_confidence_threshold": 0.65
+  }
+}

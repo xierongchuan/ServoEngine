@@ -146,6 +146,21 @@ class BingXClient(ExchangeClient):
         # 2. Fallback to REST API
         return self._fetch_klines_rest(symbol, interval, limit)
 
+    def get_kline_data(self, symbol: str, interval: str = "5m", limit: int = 288) -> List[Dict]:
+        """Legacy adapter: возвращает свечи в dict-формате для старых модулей."""
+        klines = self.get_klines(symbol, interval=interval, limit=limit)
+        result: List[Dict] = []
+        for kline in klines:
+            result.append({
+                "snapshotTimeUTC": str(kline.timestamp),
+                "openPrice": float(kline.open),
+                "highPrice": float(kline.high),
+                "lowPrice": float(kline.low),
+                "closePrice": float(kline.close),
+                "volume": float(kline.volume),
+            })
+        return result
+
     def _fetch_klines_rest(self, symbol: str, interval: str, limit: int) -> KlinesList:
         """REST API fallback для получения свечей."""
         formatted_symbol = self._format_symbol(symbol)

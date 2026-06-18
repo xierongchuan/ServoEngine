@@ -14,9 +14,11 @@ from src.core.strategies.factory import create_pipeline
 from src.core.data.collector import process_symbol
 from src.core.tracking.journal import DecisionJournal
 from src.core.tracking.trade import TradeTracker
+from src.core.position_ownership import get_position_ownership_store
 from src.core.performance import get_performance_tracker
 from src.exchanges.exchange_factory import get_exchange_client
 from src.core import executor, monitor
+from src.runtime import normalize_symbol_key
 from src.utils.logger import info, error, warning, StageTimer
 
 
@@ -26,10 +28,13 @@ class PipelineOrchestrator:
     def __init__(self, config: Optional[Dict] = None):
         self.config = config or BOT_CONFIG
         self.strategy = self.config.get("STRATEGY_STYLE", STRATEGY_STYLE)
+        self.instance = self.config.get("STRATEGY_INSTANCE", {})
+        self.instance_id = self.config.get("STRATEGY_INSTANCE_ID", self.instance.get("id", f"legacy_{self.strategy}".lower()))
         self.pipeline = create_pipeline(self.strategy, self.config)
         self._tracker = TradeTracker()
         self._journal = DecisionJournal()
         self._client = get_exchange_client()
+        self._ownership = get_position_ownership_store()
         self._cycle_count = 0
 
     def run_cycle(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None) -> Optional[Dict]:
@@ -40,10 +45,22 @@ class PipelineOrchestrator:
         """Перезагрузка конфигурации и пересоздание пайплайна."""
         if should_reload_config():
             info("🔄 Config file changed, reloading...")
-            reload_bot_config()
-            from src.config import STRATEGY_STYLE as _new_style, BOT_CONFIG as _new_config
-            self.config = _new_config
+            if self.instance:
+                from src.config_loader import resolve_strategy_instance_config
+                import src.config as config_module
+                from src.runtime import apply_legacy_runtime_config
+
+                self.config = resolve_strategy_instance_config(self.instance)
+                apply_legacy_runtime_config(config_module, self.config)
+            else:
+                reload_bot_config()
+                from src.config import BOT_CONFIG as _new_config
+                self.config = _new_config
+
+            from src.config import STRATEGY_STYLE as _new_style
             self.strategy = self.config.get("STRATEGY_STYLE", _new_style)
+            self.instance = self.config.get("STRATEGY_INSTANCE", self.instance)
+            self.instance_id = self.config.get("STRATEGY_INSTANCE_ID", self.instance_id)
             self.pipeline = create_pipeline(self.strategy, self.config)
             info(f"✅ Config reloaded (strategy={self.strategy})")
 
@@ -65,7 +82,7 @@ class PipelineOrchestrator:
             from src.utils.logger import setup_symbol_logger
             setup_symbol_logger(symbol)
 
-            info(f"🚀 [PROCESS START] Запущен бесконечный процесс для {symbol} (PID: {os.getpid()})")
+            info(f"🚀 [PROCESS START] Запущен процесс {self.instance_id} для {symbol} ({self.strategy}) (PID: {os.getpid()})")
 
             # SCALP mode — use dedicated engine
             if self.strategy == "SCALP":
@@ -120,9 +137,27 @@ class PipelineOrchestrator:
                     current_time = time.time()
                     if current_time - last_config_check >= config_check_interval:
                         self.reload()
+                        preset = self.config.get("STYLE_PRESETS", {}).get(self.strategy, preset)
                         last_config_check = current_time
 
-                    info(f"▶️ [{symbol}] Начало торгового цикла")
+                    all_positions = self._client.get_positions()
+                    self._ownership.sync_with_positions(all_positions)
+                    normalized_symbol = normalize_symbol_key(symbol)
+                    symbol_positions = all_positions.get(normalized_symbol, [])
+                    real_position = symbol_positions[0] if symbol_positions else None
+                    owner = self._ownership.get_owner(symbol)
+
+                    if owner and owner.owner_id != self.instance_id:
+                        info(
+                            f"⏸️ [{symbol}] Символ занят стратегией {owner.owner_id} "
+                            f"({owner.strategy}); {self.instance_id} ждёт освобождения"
+                        )
+                        self._sleep_cycle(symbol, preset, real_position, cycle_count)
+                        cycle_count += 1
+                        self._cycle_count += 1
+                        continue
+
+                    info(f"▶️ [{symbol}] Начало торгового цикла ({self.instance_id})")
 
                     # 1. Collect data
                     with StageTimer("Сбор данных", symbol, "📊"):
@@ -140,13 +175,15 @@ class PipelineOrchestrator:
                         continue
 
                     # 3. Journal
+                    prediction["strategy_instance_id"] = self.instance_id
+                    prediction.setdefault("strategy", self.strategy)
                     action = prediction.get("action", "hold")
                     current_price = prediction.get("current_price", 0)
                     self._journal.record(symbol, prediction, current_price)
 
                     # Trade plan
                     all_positions = self._client.get_positions()
-                    normalized_symbol = symbol.replace("-", "")
+                    self._ownership.sync_with_positions(all_positions)
                     symbol_positions = all_positions.get(normalized_symbol, [])
                     real_position = symbol_positions[0] if symbol_positions else None
 
@@ -160,7 +197,12 @@ class PipelineOrchestrator:
 
                     # 4. Execute
                     with StageTimer("Исполнение сигналов", symbol, "💰"):
-                        executor.execute_prediction(prediction, all_positions=all_positions)
+                        executor.execute_prediction(
+                            prediction,
+                            all_positions=all_positions,
+                            owner_id=self.instance_id,
+                            strategy_id=self.strategy,
+                        )
 
                     # 5. Save entry context
                     if action in ("buy", "sell") and not real_position and self.strategy in ("HYBRID", "AISCALP", "MACDX"):

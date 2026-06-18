@@ -121,7 +121,41 @@ Per-symbol override system with strategy binding:
 - **`_templates/`** - Future: reusable profile templates for common configurations (aggressive, conservative, balanced)
 
 ### 5. Active Configuration (`config/active.json`)
-Runtime selection:
+Runtime selection.
+
+Preferred format for multi-strategy runtime:
+```json
+{
+  "strategy_instances": [
+    {
+      "id": "btc_macdx",
+      "symbol": "BTCUSDT",
+      "strategy": "MACDX",
+      "profile": "default",
+      "enabled": true
+    },
+    {
+      "id": "btc_hybrid",
+      "symbol": "BTCUSDT",
+      "strategy": "HYBRID",
+      "profile": "default",
+      "enabled": true
+    },
+    {
+      "id": "eth_aiscalp",
+      "symbol": "ETHUSDT",
+      "strategy": "AISCALP",
+      "profile": "default",
+      "enabled": true
+    }
+  ],
+  "disabled_symbols": []
+}
+```
+
+Runtime rule: if multiple strategy instances trade the same symbol, only the instance that opened the current position owns it. Other instances for that symbol wait until the owner closes the position. Ownership is stored in `data/position_owners.json` and synchronized with real exchange positions.
+
+Legacy fallback format is still supported:
 ```json
 {
   "strategy": "MACDX",

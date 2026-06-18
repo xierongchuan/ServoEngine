@@ -254,24 +254,31 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         log_trade(f"❌ Ошибка создания ордера {symbol}: {str(e)}", level='ERROR')
         return None
 
-def execute_prediction(prediction, all_positions=None):
+def execute_prediction(prediction, all_positions=None, owner_id=None, strategy_id=None):
     """
     Исполняет одно предсказание для одного символа.
     Используется в режиме multiprocessing.
     """
     symbol = prediction["symbol"]
+    owner_id = owner_id or prediction.get("strategy_instance_id") or prediction.get("strategy") or "legacy"
+    strategy_id = strategy_id or prediction.get("strategy") or "UNKNOWN"
 
     client = get_exchange_client()
     if not client.check_prerequisites():
          error(f"❌ {symbol}: Ошибка подключения к бирже")
-         return
+         return False
 
     # Получаем все текущие позиции для проверки лимитов и состояния
     try:
         positions = all_positions if all_positions is not None else get_open_positions()
     except Exception as e:
         error(f"❌ {symbol}: Ошибка получения позиций: {e}")
-        return
+        return False
+
+    from src.core.position_ownership import get_position_ownership_store
+    ownership = get_position_ownership_store()
+    ownership.sync_with_positions(positions)
+    current_owner = ownership.get_owner(symbol)
 
     # Проверяем лимит позиций (максимум 5)
     POSITION_LIMITS.get("max_positions", 5)
@@ -288,6 +295,13 @@ def execute_prediction(prediction, all_positions=None):
     has_position = len(symbol_positions) > 0
     current_pos = symbol_positions[0] if has_position else None
 
+    if current_owner and current_owner.owner_id != owner_id:
+        info(
+            f"⏸️ {symbol}: символ занят стратегией {current_owner.owner_id} "
+            f"({current_owner.strategy}), сигнал {prediction['action']} от {owner_id} пропущен"
+        )
+        return False
+
     # Determine confidence threshold
     confidence_threshold = MIN_CONFIDENCE_THRESHOLD
     if AGGRESSIVE_MODE:
@@ -300,12 +314,20 @@ def execute_prediction(prediction, all_positions=None):
             # has_position already ensures we don't open duplicate
 
             if prediction["confidence"] >= confidence_threshold:
+                acquired, existing_owner = ownership.try_acquire(symbol, owner_id, strategy_id)
+                if not acquired:
+                    info(
+                        f"⏸️ {symbol}: вход заблокирован владельцем "
+                        f"{existing_owner.owner_id if existing_owner else 'unknown'}"
+                    )
+                    return False
+
                 direction = prediction["action"].upper()
                 # Convert string to OrderSide enum
                 side = OrderSide.BUY if direction == "BUY" else OrderSide.SELL
                 info(f"🚀 {symbol}: Исполнение сигнала {direction} (confidence={prediction['confidence']})")
 
-                create_order(
+                order_id = create_order(
                     symbol,
                     side,
                     prediction["current_price"],
@@ -315,14 +337,26 @@ def execute_prediction(prediction, all_positions=None):
                     confidence=prediction["confidence"],
                     size_pct=prediction.get("size_pct")
                 )
+                if not order_id:
+                    ownership.release_if_owner(symbol, owner_id)
+                    return False
+                return True
             else:
                 info(f"📉 {symbol}: Пропуск сигнала {prediction['action']} (confidence {prediction['confidence']} < {confidence_threshold})")
+                return False
         else:
             # HOLD or unknown
             info(f"⏸️ {symbol}: {prediction['action'].upper()} ({prediction['reason']})")
+            return True
 
     # 2. MANAGE EXISTING POSITION
     else:
+        if not current_owner:
+            acquired, current_owner = ownership.try_acquire(symbol, owner_id, strategy_id)
+            if not acquired:
+                info(f"⏸️ {symbol}: позиция уже закреплена за {current_owner.owner_id}")
+                return False
+
         # Support both dict and Position dataclass
         if hasattr(current_pos, 'position_id'):
             deal_id = current_pos.position_id
@@ -340,8 +374,12 @@ def execute_prediction(prediction, all_positions=None):
             if client.close_position(symbol, deal_id, percentage):
                 info(f"✅ {symbol}: Позиция {deal_id} закрыта (частично: {percentage})")
                 log_trade(f"✅ {symbol}: Позиция {deal_id} закрыта (частично: {percentage*100}%) | Причина: {prediction['reason']}")
+                if percentage >= 1.0:
+                    ownership.release_if_owner(symbol, owner_id)
+                return True
             else:
                 error(f"❌ {symbol}: Не удалось закрыть позицию {deal_id}")
+                return False
 
         # UPDATE SL/TP (HOLD)
         elif prediction["action"] == "hold":
@@ -366,16 +404,22 @@ def execute_prediction(prediction, all_positions=None):
                         success = client.set_sl_tp(symbol, pos_side, tp=ai_tp, sl=ai_sl)
                         if success:
                             info(f"✅ {symbol}: SL/TP updated (SL: {ai_sl}, TP: {ai_tp})")
+                            return True
                         else:
                             error(f"❌ {symbol}: SL/TP update FAILED — позиция БЕЗ актуальной защиты!")
+                            return False
                     else:
                         warning("⚠️ Client does not support set_sl_tp")
+                        return False
                 except Exception as e:
                     error(f"❌ {symbol}: Ошибка обновления SL/TP: {e}")
+                    return False
             else:
                  info(f"⏸️ {symbol}: HOLD (Wait for signal)")
+                 return True
         else:
              info(f"⏸️ {symbol}: Игнорируем сигнал {prediction['action']} при открытой позиции")
+             return False
 
 
 def main(predictions):

@@ -120,13 +120,25 @@ def run_pipeline():
 def run_multiprocess_pipeline():
     """Запускает отдельный процесс для каждого символа (Multiprocessing)"""
     import multiprocessing
-    from src.config import SYMBOLS, STRATEGY_STYLE, BOT_CONFIG, STYLE_PRESETS, CHART_SETTINGS
-    from src.core.process_worker import run_symbol_pipeline
+    from src.config import CHART_SETTINGS
+    from src.config_loader import get_strategy_instances, resolve_strategy_instance_config
+    from src.core.process_worker import run_strategy_instance_pipeline
     from src.core.chart_worker import run_chart_worker
 
     print("\n🚀 Запуск мультипроцессного пайплайна...")
     info("🚀 Запуск мультипроцессного пайплайна...")
-    info(f"📋 Режим стратегии: {STRATEGY_STYLE}")
+
+    instances = get_strategy_instances()
+    if not instances:
+        raise RuntimeError("No enabled strategy instances configured")
+
+    instance_configs = {
+        instance.id: resolve_strategy_instance_config(instance)
+        for instance in instances
+    }
+    symbols = sorted({instance.symbol for instance in instances})
+    strategies = ", ".join(f"{i.id}:{i.symbol}:{i.strategy}" for i in instances)
+    info(f"📋 Strategy instances: {strategies}")
 
     # 0. Start WebSocket data provider BEFORE workers
     ws_cache = None
@@ -134,21 +146,27 @@ def run_multiprocess_pipeline():
     try:
         from src.exchanges.ws_data_provider import start_ws_provider
 
-        # Get timeframe from strategy preset
-        current_preset = STYLE_PRESETS.get(STRATEGY_STYLE, {})
-        ws_interval = current_preset.get("timeframe", "5m")
+        intervals = set()
+        for config in instance_configs.values():
+            style = config.get("STRATEGY_STYLE")
+            preset = config.get("STYLE_PRESETS", {}).get(style, {})
+            intervals.add(preset.get("timeframe", "5m"))
 
-        print(f"   📡 Запуск WebSocket провайдера (interval={ws_interval})...")
-        info(f"📡 Запуск WebSocket провайдера для {len(SYMBOLS)} символов")
+        if len(intervals) == 1:
+            ws_interval = next(iter(intervals))
+            print(f"   📡 Запуск WebSocket провайдера (interval={ws_interval})...")
+            info(f"📡 Запуск WebSocket провайдера для {len(symbols)} символов")
 
-        ws_cache, ws_ready = start_ws_provider(SYMBOLS, interval=ws_interval)
+            ws_cache, ws_ready = start_ws_provider(symbols, interval=ws_interval)
 
-        # Wait for initial REST backfill to complete
-        print("   ⏳ Загрузка исторических данных...")
-        time.sleep(3)  # Give time for backfill
+            # Wait for initial REST backfill to complete
+            print("   ⏳ Загрузка исторических данных...")
+            time.sleep(3)  # Give time for backfill
 
-        print("   ✅ WebSocket провайдер запущен")
-        info("✅ WebSocket провайдер запущен и кэш заполнен")
+            print("   ✅ WebSocket провайдер запущен")
+            info("✅ WebSocket провайдер запущен и кэш заполнен")
+        else:
+            info(f"📡 WebSocket кэш отключён: разные timeframe у инстансов ({sorted(intervals)}). Используем REST.")
 
     except Exception as e:
         print(f"   ⚠️ WebSocket провайдер недоступен: {e}")
@@ -156,34 +174,24 @@ def run_multiprocess_pipeline():
 
     processes = []
 
-    # 1. Запускаем торговые процессы (по одному на символ)
-    for symbol in SYMBOLS:
-        # Выбираем воркер в зависимости от стратегии
-        if STRATEGY_STYLE == "GRID":
-            from src.core.grid_worker import run_grid_worker
-            grid_config = BOT_CONFIG.get("GRID_SETTINGS", {})
-            p = multiprocessing.Process(
-                target=run_grid_worker,
-                args=(symbol, grid_config),
-                name=f"GridWorker-{symbol}"
-            )
-            worker_type = "Grid"
-        else:
-            p = multiprocessing.Process(
-                target=run_symbol_pipeline,
-                args=(symbol, ws_cache, ws_ready),
-                name=f"Worker-{symbol}"
-            )
-            worker_type = STRATEGY_STYLE
+    # 1. Запускаем торговые процессы (по одному на strategy instance)
+    for instance in instances:
+        config = instance_configs[instance.id]
+        p = multiprocessing.Process(
+            target=run_strategy_instance_pipeline,
+            args=(instance.to_dict(), config, ws_cache, ws_ready),
+            name=f"Worker-{instance.id}"
+        )
+        worker_type = instance.strategy
 
         p.daemon = True
         processes.append(p)
         p.start()
-        print(f"   🔄 Запущен {worker_type} процесс для {symbol} (PID: {p.pid})")
-        info(f"🔄 Запущен {worker_type} процесс для {symbol} (PID: {p.pid})")
+        print(f"   🔄 Запущен {worker_type} процесс {instance.id} для {instance.symbol} (PID: {p.pid})")
+        info(f"🔄 Запущен {worker_type} процесс {instance.id} для {instance.symbol} (PID: {p.pid})")
 
         # Staggered start: задержка между запуском процессов чтобы не перегрузить API
-        if len(SYMBOLS) > 5:
+        if len(instances) > 5:
             time.sleep(2)  # 2 секунды между запусками при >5 символов
 
     # 2. Запускаем отдельный процесс для графиков (если включен)

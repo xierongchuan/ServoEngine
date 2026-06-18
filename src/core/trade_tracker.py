@@ -287,6 +287,11 @@ class TradeTracker:
             position_id = real_position.get("dealId", real_position.get("positionId", ""))
 
         estimated_entry_fee = entry_price * amount * (TRADING_FEE_TAKER / 100.0)
+        try:
+            from src.core.position_ownership import get_position_ownership_store
+            owner = get_position_ownership_store().get_owner(symbol)
+        except Exception:
+            owner = None
 
         trade_data = {
             "symbol": symbol,
@@ -304,6 +309,15 @@ class TradeTracker:
             "net_pnl": 0.0,
             "cumulative_funding": 0.0,
         }
+        if owner:
+            trade_data["strategy_instance_id"] = owner.owner_id
+            trade_data["strategy"] = owner.strategy
+            if position_id:
+                try:
+                    from src.core.position_ownership import get_position_ownership_store
+                    get_position_ownership_store().update_position_id(symbol, owner.owner_id, position_id)
+                except Exception:
+                    pass
 
         self.active_trades[symbol] = trade_data
         self._save_active_trades(symbol)
@@ -532,5 +546,3 @@ class TradeTracker:
             info(f"🧹 [TradeTracker] Cleaned {len(stale_symbols)} stale trades: {stale_symbols}")
 
         return len(stale_symbols)
-
-

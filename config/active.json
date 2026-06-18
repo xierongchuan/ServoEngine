@@ -2,6 +2,29 @@
   "_description": "Active runtime configuration - strategy and symbol profile mapping",
   "_version": "1.0.0",
   "strategy": "HYBRID",
+  "strategy_instances": [
+    {
+      "id": "btcusdt_hybrid",
+      "symbol": "BTCUSDT",
+      "strategy": "HYBRID",
+      "profile": "default",
+      "enabled": true
+    },
+    {
+      "id": "bnbusdt_hybrid",
+      "symbol": "BNBUSDT",
+      "strategy": "HYBRID",
+      "profile": "default",
+      "enabled": true
+    },
+    {
+      "id": "ltcusdt_hybrid",
+      "symbol": "LTCUSDT",
+      "strategy": "HYBRID",
+      "profile": "default",
+      "enabled": true
+    }
+  ],
   "symbols": {
     "bingx": [
       "BTCUSDT",

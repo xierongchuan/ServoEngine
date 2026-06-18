@@ -8,11 +8,13 @@ from typing import Tuple, Dict
 from src.utils.logger import info, error, warning
 from src.exchanges.exchange_factory import get_exchange_client
 from src.config import ERROR_HANDLING
+from src.core.position_ownership import get_position_ownership_store
+from src.runtime import normalize_symbol_key
 from .executor import GridExecutor
 from .adx import calculate_adx
 
 
-def run_grid_worker(symbol: str, config: dict):
+def run_grid_worker(symbol: str, config: dict, runtime_config: dict = None):
     """
     Запускает Grid Trading для одного символа.
 
@@ -29,6 +31,10 @@ def run_grid_worker(symbol: str, config: dict):
         # 2. Инициализация
         client = get_exchange_client()
         grid = GridExecutor(symbol, config)
+        runtime_config = runtime_config or {}
+        instance_id = runtime_config.get("STRATEGY_INSTANCE_ID", f"{normalize_symbol_key(symbol)}_grid".lower())
+        strategy_id = runtime_config.get("STRATEGY_STYLE", "GRID")
+        ownership = get_position_ownership_store()
 
         # Параметры цикла
         check_interval = config.get("check_interval", 5)
@@ -47,9 +53,7 @@ def run_grid_worker(symbol: str, config: dict):
 
                 # 3.1 Получаем текущую цену
                 ticker = client.get_ticker(symbol)
-                bid = ticker.get("bid", 0)
-                ask = ticker.get("ask", 0)
-                ticker.get("last", 0)
+                bid, ask, _last = _extract_ticker_prices(ticker)
 
                 if bid <= 0 or ask <= 0:
                     warning(f"[GRID] Invalid ticker data: bid={bid}, ask={ask}. Skipping cycle.")
@@ -58,12 +62,32 @@ def run_grid_worker(symbol: str, config: dict):
 
                 mid_price = (bid + ask) / 2
 
+                positions = client.get_positions()
+                ownership.sync_with_positions(positions)
+                owner = ownership.get_owner(symbol)
+                if owner and owner.owner_id != instance_id:
+                    info(
+                        f"⏸️ [GRID] {symbol}: символ занят стратегией {owner.owner_id} "
+                        f"({owner.strategy}); {instance_id} ждёт освобождения"
+                    )
+                    time.sleep(check_interval)
+                    continue
+
+                acquired, owner = ownership.try_acquire(symbol, instance_id, strategy_id)
+                if not acquired:
+                    info(f"⏸️ [GRID] {symbol}: вход заблокирован владельцем {owner.owner_id if owner else 'unknown'}")
+                    time.sleep(check_interval)
+                    continue
+
+                _attach_position_id_if_present(ownership, symbol, instance_id, positions)
+
                 # 3.2 Обновляем inventory
                 inventory = grid.update_inventory()
 
                 # 3.3 Проверяем emergency условия
                 if grid.check_emergency_conditions(mid_price):
-                    grid.emergency_close()
+                    if grid.emergency_close():
+                        ownership.release_if_owner(symbol, instance_id)
                     warning("[GRID] Emergency close triggered. Pausing for 60s...")
                     time.sleep(60)
                     continue
@@ -106,6 +130,9 @@ def run_grid_worker(symbol: str, config: dict):
                 # 3.8.1 Проверяем исполненные ордера
                 filled_orders = grid.check_filled_orders()
                 if filled_orders:
+                    positions = client.get_positions()
+                    ownership.sync_with_positions(positions)
+                    _attach_position_id_if_present(ownership, symbol, instance_id, positions)
                     info(f"[GRID] {len(filled_orders)} order(s) filled this cycle")
 
                 # 3.9 Логирование
@@ -123,6 +150,7 @@ def run_grid_worker(symbol: str, config: dict):
             except KeyboardInterrupt:
                 info(f"[GRID] {symbol} stopped by user (KeyboardInterrupt)")
                 _graceful_shutdown(grid)
+                _release_grid_owner_if_flat(ownership, client, symbol, instance_id)
                 return
 
             except Exception as e:
@@ -224,6 +252,53 @@ def _analyze_volatility(symbol: str, client, config: dict) -> Tuple[float, bool,
     except Exception as e:
         warning(f"[GRID] Volatility analysis failed: {e}")
         return 1.0, False, {"adx": 0, "trend": "UNKNOWN"}
+
+
+def _extract_ticker_prices(ticker) -> Tuple[float, float, float]:
+    """Возвращает bid/ask/last из DTO Ticker или legacy dict."""
+    if hasattr(ticker, "bid_price"):
+        return (
+            float(getattr(ticker, "bid_price", 0) or 0),
+            float(getattr(ticker, "ask_price", 0) or 0),
+            float(getattr(ticker, "last_price", 0) or 0),
+        )
+
+    return (
+        float(ticker.get("bid", 0) or ticker.get("bid_price", 0) or 0),
+        float(ticker.get("ask", 0) or ticker.get("ask_price", 0) or 0),
+        float(ticker.get("last", 0) or ticker.get("last_price", 0) or 0),
+    )
+
+
+def _attach_position_id_if_present(ownership, symbol: str, owner_id: str, positions: Dict) -> None:
+    """Сохраняет position_id владельца, если позиция уже появилась на бирже."""
+    position = _first_symbol_position(symbol, positions)
+    if not position:
+        return
+
+    position_id = getattr(position, "position_id", None)
+    if position_id is None and isinstance(position, dict):
+        position_id = position.get("position_id") or position.get("dealId") or position.get("positionId")
+    if position_id:
+        ownership.update_position_id(symbol, owner_id, str(position_id))
+
+
+def _release_grid_owner_if_flat(ownership, client, symbol: str, owner_id: str) -> None:
+    """Освобождает GRID ownership после остановки, если позиции уже нет."""
+    try:
+        positions = client.get_positions()
+        if not _first_symbol_position(symbol, positions):
+            ownership.release_if_owner(symbol, owner_id)
+    except Exception as e:
+        warning(f"[GRID] Failed to release owner on shutdown: {e}")
+
+
+def _first_symbol_position(symbol: str, positions: Dict):
+    target_symbol = normalize_symbol_key(symbol)
+    for position_symbol, symbol_positions in positions.items():
+        if normalize_symbol_key(position_symbol) == target_symbol and symbol_positions:
+            return symbol_positions[0]
+    return None
 
 
 def _graceful_shutdown(grid: GridExecutor):

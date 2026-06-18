@@ -194,6 +194,32 @@ def run_symbol_pipeline(symbol: str, ws_cache=None, ws_ready=None):
     orchestrator.run_symbol_pipeline(symbol, ws_cache, ws_ready)
 
 
+def run_strategy_instance_pipeline(instance: dict, config: dict, ws_cache=None, ws_ready=None):
+    """
+    Запускает worker для одного StrategyInstance.
+
+    Новый runtime передает явный конфиг инстанса. Старые модули внутри
+    процесса получают его через изолированный legacy adapter, поэтому
+    каждый worker работает со своим STRATEGY_STYLE/SYMBOLS.
+    """
+    import src.config as config_module
+    from src.runtime import StrategyInstance, apply_legacy_runtime_config
+    from src.exchanges.exchange_factory import reset_client
+    from src.core.pipeline import PipelineOrchestrator
+
+    strategy_instance = StrategyInstance.from_dict(instance)
+    apply_legacy_runtime_config(config_module, config)
+    reset_client()
+
+    if strategy_instance.strategy == "GRID":
+        from src.core.strategies.grid.worker import run_grid_worker
+        run_grid_worker(strategy_instance.symbol, config.get("GRID_SETTINGS", {}), runtime_config=config)
+        return
+
+    orchestrator = PipelineOrchestrator(config=config)
+    orchestrator.run_symbol_pipeline(strategy_instance.symbol, ws_cache, ws_ready)
+
+
 def setup_worker(symbol: str, ws_cache=None, ws_ready=None):
     """
     Настраивает worker процесс для символа.

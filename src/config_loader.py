@@ -15,7 +15,9 @@ Configuration is resolved with inheritance:
 import os
 import json
 from copy import deepcopy
-from typing import cast, Dict, Any, Optional, List
+from typing import cast, Dict, Any, Optional, List, Union
+
+from src.runtime import StrategyInstance, build_legacy_instances, normalize_symbol_key
 
 
 # --- Paths ---
@@ -176,7 +178,7 @@ def validate_profile_strategy_match(profile_name: str, strategy_name: str, profi
     return True
 
 
-def resolve_symbol_config(symbol: str, strategy: Optional[str] = None) -> Dict[str, Any]:
+def resolve_symbol_config(symbol: str, strategy: Optional[str] = None, profile: Optional[str] = None) -> Dict[str, Any]:
     """
     Resolve complete configuration for a symbol.
 
@@ -189,12 +191,13 @@ def resolve_symbol_config(symbol: str, strategy: Optional[str] = None) -> Dict[s
     Args:
         symbol: Trading symbol (e.g., "BTCUSDT")
         strategy: Optional strategy override. If None, uses active.json strategy.
+        profile: Optional profile override for strategy instances.
 
     Returns:
         Fully resolved configuration dictionary
     """
     # Check cache
-    cache_key = f"{symbol}:{strategy or 'active'}"
+    cache_key = f"{symbol}:{strategy or 'active'}:{profile or 'active'}"
     if cache_key in _resolved_configs:
         return _resolved_configs[cache_key]
 
@@ -211,7 +214,7 @@ def resolve_symbol_config(symbol: str, strategy: Optional[str] = None) -> Dict[s
 
     # Get profile for this symbol
     symbol_profiles = active.get('symbol_profiles', {})
-    profile_name = symbol_profiles.get(symbol, 'default')
+    profile_name = profile or symbol_profiles.get(symbol, 'default')
 
     # Load profile config (handles inheritance)
     profile_config = load_profile_config(profile_name)
@@ -235,6 +238,63 @@ def resolve_symbol_config(symbol: str, strategy: Optional[str] = None) -> Dict[s
     # Cache result
     _resolved_configs[cache_key] = config
     return config
+
+
+def get_strategy_instances(exchange: str = 'bingx') -> List[StrategyInstance]:
+    """Get enabled strategy instances from active.json.
+
+    Preferred schema:
+        "strategy_instances": [
+          {"id": "btc_macdx", "symbol": "BTCUSDT", "strategy": "MACDX", "profile": "default"}
+        ]
+
+    Legacy fallback:
+        active.strategy + active.symbols[exchange] + active.symbol_profiles
+    """
+    active = load_active_config()
+    disabled_symbols = {normalize_symbol_key(symbol) for symbol in active.get('disabled_symbols', [])}
+    raw_instances = active.get('strategy_instances') or []
+
+    if raw_instances:
+        instances = [StrategyInstance.from_dict(item) for item in raw_instances]
+    else:
+        symbols_config = active.get('symbols', {})
+        symbols = symbols_config.get(exchange, ['BTCUSDT'])
+        strategy = active.get('strategy', 'MACDX')
+        instances = build_legacy_instances(symbols, strategy, active.get('symbol_profiles', {}))
+
+    return [
+        instance for instance in instances
+        if instance.enabled and normalize_symbol_key(instance.symbol) not in disabled_symbols
+    ]
+
+
+def resolve_strategy_instance_config(instance: Union[StrategyInstance, Dict[str, Any]], exchange: str = 'bingx') -> Dict[str, Any]:
+    """Build legacy-compatible BOT_CONFIG for one StrategyInstance."""
+    strategy_instance = StrategyInstance.from_dict(instance) if isinstance(instance, dict) else instance
+
+    # Собираем полный resolved config для конкретного symbol/strategy/profile.
+    resolved_config = resolve_symbol_config(
+        strategy_instance.symbol,
+        strategy=strategy_instance.strategy,
+        profile=strategy_instance.profile,
+    )
+
+    legacy = convert_resolved_to_legacy_format(resolved_config, strategy_instance.strategy)
+    legacy['STRATEGY_STYLE'] = strategy_instance.strategy
+    legacy['STRATEGY_INSTANCE_ID'] = strategy_instance.id
+    legacy['STRATEGY_INSTANCE'] = strategy_instance.to_dict()
+    legacy['SYMBOLS'] = [strategy_instance.symbol]
+    legacy['EXCHANGE_SYMBOLS'] = {exchange: [strategy_instance.symbol]}
+    legacy['DISABLED_SYMBOLS'] = []
+
+    preset = legacy.get('STYLE_PRESETS', {}).get(strategy_instance.strategy, {})
+    if preset.get('chart_period'):
+        legacy['DEFAULT_CHART_RANGE'] = preset['chart_period']
+    if preset.get('plotter_period'):
+        legacy['DEFAULT_PLOTTER_RANGE'] = preset['plotter_period']
+
+    return legacy
 
 
 def get_strategy() -> str:
@@ -417,6 +477,118 @@ def convert_to_legacy_format(config: Dict[str, Any], strategy: str) -> Dict[str,
         legacy['GRID_SETTINGS'] = {
             'enabled': True,
             **strategy_config.get('grid_settings', {})
+        }
+
+    return legacy
+
+
+def convert_resolved_to_legacy_format(config: Dict[str, Any], strategy: str) -> Dict[str, Any]:
+    """
+    Convert a fully resolved modular config to legacy BOT_CONFIG.
+
+    Используется для StrategyInstance: сюда уже должны попасть base -> trading ->
+    strategy -> profile overrides.
+    """
+    active = load_active_config()
+    strategy_upper = strategy.upper()
+    position = config.get('position', {})
+    risk = config.get('risk', {})
+    features = config.get('features', {})
+    regime = config.get('regime', {})
+    momentum = config.get('momentum', {})
+    exchange = config.get('exchange', {})
+
+    style_presets = _build_style_presets()
+    if config.get('preset'):
+        preset = deepcopy(config.get('preset', {}))
+        preset['description'] = config.get(
+            '_description',
+            style_presets.get(strategy_upper, {}).get('description', '')
+        )
+        style_presets[strategy_upper] = preset
+
+    legacy = {
+        'STRATEGY_STYLE': strategy_upper,
+        'EXCHANGE_SYMBOLS': active.get('symbols', {}),
+        'DISABLED_SYMBOLS': active.get('disabled_symbols', []),
+
+        'EXCHANGE_FEES': exchange.get('fees', {}),
+
+        'POSITION_SIZE_PERCENT': position.get('size_percent', 10),
+        'MIN_TRADE_AMOUNT_USDT': position.get('min_trade_amount_usdt', 10),
+
+        'MIN_CONFIDENCE_THRESHOLD': risk.get('min_confidence_threshold', 0.55),
+        'MIN_RISK_REWARD_RATIO': risk.get('min_risk_reward_ratio', 1.2),
+        'MIN_PARTIAL_CLOSE_PNL': risk.get('min_partial_close_pnl', 0.5),
+        'TAKE_PROFIT_PERCENT': risk.get('take_profit_percent', 2.5),
+        'STOP_LOSS_PERCENT': risk.get('stop_loss_percent', 1),
+
+        'ENABLE_NEWS': features.get('enable_news', False),
+        'ENABLE_ADVANCED_ANALYSIS': features.get('enable_advanced_analysis', True),
+        'ENABLE_PARALLEL_MODE': features.get('enable_parallel_mode', True),
+        'ENABLE_AI_SKIP_ON_RSI': features.get('enable_ai_skip_on_rsi', False),
+        'ENABLE_LOW_VOLUME_FILTER': features.get('enable_low_volume_filter', False),
+        'AGGRESSIVE_MODE': features.get('aggressive_mode', False),
+
+        'AGGRESSIVE_SETTINGS': {
+            k.upper(): v for k, v in config.get('aggressive_settings', {}).items()
+        },
+        'AI_THRESHOLDS': {
+            k.upper(): v for k, v in config.get('ai_thresholds', {}).items()
+        },
+
+        'CHART_RANGES': config.get('chart_ranges', {}),
+        'PLOTTER_RANGES': config.get('plotter_ranges', {}),
+        'TECHNICAL_ANALYSIS': config.get('technical_analysis', {}),
+        'CHART_SETTINGS': config.get('chart_settings', {}),
+        'CLEANUP_SETTINGS': config.get('cleanup_settings', {}),
+        'POSITION_LIMITS': config.get('position_limits', {}),
+        'ERROR_HANDLING': config.get('error_handling', {}),
+        'NEWS_SETTINGS': config.get('news', {}),
+        'DECISION_JOURNAL': config.get('decision_journal', {}),
+        'VALIDATION': config.get('validation', {}),
+        'AI_SETTINGS': config.get('ai', {}),
+
+        'SMART_SAMPLING': config.get('smart_sampling', {}),
+        'REGIME_SETTINGS': {
+            'enabled': regime.get('enabled', True),
+            'lookback_candles': regime.get('lookback_candles', 10),
+            'ema_spread_thresholds': regime.get('ema_spread_thresholds', {}),
+            'volatility_percentile_window': regime.get('volatility_percentile_window', 100),
+            'regime_params': regime.get('params', {})
+        },
+        'DYNAMIC_SIZING': config.get('dynamic_sizing', {}),
+        'PERFORMANCE_TRACKING': config.get('performance_tracking', {}),
+        'MOMENTUM_STRATEGY': {
+            **momentum,
+            'trend_consensus_required': momentum.get('trend_consensus_required', False)
+        },
+        'STYLE_PRESETS': style_presets,
+    }
+
+    if strategy_upper == 'SCALP':
+        legacy['SCALP_SETTINGS'] = _convert_scalp_config(config)
+    elif strategy_upper == 'MACDX':
+        legacy['MACDX_SETTINGS'] = {
+            'enabled': True,
+            'signal_rules': config.get('signal_rules', {}),
+            'exit_rules': config.get('exit_rules', {}),
+            'preset': config.get('preset', {})
+        }
+    elif strategy_upper == 'HYBRID':
+        legacy['HYBRID_SETTINGS'] = {
+            'enabled': True,
+            'signal_rules': config.get('signal_rules', {}),
+            'ai_filter': config.get('ai_filter', {}),
+            'interaction_rules': config.get('interaction_rules', {}),
+            'preset': config.get('preset', {})
+        }
+    elif strategy_upper == 'AISCALP':
+        legacy['AISCALP_SETTINGS'] = _convert_aiscalp_config(config)
+    elif strategy_upper == 'GRID':
+        legacy['GRID_SETTINGS'] = {
+            'enabled': True,
+            **config.get('grid_settings', {})
         }
 
     return legacy
