@@ -152,7 +152,7 @@ export function ProfileEditor({
                   <select
                     value={inputValue}
                     onChange={(e) => handleValueChange(sectionName, key, e.target.value)}
-                    className="flex-1 px-2 py-1 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-xs focus:outline-none focus:border-tg-button"
+                    className="tg-control flex-1 px-2 py-1 rounded-lg text-xs"
                   >
                     <option value="true">true</option>
                     <option value="false">false</option>
@@ -163,21 +163,21 @@ export function ProfileEditor({
                     step="any"
                     value={inputValue}
                     onChange={(e) => handleValueChange(sectionName, key, e.target.value)}
-                    className="flex-1 px-2 py-1 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-xs focus:outline-none focus:border-tg-button"
+                    className="tg-control flex-1 px-2 py-1 rounded-lg text-xs"
                   />
                 ) : valueType === 'array' || valueType === 'object' ? (
                   <input
                     type="text"
                     value={inputValue}
                     onChange={(e) => handleValueChange(sectionName, key, e.target.value)}
-                    className="flex-1 px-2 py-1 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-xs focus:outline-none focus:border-tg-button font-mono"
+                    className="tg-control flex-1 px-2 py-1 rounded-lg text-xs font-mono"
                   />
                 ) : (
                   <input
                     type="text"
                     value={inputValue}
                     onChange={(e) => handleValueChange(sectionName, key, e.target.value)}
-                    className="flex-1 px-2 py-1 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-xs focus:outline-none focus:border-tg-button"
+                    className="tg-control flex-1 px-2 py-1 rounded-lg text-xs"
                   />
                 )}
                 {!isValidKey && (
@@ -222,7 +222,7 @@ export function ProfileEditor({
             onChange={(e) =>
               setEditedProfile({ ...editedProfile, _description: e.target.value })
             }
-            className="w-full px-3 py-2 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-sm focus:outline-none focus:border-tg-button"
+            className="tg-control px-3 py-2 rounded-lg text-sm"
           />
         </div>
 
@@ -245,7 +245,7 @@ export function ProfileEditor({
           <button
             onClick={() => onSave(editedProfile)}
             disabled={isLoading}
-            className="flex-1 py-2 px-3 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+            className="flex-1 py-2 px-3 rounded-lg bg-tg-button text-tg-button-text text-sm font-medium hover:bg-blue-500 disabled:opacity-50"
           >
             {isLoading ? 'Saving...' : 'Save'}
           </button>

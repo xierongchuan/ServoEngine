@@ -21,7 +21,7 @@ export function Tabs({ options, value, onChange, className = '' }: TabsProps) {
           onClick={() => onChange(opt.value)}
           className={`flex flex-1 items-center justify-center gap-2 text-xs py-2 px-3 rounded-lg transition-all capitalize whitespace-nowrap font-medium ${
             value === opt.value 
-              ? 'bg-tg-button text-zinc-900 shadow-sm' 
+              ? 'bg-tg-button text-tg-button-text shadow-sm'
               : 'text-tg-hint hover:text-tg-text hover:bg-white/5'
           }`}
         >

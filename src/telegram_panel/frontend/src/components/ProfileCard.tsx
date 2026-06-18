@@ -74,7 +74,7 @@ export function ProfileCard({
       {/* Usage info */}
       {isUsed && (
         <div className="text-[10px] text-tg-hint mt-1">
-          Used by {usageCount} symbol{usageCount !== 1 ? 's' : ''}
+          Used by {usageCount} instance{usageCount !== 1 ? 's' : ''}
         </div>
       )}
 
@@ -139,7 +139,7 @@ export function ProfileCard({
               setShowActions(false);
               onEdit();
             }}
-            className="flex-1 py-1.5 px-3 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700"
+            className="flex-1 py-1.5 px-3 rounded-lg bg-tg-button text-tg-button-text text-xs font-medium hover:bg-blue-500"
           >
             Edit
           </button>

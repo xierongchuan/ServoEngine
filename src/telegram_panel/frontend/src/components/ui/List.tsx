@@ -51,7 +51,7 @@ export function ListInputRow({
             onChange(isNaN(val as number) && type === 'number' ? 0 : val);
           }}
           step={step}
-          className="w-24 bg-tg-bg text-tg-text text-right text-sm rounded-lg px-2 py-1 border border-white/10 outline-none focus:border-tg-button focus:ring-1 focus:ring-tg-button"
+          className="tg-control w-24 text-right text-sm rounded-lg px-2 py-1"
           placeholder={placeholder}
         />
       ) : (

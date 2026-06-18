@@ -1,8 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   getConfigSystemInfo,
-  getActiveConfig,
-  updateActiveConfig,
   getTradingConfig,
   updateTradingConfig,
   getStrategies,
@@ -11,18 +9,14 @@ import {
   setSymbolProfile,
   getBaseConfig,
   updateBaseConfig,
-  addSymbol,
-  removeSymbol,
   createStrategyInstance,
   updateStrategyInstance,
   deleteStrategyInstance,
   deleteProfile,
   cloneProfile,
   getProfileUsage,
-  autoCreateProfile,
   updateProfile,
   type ConfigSystemInfo,
-  type ActiveConfig,
   type TradingConfig,
   type BaseConfig,
   type StrategiesResponse,
@@ -35,26 +29,21 @@ import { ProfileEditor } from '../components/ProfileEditor';
 import { Spinner } from '../components/Spinner';
 import { Button } from '../components/ui/Button';
 import { Card as Section } from '../components/ui/Card';
-import { ListRow as InfoRow, ListInputRow as SettingRow, ListToggleRow as ToggleRow } from '../components/ui/List';
+import { ListInputRow as SettingRow, ListToggleRow as ToggleRow } from '../components/ui/List';
 import { Tabs } from '../components/ui/Tabs';
 
-type Tab = 'strategy' | 'trading' | 'infrastructure' | 'profiles' | 'symbols';
+type Tab = 'runtime' | 'trading' | 'profiles' | 'infrastructure';
 
 type Message = { type: 'success' | 'error' | 'warning'; text: string } | null;
 
-const sortedUnique = (arr: string[]) => [...new Set(arr)].sort();
-
 export function Settings() {
-  const [tab, setTab] = useState<Tab>('strategy');
+  const [tab, setTab] = useState<Tab>('runtime');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<Message>(null);
 
   // Config system info
   const [systemInfo, setSystemInfo] = useState<ConfigSystemInfo | null>(null);
-
-  // Active config
-  const [activeConfig, setActiveConfig] = useState<ActiveConfig | null>(null);
 
   // Trading config
   const [tradingConfig, setTradingConfig] = useState<TradingConfig | null>(null);
@@ -74,23 +63,15 @@ export function Settings() {
   const fetchAll = useCallback(async () => {
     try {
       setError(null);
-      const [sysInfo, active, trading, strats, profs, symProfs, base] = await Promise.all([
+      const [sysInfo, trading, strats, profs, symProfs, base] = await Promise.all([
         getConfigSystemInfo(),
-        getActiveConfig(),
         getTradingConfig(),
         getStrategies(),
         getProfiles(),
         getSymbolProfiles(),
         getBaseConfig(),
       ]);
-      // Debug logging for strategy loading issues
-      console.log('[Settings] Config system info:', sysInfo);
-      console.log('[Settings] Strategies response:', strats);
-      console.log('[Settings] Available strategies:', strats?.available);
-      console.log('[Settings] Active strategy:', active?.strategy);
-
       setSystemInfo(sysInfo);
-      setActiveConfig(active);
       setTradingConfig(trading);
       setStrategies(strats);
       setProfiles(profs);
@@ -145,8 +126,6 @@ export function Settings() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <span className="text-lg font-semibold text-tg-text">Settings</span>
-        <div className="flex items-center gap-2">
-        </div>
       </div>
 
       {/* Message */}
@@ -165,33 +144,14 @@ export function Settings() {
         value={tab}
         onChange={(v) => setTab(v as Tab)}
         options={[
-          { value: 'strategy', label: 'Strategy' },
+          { value: 'runtime', label: 'Runtime' },
           { value: 'trading', label: 'Position & Risk' },
-          { value: 'infrastructure', label: 'AI Settings' },
           { value: 'profiles', label: 'Profiles' },
-          { value: 'symbols', label: 'Symbols' },
+          { value: 'infrastructure', label: 'AI Settings' },
         ]}
       />
 
       {/* Content */}
-      {tab === 'strategy' && activeConfig && strategies && (
-        <StrategyTab
-          activeConfig={activeConfig}
-          strategies={strategies}
-          onUpdate={async (data) => {
-            try {
-              await updateActiveConfig(data);
-              setActiveConfig({ ...activeConfig, ...data });
-              showMessage({ type: 'success', text: 'Strategy updated' });
-              hapticFeedback('success');
-            } catch (err) {
-              showMessage({ type: 'error', text: 'Failed to update strategy' });
-              hapticFeedback('error');
-            }
-          }}
-        />
-      )}
-
       {tab === 'trading' && tradingConfig && (
         <TradingTab
           config={tradingConfig}
@@ -212,7 +172,6 @@ export function Settings() {
       {tab === 'infrastructure' && baseConfig && strategies && (
         <InfrastructureTab
           config={baseConfig}
-          strategies={strategies}
           onUpdate={async (data) => {
             try {
               const result = await updateBaseConfig(data);
@@ -231,270 +190,21 @@ export function Settings() {
         <ProfilesTab profiles={profiles} onRefresh={fetchAll} />
       )}
 
-      {tab === 'symbols' && symbolProfiles && profiles && (
-        <SymbolsTab
+      {tab === 'runtime' && symbolProfiles && profiles && strategies && (
+        <RuntimeTab
           symbolProfiles={symbolProfiles}
           availableProfiles={profiles.available}
           strategies={strategies}
           onRefresh={fetchAll}
-          onProfileUpdate={async (symbol, profile) => {
-            try {
-              await setSymbolProfile(symbol, profile);
-              setSymbolProfiles({
-                ...symbolProfiles,
-                symbol_profiles: { ...symbolProfiles.symbol_profiles, [symbol]: profile },
-              });
-              showMessage({ type: 'success', text: `${symbol} profile set to ${profile}` });
-              hapticFeedback('success');
-            } catch (err) {
-              showMessage({ type: 'error', text: 'Failed to update profile' });
-              hapticFeedback('error');
-            }
+          onSuccess={(text) => {
+            showMessage({ type: 'success', text });
+            hapticFeedback('success');
           }}
-          onAddSymbol={async (symbol) => {
-            try {
-              await addSymbol(symbol);
-              setSymbolProfiles({
-                ...symbolProfiles,
-                symbols: sortedUnique([...symbolProfiles.symbols, (symbol as string).toUpperCase()]),
-              });
-              showMessage({ type: 'success', text: `Symbol ${symbol} added` });
-              hapticFeedback('success');
-            } catch (err) {
-              showMessage({ type: 'error', text: 'Failed to add symbol' });
-              hapticFeedback('error');
-            }
-          }}
-          onRemoveSymbol={async (symbol) => {
-            if (!confirm(`Remove ${symbol}?`)) return;
-            try {
-              await removeSymbol(symbol);
-              setSymbolProfiles({
-                ...symbolProfiles,
-                symbols: symbolProfiles.symbols.filter(s => s !== symbol),
-              });
-              showMessage({ type: 'success', text: `Symbol ${symbol} removed` });
-              hapticFeedback('success');
-            } catch (err) {
-              showMessage({ type: 'error', text: 'Failed to remove symbol' });
-              hapticFeedback('error');
-            }
+          onError={(text) => {
+            showMessage({ type: 'error', text });
+            hapticFeedback('error');
           }}
         />
-      )}
-    </div>
-  );
-}
-
-// ============================================================================
-// Strategy Tab
-// ============================================================================
-
-function StrategyTab({
-  activeConfig,
-  strategies,
-  onUpdate,
-}: {
-  activeConfig: ActiveConfig;
-  strategies: StrategiesResponse;
-  onUpdate: (data: Partial<ActiveConfig>) => Promise<void>;
-}) {
-  const [selectedStrategy, setSelectedStrategy] = useState(activeConfig.strategy);
-  const [saving, setSaving] = useState(false);
-  const [createProfileModal, setCreateProfileModal] = useState<{ open: boolean; strategy: string }>({ open: false, strategy: '' });
-  const [profileName, setProfileName] = useState('');
-  const [creatingProfile, setCreatingProfile] = useState(false);
-  const [createProfileError, setCreateProfileError] = useState<string | null>(null);
-
-  const currentStrategy = strategies.strategies[selectedStrategy];
-  const hasStrategyInstances = (activeConfig.strategy_instances?.length || 0) > 0;
-  const activeStrategies = sortedUnique((activeConfig.strategy_instances || [])
-    .filter((instance) => instance.enabled)
-    .map((instance) => instance.strategy));
-
-  const handleSave = async () => {
-    if (hasStrategyInstances) return;
-    if (selectedStrategy === activeConfig.strategy) return;
-    setSaving(true);
-    try {
-      await onUpdate({ strategy: selectedStrategy });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleCreateProfile = async () => {
-    if (!profileName.trim()) return;
-    setCreatingProfile(true);
-    setCreateProfileError(null);
-    try {
-      const strategySettings = strategies.strategies[createProfileModal.strategy];
-      await autoCreateProfile({
-        name: profileName.trim(),
-        strategy: createProfileModal.strategy,
-        settings: {
-          preset: strategySettings?.preset || {},
-        },
-        switch_from_default: true,
-      });
-      setCreateProfileModal({ open: false, strategy: '' });
-      setProfileName('');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to create profile';
-      setCreateProfileError(message);
-      console.error('Failed to create profile:', err);
-    } finally {
-      setCreatingProfile(false);
-    }
-  };
-
-  return (
-    <div className="flex flex-col gap-4">
-      {/* Trading Style Selector */}
-      <Section title="Trading Style" badge={hasStrategyInstances ? 'instances' : 'hot-reload'}>
-        {hasStrategyInstances && (
-          <div className="text-xs text-tg-hint px-3 py-2 mb-3 rounded-lg bg-tg-bg border border-white/10">
-            Active runtime uses {activeConfig.strategy_instances?.length || 0} strategy instances:
-            {' '}
-            <span className="text-tg-text">{activeStrategies.join(', ') || 'none'}</span>.
-            Edit per-symbol strategy and profile in the Symbols tab.
-          </div>
-        )}
-        {strategies.available.length === 0 ? (
-          <div className="text-sm text-amber-400 p-3 bg-amber-500/10 rounded-lg">
-            No strategies found. Check if config/ directory is mounted correctly.
-            <br />
-            <span className="text-xs text-tg-hint">
-              Expected: SCALP, AISCALP, SWING, GRID, HYBRID, MACDX
-            </span>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3">
-            {/* Dropdown Selector (Alternative) */}
-            {/* <div className="flex flex-col gap-1.5">
-              <span className="text-[10px] text-tg-hint uppercase ml-1">Select Style</span>
-              <select
-                value={selectedStrategy}
-                onChange={(e) => setSelectedStrategy(e.target.value)}
-                className="w-full bg-tg-bg text-tg-text text-sm rounded-xl px-4 py-3 border border-white/10 outline-none focus:border-tg-button transition-colors appearance-none"
-                style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' viewBox=\'0 0 24 24\' stroke=\'%23777\'%3E%3Cpath stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M19 9l-7 7-7-7\'/%3E%3C/svg%3E")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right 12px center', backgroundSize: '16px' }}
-              >
-                {strategies.available.map((name) => (
-                  <option key={name} value={name}>
-                    {name} {name === activeConfig.strategy ? '(Active)' : ''}
-                  </option>
-                ))}
-              </select>
-            </div> */}
-
-            <div className="grid grid-cols-2 gap-2">
-              {strategies.available.map((name) => {
-                const strat = strategies.strategies[name];
-                const isActive = name === selectedStrategy;
-                return (
-                  <button
-                    key={name}
-                    onClick={() => setSelectedStrategy(name)}
-                    className={`flex flex-col items-start p-3 rounded-xl border transition-all ${
-                      isActive
-                        ? 'border-tg-button bg-tg-button/10'
-                        : 'border-white/10 bg-tg-bg hover:border-white/20'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className={`text-sm font-medium ${isActive ? 'text-tg-button' : 'text-tg-text'}`}>
-                        {name}
-                      </span>
-                      {strat?.has_ai && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">AI</span>
-                      )}
-                    </div>
-                    <span className="text-[10px] text-tg-hint mt-1 text-left line-clamp-2">
-                      {strat?.description || 'No description'}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </Section>
-
-      {/* Strategy Details */}
-      {currentStrategy && (
-        <Section title="Strategy Settings">
-          <div className="flex flex-col gap-2">
-            <InfoRow label="Timeframe" value={currentStrategy.preset.timeframe || 'N/A'} />
-            <InfoRow label="Leverage" value={`${currentStrategy.preset.leverage || 'N/A'}x`} />
-            <InfoRow label="Loop Interval" value={`${currentStrategy.preset.loop_interval || 'N/A'}s`} />
-            <InfoRow label="SL %" value={String(currentStrategy.preset.sl_percent || 'N/A')} />
-            <InfoRow label="TP %" value={String(currentStrategy.preset.tp_percent || 'N/A')} />
-          </div>
-        </Section>
-      )}
-
-      {/* Save Button */}
-      {!hasStrategyInstances && selectedStrategy !== activeConfig.strategy && (
-        <Button
-          fullWidth
-          onClick={handleSave}
-          disabled={saving}
-          isLoading={saving}
-        >
-          {saving ? 'Saving...' : `Switch to ${selectedStrategy}`}
-        </Button>
-      )}
-
-      {/* Create Profile Button */}
-      <Button
-        fullWidth
-        variant="outline"
-        onClick={() => setCreateProfileModal({ open: true, strategy: selectedStrategy })}
-      >
-        + Create Profile from {selectedStrategy}
-      </Button>
-
-      {/* Create Profile Modal */}
-      {createProfileModal.open && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-tg-section-bg rounded-xl p-4 w-[280px] shadow-xl">
-            <h3 className="text-sm font-medium text-tg-text mb-3">Create Profile</h3>
-            <p className="text-xs text-tg-hint mb-3">
-              Create a profile based on {createProfileModal.strategy} strategy.
-              <br />
-              <span className="text-amber-400">Symbols using "default" will be switched to this new profile.</span>
-            </p>
-            <input
-              type="text"
-              value={profileName}
-              onChange={(e) => setProfileName(e.target.value)}
-              placeholder="Enter profile name (optional)"
-              className="w-full px-3 py-2 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-sm mb-2 focus:outline-none focus:border-tg-button"
-              autoFocus
-              onKeyDown={(e) => e.key === 'Enter' && handleCreateProfile()}
-            />
-            {createProfileError && (
-              <p className="text-xs text-red-400 mb-3">{createProfileError}</p>
-            )}
-            <div className="flex gap-2 pt-2">
-              <Button
-                fullWidth
-                variant="ghost"
-                onClick={() => setCreateProfileModal({ open: false, strategy: '' })}
-              >
-                Cancel
-              </Button>
-              <Button
-                fullWidth
-                onClick={handleCreateProfile}
-                disabled={creatingProfile}
-                isLoading={creatingProfile}
-              >
-                Create
-              </Button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );
@@ -663,21 +373,14 @@ function TradingTab({
 
 function InfrastructureTab({
   config,
-  strategies,
   onUpdate,
 }: {
   config: BaseConfig;
-  strategies?: StrategiesResponse;
   onUpdate: (data: Partial<BaseConfig>) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [localConfig, setLocalConfig] = useState(config);
   const [saving, setSaving] = useState(false);
-  const [createProfileModal, setCreateProfileModal] = useState(false);
-  const [profileName, setProfileName] = useState('');
-  const [selectedStrategy, setSelectedStrategy] = useState<string>('');
-  const [creatingProfile, setCreatingProfile] = useState(false);
-  const [createProfileError, setCreateProfileError] = useState<string | null>(null);
 
   const handleSave = async () => {
     setSaving(true);
@@ -687,38 +390,6 @@ function InfrastructureTab({
     } finally {
       setSaving(false);
     }
-  };
-
-  const handleCreateProfile = async () => {
-    if (!profileName.trim()) return;
-    setCreatingProfile(true);
-    setCreateProfileError(null);
-    try {
-      const strategySettings = strategies?.strategies[selectedStrategy];
-      await autoCreateProfile({
-        name: profileName.trim(),
-        strategy: selectedStrategy,
-        settings: {
-          preset: strategySettings?.preset || {},
-        },
-        switch_from_default: true,
-      });
-      setCreateProfileModal(false);
-      setProfileName('');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to create profile';
-      setCreateProfileError(message);
-      console.error('Failed to create profile:', err);
-    } finally {
-      setCreatingProfile(false);
-    }
-  };
-
-  const openCreateProfileModal = () => {
-    setSelectedStrategy(strategies?.available[0] || '');
-    setProfileName('');
-    setCreateProfileError(null);
-    setCreateProfileModal(true);
   };
 
   const updateAI = (key: string, value: any) => {
@@ -751,7 +422,7 @@ function InfrastructureTab({
               <select
                 value={localConfig.ai?.provider || 'openai'}
                 onChange={(e) => updateAI('provider', e.target.value)}
-                className="bg-tg-bg text-tg-text text-sm rounded px-2 py-1 border border-white/10"
+                className="tg-control max-w-40 text-sm rounded-lg px-2 py-1.5"
               >
                 <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic</option>
@@ -771,7 +442,7 @@ function InfrastructureTab({
                 type="text"
                 value={localConfig.ai?.model || ''}
                 onChange={(e) => updateAI('model', e.target.value)}
-                className="bg-tg-bg text-tg-text text-sm rounded px-3 py-1.5 border border-white/10 w-full"
+                className="tg-control text-sm rounded-lg px-3 py-1.5"
                 placeholder="e.g. gpt-4o"
               />
             ) : (
@@ -817,7 +488,7 @@ function InfrastructureTab({
                   const reasoning = { ...(localConfig.ai?.reasoning || { enabled: true, exclude: false }), effort: e.target.value };
                   updateAI('reasoning', reasoning);
                 }}
-                className="bg-tg-bg text-tg-text text-sm rounded px-2 py-1 border border-white/10"
+                className="tg-control max-w-36 text-sm rounded-lg px-2 py-1.5"
               >
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -841,77 +512,6 @@ function InfrastructureTab({
         </Button>
       )}
 
-      {/* Create Profile Button */}
-      <Button
-        fullWidth
-        variant="outline"
-        onClick={openCreateProfileModal}
-      >
-        + Create Profile
-      </Button>
-
-      {/* Create Profile Modal */}
-      {createProfileModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-tg-section-bg rounded-xl p-4 w-[280px] shadow-xl">
-            <h3 className="text-sm font-medium text-tg-text mb-3">Create Profile</h3>
-            <p className="text-xs text-tg-hint mb-3">
-              Create a new profile for symbol configuration.
-              <br />
-              <span className="text-amber-400">Symbols using "default" will be switched to this new profile.</span>
-            </p>
-
-            {/* Strategy Selector */}
-            {strategies && (
-              <div className="mb-3">
-                <label className="text-xs text-tg-hint mb-1 block">Strategy</label>
-                <select
-                  value={selectedStrategy}
-                  onChange={(e) => setSelectedStrategy(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-sm focus:outline-none focus:border-tg-button"
-                >
-                  {strategies.available.map((name) => (
-                    <option key={name} value={name}>{name}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <input
-              type="text"
-              value={profileName}
-              onChange={(e) => setProfileName(e.target.value)}
-              placeholder="Enter profile name (optional)"
-              className="w-full px-3 py-2 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-sm mb-2 focus:outline-none focus:border-tg-button"
-              autoFocus
-              onKeyDown={(e) => e.key === 'Enter' && handleCreateProfile()}
-            />
-            {createProfileError && (
-              <p className="text-xs text-red-400 mb-3">{createProfileError}</p>
-            )}
-            <div className="flex gap-2 pt-2">
-              <Button
-                fullWidth
-                variant="ghost"
-                onClick={() => {
-                  setCreateProfileModal(false);
-                  setCreateProfileError(null);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                fullWidth
-                onClick={handleCreateProfile}
-                disabled={creatingProfile}
-                isLoading={creatingProfile}
-              >
-                Create
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -984,7 +584,7 @@ function ProfilesTab({
   const handleDelete = async (name: string) => {
     const usage = profileUsages[name];
     if (usage?.isUsed) {
-      alert('Cannot delete: profile is in use by symbols');
+      alert('Cannot delete: profile is in use by strategy instances');
       return;
     }
 
@@ -1055,7 +655,7 @@ function ProfilesTab({
 
       {/* Info */}
       <div className="text-xs text-tg-hint px-3 py-2 rounded-lg bg-tg-section-bg">
-        Profiles allow per-symbol configuration overrides. Assign profiles to symbols in the Symbols tab.
+        Profiles allow per-instance configuration overrides. Assign profiles to strategy instances in Runtime.
       </div>
 
       {/* Clone Profile Modal */}
@@ -1071,7 +671,7 @@ function ProfilesTab({
               value={cloneName}
               onChange={(e) => setCloneName(e.target.value)}
               placeholder="Enter new profile name"
-              className="w-full px-3 py-2 rounded-lg bg-tg-bg border border-white/10 text-tg-text text-sm mb-3 focus:outline-none focus:border-tg-button"
+              className="tg-control px-3 py-2 rounded-lg text-sm mb-3"
               autoFocus
               onKeyDown={(e) => e.key === 'Enter' && handleCloneSubmit()}
             />
@@ -1129,25 +729,23 @@ function ProfilesTab({
 }
 
 // ============================================================================
-// Symbols Tab
+// Runtime Tab
 // ============================================================================
 
-function SymbolsTab({
+function RuntimeTab({
   symbolProfiles,
   availableProfiles,
   strategies,
   onRefresh,
-  onProfileUpdate,
-  onAddSymbol,
-  onRemoveSymbol,
+  onSuccess,
+  onError,
 }: {
   symbolProfiles: SymbolProfilesResponse;
   availableProfiles: string[];
   strategies: StrategiesResponse | null;
   onRefresh: () => void;
-  onProfileUpdate: (symbol: string, profile: string) => Promise<void>;
-  onAddSymbol: (symbol: string) => Promise<void>;
-  onRemoveSymbol: (symbol: string) => Promise<void>;
+  onSuccess: (text: string) => void;
+  onError: (text: string) => void;
 }) {
   const [savingSymbol, setSavingSymbol] = useState<string | null>(null);
   const [newSymbol, setNewSymbol] = useState('');
@@ -1162,9 +760,10 @@ function SymbolsTab({
       if (instanceId) {
         await setSymbolProfile(symbol, profile, instanceId);
         onRefresh();
-      } else {
-        await onProfileUpdate(symbol, profile);
+        onSuccess(`${instanceId} profile set to ${profile}`);
       }
+    } catch {
+      onError('Failed to update profile');
     } finally {
       setSavingSymbol(null);
     }
@@ -1172,20 +771,20 @@ function SymbolsTab({
 
   const handleAddInstance = async () => {
     if (!newSymbol.trim()) return;
+    const selectedStrategy = newStrategy || strategies?.available[0] || 'HYBRID';
     setAdding(true);
     try {
-      if (strategies?.available?.length) {
-        await createStrategyInstance({
-          symbol: newSymbol.trim().toUpperCase(),
-          strategy: newStrategy,
-          profile: newProfile,
-          enabled: true,
-        });
-        onRefresh();
-      } else {
-        await onAddSymbol(newSymbol.trim());
-      }
+      await createStrategyInstance({
+        symbol: newSymbol.trim().toUpperCase(),
+        strategy: selectedStrategy,
+        profile: newProfile,
+        enabled: true,
+      });
+      onRefresh();
+      onSuccess(`${newSymbol.trim().toUpperCase()} ${selectedStrategy} instance added`);
       setNewSymbol('');
+    } catch {
+      onError('Failed to add strategy instance');
     } finally {
       setAdding(false);
     }
@@ -1196,6 +795,9 @@ function SymbolsTab({
     try {
       await updateStrategyInstance(instance.id, data);
       onRefresh();
+      onSuccess(`${instance.id} updated`);
+    } catch {
+      onError('Failed to update strategy instance');
     } finally {
       setSavingSymbol(null);
     }
@@ -1207,6 +809,9 @@ function SymbolsTab({
     try {
       await deleteStrategyInstance(instance.id);
       onRefresh();
+      onSuccess(`${instance.id} removed`);
+    } catch {
+      onError('Failed to remove strategy instance');
     } finally {
       setSavingSymbol(null);
     }
@@ -1214,44 +819,62 @@ function SymbolsTab({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Add Strategy Instance */}
-      <div className="grid grid-cols-2 gap-2">
-        <input
-          type="text"
-          value={newSymbol}
-          onChange={(e) => setNewSymbol(e.target.value)}
-          placeholder="BTCUSDT"
-          className="tg-control text-sm rounded-xl px-4 py-3"
-        />
-        <select
-          value={newStrategy}
-          onChange={(e) => setNewStrategy(e.target.value)}
-          className="tg-control text-sm rounded-xl px-3 py-3"
-        >
-          {(strategies?.available || ['HYBRID']).map((strategy) => (
-            <option key={strategy} value={strategy}>{strategy}</option>
-          ))}
-        </select>
-        <select
-          value={newProfile}
-          onChange={(e) => setNewProfile(e.target.value)}
-          className="tg-control text-sm rounded-xl px-3 py-3"
-        >
-          {availableProfiles.map((profile) => (
-            <option key={profile} value={profile}>{profile}</option>
-          ))}
-        </select>
-        <Button
-          variant="secondary"
-          onClick={handleAddInstance}
-          disabled={adding || !newSymbol.trim()}
-        >
-          Add Instance
-        </Button>
-      </div>
+      <Section title="Runtime Overview">
+        <div className="grid grid-cols-3 gap-2">
+          <div className="rounded-xl bg-tg-bg p-3 border border-white/10">
+            <div className="text-[10px] uppercase text-tg-hint">Instances</div>
+            <div className="text-lg font-semibold text-tg-text">{instances.length}</div>
+          </div>
+          <div className="rounded-xl bg-tg-bg p-3 border border-white/10">
+            <div className="text-[10px] uppercase text-tg-hint">Symbols</div>
+            <div className="text-lg font-semibold text-tg-text">{symbolProfiles.symbols.length}</div>
+          </div>
+          <div className="rounded-xl bg-tg-bg p-3 border border-white/10">
+            <div className="text-[10px] uppercase text-tg-hint">Disabled</div>
+            <div className="text-lg font-semibold text-tg-text">{symbolProfiles.disabled_symbols.length}</div>
+          </div>
+        </div>
+      </Section>
+
+      <Section title="Add Instance" badge="restart">
+        <div className="grid grid-cols-2 gap-2">
+          <input
+            type="text"
+            value={newSymbol}
+            onChange={(e) => setNewSymbol(e.target.value)}
+            placeholder="BTCUSDT"
+            className="tg-control text-sm rounded-xl px-4 py-3"
+          />
+          <select
+            value={newStrategy}
+            onChange={(e) => setNewStrategy(e.target.value)}
+            className="tg-control text-sm rounded-xl px-3 py-3"
+          >
+            {(strategies?.available || ['HYBRID']).map((strategy) => (
+              <option key={strategy} value={strategy}>{strategy}</option>
+            ))}
+          </select>
+          <select
+            value={newProfile}
+            onChange={(e) => setNewProfile(e.target.value)}
+            className="tg-control text-sm rounded-xl px-3 py-3"
+          >
+            {availableProfiles.map((profile) => (
+              <option key={profile} value={profile}>{profile}</option>
+            ))}
+          </select>
+          <Button
+            variant="secondary"
+            onClick={handleAddInstance}
+            disabled={adding || !newSymbol.trim()}
+          >
+            Add
+          </Button>
+        </div>
+      </Section>
 
       {instances.length > 0 && (
-        <Section title="Strategy Instances" badge="restart">
+        <Section title="Instances" badge="restart">
           <div className="flex flex-col gap-3">
             {instances.map((instance) => {
               const isSaving = savingSymbol === instance.id;
@@ -1324,59 +947,11 @@ function SymbolsTab({
         </Section>
       )}
 
-      <Section title={instances.length > 0 ? 'Legacy Symbols View' : 'Active Symbols'} badge="hot-reload">
-        <div className="flex flex-col gap-3">
-          {symbolProfiles.symbols.length === 0 ? (
-            <div className="text-center py-4 text-tg-hint text-sm">No active symbols</div>
-          ) : (
-            symbolProfiles.symbols.map((symbol) => {
-              const currentProfile = symbolProfiles.symbol_profiles[symbol] || 'default';
-              const isDisabled = symbolProfiles.disabled_symbols.includes(symbol);
-              const isSaving = savingSymbol === symbol;
-
-              return (
-                <div
-                  key={symbol}
-                  className={`flex items-center justify-between p-3 rounded-xl border ${
-                    isDisabled ? 'border-red-500/30 bg-red-500/5' : 'border-white/10 bg-tg-bg'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => onRemoveSymbol(symbol)}
-                      className="text-red-400 p-1 hover:bg-red-500/10 rounded-lg transition-colors"
-                      title="Remove from config"
-                    >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6"/></svg>
-                    </button>
-                    <div className="flex flex-col">
-                      <span className={`text-sm font-medium ${isDisabled ? 'text-red-400' : 'text-tg-text'}`}>
-                        {symbol}
-                      </span>
-                      {isDisabled && (
-                        <span className="text-[10px] text-red-400">disabled</span>
-                      )}
-                    </div>
-                  </div>
-
-                  <select
-                    value={currentProfile}
-                    onChange={(e) => handleProfileChange(symbol, e.target.value)}
-                    disabled={isSaving}
-                    className="tg-control max-w-40 text-xs rounded-lg px-2 py-1.5"
-                  >
-                    {availableProfiles.map((profile) => (
-                      <option key={profile} value={profile}>
-                        {profile}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              );
-            })
-          )}
+      {instances.length === 0 && (
+        <div className="text-center text-sm text-tg-hint px-4 py-6 rounded-xl bg-tg-section-bg border border-white/10">
+          No strategy instances configured. Add a symbol, choose a strategy and profile, then start the bot runtime.
         </div>
-      </Section>
+      )}
 
       {/* Disabled symbols info */}
       {symbolProfiles.disabled_symbols.length > 0 && (

@@ -20,7 +20,7 @@ export function Button({
   const baseStyles = 'inline-flex items-center justify-center font-medium transition-colors rounded-xl outline-none disabled:opacity-50 disabled:cursor-not-allowed';
   
   const variants = {
-    primary: 'bg-tg-button text-zinc-900 hover:bg-white/90',
+    primary: 'bg-tg-button text-tg-button-text hover:bg-blue-500',
     secondary: 'bg-tg-section-bg text-tg-text hover:bg-white/10',
     danger: 'bg-red-500/10 text-red-500 hover:bg-red-500/20',
     outline: 'border border-white/10 text-tg-text hover:border-white/20 hover:bg-white/5',
