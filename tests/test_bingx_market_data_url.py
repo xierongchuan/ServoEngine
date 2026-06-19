@@ -1,4 +1,5 @@
 from src.exchanges.config.bingx_config import BingXConfig
+from src.exchanges.dto.models import OrderSide, OrderType, PositionSide
 from src.exchanges.impl.bingx_client import BingXClient
 
 
@@ -85,6 +86,33 @@ def test_config_intervals_expose_public_compact_values_only():
     assert "1h" in intervals
     assert "MINUTE_5" not in intervals
     assert "HOUR_1" not in intervals
+
+
+def test_place_order_uses_explicit_runtime_leverage(monkeypatch):
+    client = BingXClient(BingXConfig(is_demo=True))
+    leverage_calls = []
+
+    def fake_set_leverage(symbol, leverage, position_side):
+        leverage_calls.append((symbol, leverage, position_side))
+        return True
+
+    monkeypatch.setattr(client, "set_leverage", fake_set_leverage)
+    monkeypatch.setattr(
+        client,
+        "_make_request",
+        lambda method, endpoint, params: {"code": 0, "data": {"orderId": "order-1"}},
+    )
+
+    order_id = client.place_order(
+        symbol="BTCUSDT",
+        side=OrderSide.BUY,
+        quantity=0.01,
+        order_type=OrderType.MARKET,
+        leverage=5,
+    )
+
+    assert order_id == "order-1"
+    assert leverage_calls == [("BTCUSDT", 5, PositionSide.LONG)]
 
 
 def test_market_data_logs_bingx_api_error(monkeypatch, caplog):

@@ -47,6 +47,9 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
     client = get_exchange_client()
 
     try:
+        from src import config as runtime_config
+
+        leverage = runtime_config.LEVERAGE
         price = float(price)
 
         # Calculate absolute TP/SL prices
@@ -150,10 +153,10 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
 
         # Reserve fee from margin before sizing (round-trip: entry + exit)
         from src.config import TRADING_FEE_TAKER
-        estimated_round_trip_fee = trade_amount * LEVERAGE * (TRADING_FEE_TAKER / 100.0) * 2.0
+        estimated_round_trip_fee = trade_amount * leverage * (TRADING_FEE_TAKER / 100.0) * 2.0
         fee_adjusted_amount = trade_amount - estimated_round_trip_fee
         if fee_adjusted_amount >= MIN_TRADE_AMOUNT_USDT:
-            info(f"💰 Fee reserve: ${estimated_round_trip_fee:.2f} (taker={TRADING_FEE_TAKER}% × 2 × {LEVERAGE}x) | ${trade_amount:.2f} → ${fee_adjusted_amount:.2f}")
+            info(f"💰 Fee reserve: ${estimated_round_trip_fee:.2f} (taker={TRADING_FEE_TAKER}% × 2 × {leverage}x) | ${trade_amount:.2f} → ${fee_adjusted_amount:.2f}")
             trade_amount = fee_adjusted_amount
         else:
             info(f"💰 Fee reserve skipped (would reduce below min): ${estimated_round_trip_fee:.2f}")
@@ -170,7 +173,7 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
              trade_amount = total_balance * _safety
 
         # Apply leverage: trade_amount is MARGIN, quantity is the leveraged position
-        notional_value = trade_amount * LEVERAGE
+        notional_value = trade_amount * leverage
         quantity = notional_value / price
 
         # Round quantity to appropriate precision (e.g., 4 decimals for crypto)
@@ -181,7 +184,7 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         # Enhanced position size logging with leverage info
         info("🧮 Position Size:")
         info(f"   Balance: ${total_balance:.2f} | Margin: {effective_size_pct:.1f}% = ${trade_amount:.2f}")
-        info(f"   Leverage: {LEVERAGE}x | Notional: ${notional_value:.2f}")
+        info(f"   Leverage: {leverage}x | Notional: ${notional_value:.2f}")
         info(f"   Quantity: {quantity} {symbol.replace('USDT', '')}")
 
         # Convert order_type string to OrderType enum
@@ -196,7 +199,8 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
             quantity=quantity,
             order_type=order_type_enum,
             sl=None,
-            tp=None
+            tp=None,
+            leverage=leverage,
         )
 
         if order_id:

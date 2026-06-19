@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { getActiveTrades, getTradeHistory, getTradeStats, getDisabledSymbols, syncPositions } from '../api/client';
+import { getActiveTrades, getTradeHistory, getTradeStats, syncPositions } from '../api/client';
 import type { Trade, TradeStats } from '../api/types';
 import { TradeCard } from '../components/TradeCard';
 import { StatsCard } from '../components/StatsCard';
@@ -17,7 +17,6 @@ export function Trades({ subscribe }: { subscribe: (type: string, cb: (data: Rec
   const [stats, setStats] = useState<TradeStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [historyTotal, setHistoryTotal] = useState(0);
-  const [disabledSymbols, setDisabledSymbols] = useState<string[]>([]);
   const [syncing, setSyncing] = useState(false);
 
   const fetchActive = useCallback(async () => {
@@ -43,17 +42,9 @@ export function Trades({ subscribe }: { subscribe: (type: string, cb: (data: Rec
     } catch {}
   }, []);
 
-  const fetchDisabled = useCallback(async () => {
-    try {
-      const data = await getDisabledSymbols();
-      setDisabledSymbols(data.disabled_symbols || []);
-    } catch {}
-  }, []);
-
   const handleUpdate = useCallback(() => {
     fetchActive();
-    fetchDisabled();
-  }, [fetchActive, fetchDisabled]);
+  }, [fetchActive]);
 
   const handleSync = useCallback(async () => {
     if (syncing) return;
@@ -69,8 +60,8 @@ export function Trades({ subscribe }: { subscribe: (type: string, cb: (data: Rec
   }, [syncing, fetchActive, fetchHistory, fetchStats]);
 
   useEffect(() => {
-    Promise.all([fetchActive(), fetchHistory(), fetchStats(), fetchDisabled()]).finally(() => setLoading(false));
-  }, [fetchActive, fetchHistory, fetchStats, fetchDisabled]);
+    Promise.all([fetchActive(), fetchHistory(), fetchStats()]).finally(() => setLoading(false));
+  }, [fetchActive, fetchHistory, fetchStats]);
 
   useEffect(() => {
     const unsub1 = subscribe('trade_update', () => fetchActive());
@@ -79,9 +70,8 @@ export function Trades({ subscribe }: { subscribe: (type: string, cb: (data: Rec
       fetchHistory();
       fetchStats();
     });
-    const unsub3 = subscribe('config_changed', () => fetchDisabled());
-    return () => { unsub1(); unsub2(); unsub3(); };
-  }, [subscribe, fetchActive, fetchHistory, fetchStats, fetchDisabled]);
+    return () => { unsub1(); unsub2(); };
+  }, [subscribe, fetchActive, fetchHistory, fetchStats]);
 
   if (loading) {
     return (
@@ -135,7 +125,6 @@ export function Trades({ subscribe }: { subscribe: (type: string, cb: (data: Rec
               <TradeCard
                 key={t.symbol}
                 trade={t}
-                disabledSymbols={disabledSymbols}
                 onUpdate={handleUpdate}
               />
             ))

@@ -457,7 +457,7 @@ class BingXClient(ExchangeClient):
             error(f"❌ Error setting leverage: {e}")
             return False
 
-    def place_order(self, symbol, side, price, quantity, type="MARKET", sl=None, tp=None, positionSide=None):
+    def place_order(self, symbol, side, price, quantity, type="MARKET", sl=None, tp=None, positionSide=None, leverage=None):
         """Размещает ордер"""
         from src.config import LEVERAGE
 
@@ -472,8 +472,9 @@ class BingXClient(ExchangeClient):
         # For One-Way mode, we might need to set for "LONG" (Buy) or "SHORT" (Sell)
         # or just "LONG" if it applies to both in some modes.
         # Safe bet: set for the direction we are trading.
+        order_leverage = int(leverage) if leverage is not None else LEVERAGE
         leverage_side = "LONG" if side.upper() == "BUY" else "SHORT"
-        self.set_leverage(symbol, LEVERAGE, leverage_side)
+        self.set_leverage(symbol, order_leverage, leverage_side)
 
         endpoint = "/openApi/swap/v2/trade/order"
 

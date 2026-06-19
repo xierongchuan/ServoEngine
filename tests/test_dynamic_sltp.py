@@ -9,6 +9,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.core.executor import main, create_order
 from src.core.predict import parse_response
 
+
+def _position_side_value(position_side):
+    return position_side.value if hasattr(position_side, "value") else position_side
+
+
 def test_dynamic_sltp():
     print("🧪 Testing Dynamic SL/TP Logic...")
 
@@ -72,7 +77,7 @@ def test_dynamic_sltp():
         print(f"   set_sl_tp called with: args={sltp_args}, kwargs={sltp_kwargs}")
 
         assert sltp_args[0] == "BTCUSDT"  # symbol
-        assert sltp_args[1] == "LONG"  # position_side
+        assert _position_side_value(sltp_args[1]) == "LONG"  # position_side
         assert sltp_kwargs["sl"] == 90000
         assert sltp_kwargs["tp"] == 95000
         print("   ✅ New order SL/TP set via set_sl_tp")
@@ -88,6 +93,7 @@ def test_dynamic_sltp():
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
         mock_client.check_prerequisites.return_value = True
+        mock_client.denormalize_symbol.return_value = "BTCUSDT"
 
         # Mock existing position
         mock_client.get_positions.return_value = {
@@ -120,10 +126,39 @@ def test_dynamic_sltp():
         print(f"   set_sl_tp called with: args={args}, kwargs={kwargs}")
 
         assert args[0] == "BTCUSDT"
-        assert args[1] == "LONG" # Derived from 'buy' type
+        assert _position_side_value(args[1]) == "LONG" # Derived from 'buy' type
         assert kwargs["sl"] == 91500
         assert kwargs["tp"] == 96000
         print("   ✅ Existing position SL/TP updated")
+
+
+def test_create_order_passes_runtime_leverage(monkeypatch):
+    import src.config as runtime_config
+
+    monkeypatch.setattr(runtime_config, "LEVERAGE", 5)
+
+    with patch('src.core.executor.get_exchange_client') as mock_get_client, \
+         patch('src.core.executor.info'), \
+         patch('src.core.executor.warning'), \
+         patch('src.core.executor.error'), \
+         patch('src.core.executor.log_trade'):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.get_balance.return_value = {"balance": 1000}
+        mock_client.place_order.return_value = "12345"
+
+        order_id = create_order(
+            "BTCUSDT",
+            "BUY",
+            100.0,
+            ai_sl=95.0,
+            ai_tp=110.0,
+            confidence=0.9,
+        )
+
+        assert order_id == "12345"
+        assert mock_client.place_order.call_args.kwargs["leverage"] == 5
+
 
 if __name__ == "__main__":
     test_dynamic_sltp()

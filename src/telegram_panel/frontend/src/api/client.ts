@@ -460,26 +460,10 @@ export function syncPositions() {
   });
 }
 
-export function disableSymbol(symbol: string) {
-  return fetchAPI<{ status: string }>(`/api/trades/disable/${encodeURIComponent(symbol)}`, {
-    method: 'POST',
-  });
-}
-
-export function enableSymbol(symbol: string) {
-  return fetchAPI<{ status: string }>(`/api/trades/enable/${encodeURIComponent(symbol)}`, {
-    method: 'POST',
-  });
-}
-
 export function closePosition(symbol: string) {
   return fetchAPI<{ status: string }>(`/api/trades/close/${encodeURIComponent(symbol)}`, {
     method: 'POST',
   });
-}
-
-export function getDisabledSymbols() {
-  return fetchAPI<{ disabled_symbols: string[] }>('/api/trades/disabled');
 }
 
 // ============================================================================

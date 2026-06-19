@@ -1,5 +1,5 @@
 import type { Trade } from '@/api/types';
-import { disableSymbol, enableSymbol, closePosition } from '@/api/client';
+import { closePosition } from '@/api/client';
 import { calcRoePct, formatDollar, formatPct } from '@/utils/pnl';
 import { useState } from 'react';
 
@@ -13,9 +13,8 @@ function formatDuration(openTime: string): string {
   return `${days}d ${hours % 24}h`;
 }
 
-export function TradeCard({ trade, disabledSymbols = [], onUpdate }: {
+export function TradeCard({ trade, onUpdate }: {
   trade: Trade;
-  disabledSymbols?: string[];
   onUpdate?: () => void;
 }) {
   const [loading, setLoading] = useState(false);
@@ -25,37 +24,6 @@ export function TradeCard({ trade, disabledSymbols = [], onUpdate }: {
   const fees = trade.estimated_total_fees ?? 0;
   const isPositive = netPnl >= 0;
   const netRoe = calcRoePct(trade, netPnl);
-
-  // Check if this symbol is disabled (compare both formats)
-  const normalizedSymbol = trade.symbol.replace('-', '').toUpperCase();
-  const isDisabled = disabledSymbols.some(s => s.replace('-', '').toUpperCase() === normalizedSymbol);
-
-  const handleStop = async () => {
-    if (loading) return;
-    if (!confirm(`У ${trade.symbol} есть активная позиция. Вы точно хотите выключить торговлю по этому символу?`)) return;
-    setLoading(true);
-    try {
-      await disableSymbol(trade.symbol);
-      onUpdate?.();
-    } catch (e) {
-      console.error('Failed to disable symbol:', e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleStart = async () => {
-    if (loading) return;
-    setLoading(true);
-    try {
-      await enableSymbol(trade.symbol);
-      onUpdate?.();
-    } catch (e) {
-      console.error('Failed to enable symbol:', e);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleClose = async () => {
     if (loading) return;
@@ -140,23 +108,6 @@ export function TradeCard({ trade, disabledSymbols = [], onUpdate }: {
 
       {/* Action Buttons */}
       <div className="flex gap-2 mt-3 pt-3 border-t border-white/5">
-        {isDisabled ? (
-          <button
-            onClick={handleStart}
-            disabled={loading}
-            className="flex-1 text-xs py-2 px-3 rounded-lg bg-green-500/20 text-green-400 hover:bg-green-500/30 disabled:opacity-50 transition-colors"
-          >
-            ▶️ Start
-          </button>
-        ) : (
-          <button
-            onClick={handleStop}
-            disabled={loading}
-            className="flex-1 text-xs py-2 px-3 rounded-lg bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 disabled:opacity-50 transition-colors"
-          >
-            ⏹️ Stop
-          </button>
-        )}
         <button
           onClick={handleClose}
           disabled={loading}

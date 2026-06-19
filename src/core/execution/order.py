@@ -57,6 +57,9 @@ def create_order(
     client = get_exchange_client()
 
     try:
+        from src import config as runtime_config
+
+        leverage = runtime_config.LEVERAGE
         price = float(price)
 
         direction_str = direction.value if hasattr(direction, 'value') else direction
@@ -126,7 +129,7 @@ def create_order(
         trade_amount = total_balance * (effective_size_pct / 100.0)
 
         from src.config import TRADING_FEE_TAKER
-        estimated_round_trip_fee = trade_amount * LEVERAGE * (TRADING_FEE_TAKER / 100.0) * 2.0
+        estimated_round_trip_fee = trade_amount * leverage * (TRADING_FEE_TAKER / 100.0) * 2.0
         fee_adjusted_amount = trade_amount - estimated_round_trip_fee
         if fee_adjusted_amount >= MIN_TRADE_AMOUNT_USDT:
             info(f"💰 Fee reserve: ${estimated_round_trip_fee:.2f} | ${trade_amount:.2f} → ${fee_adjusted_amount:.2f}")
@@ -141,14 +144,14 @@ def create_order(
             warning(f"⚠️ Trade amount ${trade_amount:.2f} exceeds balance ${total_balance:.2f}. Adjusting to {_safety*100:.0f}% of balance.")
             trade_amount = total_balance * _safety
 
-        notional_value = trade_amount * LEVERAGE
+        notional_value = trade_amount * leverage
         quantity = notional_value / price
         _qty_prec = POSITION_LIMITS.get("quantity_precision", 4)
         quantity = round(quantity, _qty_prec)
 
         info("🧮 Position Size:")
         info(f"   Balance: ${total_balance:.2f} | Margin: {effective_size_pct:.1f}% = ${trade_amount:.2f}")
-        info(f"   Leverage: {LEVERAGE}x | Notional: ${notional_value:.2f}")
+        info(f"   Leverage: {leverage}x | Notional: ${notional_value:.2f}")
         info(f"   Quantity: {quantity} {symbol.replace('USDT', '')}")
 
         order_type_enum = OrderType.MARKET if order_type == "MARKET" else OrderType.LIMIT
@@ -160,7 +163,8 @@ def create_order(
             quantity=quantity,
             order_type=order_type_enum,
             sl=None,
-            tp=None
+            tp=None,
+            leverage=leverage,
         )
 
         if order_id:

@@ -723,12 +723,14 @@ class BingXClient(ExchangeClient):
         sl: Optional[float] = None,
         tp: Optional[float] = None,
         position_side: Optional[PositionSide] = None,
+        leverage: Optional[int] = None,
     ) -> Optional[str]:
         """Разместить ордер."""
-        # Set leverage first
-        leverage = self._config.default_leverage
+        # Плечо должно приходить из runtime-конфига стратегии. Дефолт биржи
+        # используем только для прямых/старых вызовов без явного значения.
+        order_leverage = int(leverage) if leverage is not None else self._config.default_leverage
         pos_side = position_side or (PositionSide.LONG if side == OrderSide.BUY else PositionSide.SHORT)
-        self.set_leverage(symbol, leverage, pos_side)
+        self.set_leverage(symbol, order_leverage, pos_side)
 
         formatted_symbol = self._format_symbol(symbol)
 

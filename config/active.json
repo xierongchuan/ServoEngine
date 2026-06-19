@@ -20,7 +20,21 @@
     {
       "id": "ltcusdt_hybrid",
       "symbol": "LTCUSDT",
-      "strategy": "HYBRID",
+      "strategy": "MACDX",
+      "profile": "default",
+      "enabled": true
+    },
+    {
+      "id": "ethusdt_macdx",
+      "symbol": "ETHUSDT",
+      "strategy": "MACDX",
+      "profile": "default",
+      "enabled": true
+    },
+    {
+      "id": "zecusdt_macdx",
+      "symbol": "ZECUSDT",
+      "strategy": "MACDX",
       "profile": "default",
       "enabled": true
     }
@@ -29,13 +43,17 @@
     "bingx": [
       "BNBUSDT",
       "BTCUSDT",
-      "LTCUSDT"
+      "ETHUSDT",
+      "LTCUSDT",
+      "ZECUSDT"
     ]
   },
   "symbol_profiles": {
     "BTCUSDT": "scalp_no_ai",
     "BNBUSDT": "default",
-    "LTCUSDT": "default"
+    "LTCUSDT": "default",
+    "ETHUSDT": "default",
+    "ZECUSDT": "default"
   },
   "disabled_symbols": []
 }

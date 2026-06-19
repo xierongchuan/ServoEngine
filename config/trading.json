@@ -2,7 +2,7 @@
   "_description": "Core trading parameters - changed occasionally",
   "_version": "1.0.0",
   "position": {
-    "size_percent": 0.13,
+    "size_percent": 0.05,
     "min_trade_amount_usdt": 15
   },
   "risk": {

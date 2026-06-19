@@ -178,6 +178,7 @@ class ExchangeClient(ABC):
         sl: Optional[float] = None,
         tp: Optional[float] = None,
         position_side: Optional[PositionSide] = None,
+        leverage: Optional[int] = None,
     ) -> Optional[str]:
         """
         Разместить ордер.
@@ -191,6 +192,7 @@ class ExchangeClient(ABC):
             sl: Цена Stop Loss
             tp: Цена Take Profit
             position_side: Сторона позиции (LONG/SHORT для хедж режима)
+            leverage: Плечо для ордера. Если не указано, клиент использует свой дефолт.
 
         Returns:
             ID ордера если успешно, None в противном случае
