@@ -195,9 +195,7 @@ class PipelineOrchestrator:
                     symbol_positions = all_positions.get(normalized_symbol, [])
                     real_position = symbol_positions[0] if symbol_positions else None
 
-                    if action in ("buy", "sell") and not real_position:
-                        self._journal.set_trade_plan(symbol, prediction, current_price)
-                    elif not real_position and self._journal.data.get(symbol, {}).get("trade_plan"):
+                    if not real_position and self._journal.data.get(symbol, {}).get("trade_plan"):
                         self._journal.record_close(symbol)
                         self._journal.clear_trade_plan(symbol)
 
@@ -205,15 +203,22 @@ class PipelineOrchestrator:
 
                     # 4. Execute
                     with StageTimer("Исполнение сигналов", symbol, "💰"):
-                        executor.execute_prediction(
+                        execution_success = executor.execute_prediction(
                             prediction,
                             all_positions=all_positions,
                             owner_id=self.instance_id,
                             strategy_id=self.strategy,
                         )
 
+                    if execution_success:
+                        if action in ("buy", "sell") and not real_position:
+                            self._journal.set_trade_plan(symbol, prediction, current_price)
+                        elif action == "close":
+                            self._journal.record_close(symbol)
+                            self._journal.clear_trade_plan(symbol)
+
                     # 5. Save entry context
-                    if action in ("buy", "sell") and not real_position and self.strategy in ("HYBRID", "AISCALP", "MACDX"):
+                    if execution_success and action in ("buy", "sell") and not real_position and self.strategy in ("HYBRID", "AISCALP", "MACDX"):
                         try:
                             signal_data = prediction.get("details", {})
                             entry_ctx = {

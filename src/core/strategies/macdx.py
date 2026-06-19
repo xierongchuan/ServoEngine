@@ -88,7 +88,6 @@ class MacdxPipeline(StrategyPipeline):
                     score=signal_data.get("score", 0),
                     confirmations=confirmations,
                 )
-                self._journal.record_close(symbol)
             elif signal == "HOLD":
                 command = self._build_hold_command(
                     symbol, current_price, signal_data, regime_label
@@ -104,9 +103,6 @@ class MacdxPipeline(StrategyPipeline):
             prediction = command.to_dict()
             info(f"[{symbol}] Recording to journal: action={command.action.value}, reason={command.reason}, current_price={current_price}")
             self._journal.record(symbol, prediction, current_price)
-
-            if command.action.is_entry:
-                self._journal.set_trade_plan(symbol, prediction, current_price)
 
             self._journal.trim_entries(symbol, STRATEGY_STYLE)
 

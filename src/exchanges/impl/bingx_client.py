@@ -437,6 +437,25 @@ class BingXClient(ExchangeClient):
         # В DEMO режиме (VST) получаем РЕАЛЬНЫЙ баланс с демо-биржи!
         # Не используем захардкоженное значение 10000 - это реальные данные
 
+        def _first_positive_float(payload: dict, keys: List[str]) -> float:
+            for key in keys:
+                value = payload.get(key)
+                if value is None:
+                    continue
+                try:
+                    parsed = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if parsed > 0:
+                    return parsed
+            return 0.0
+
+        def _float_value(payload: dict, key: str) -> float:
+            try:
+                return float(payload.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
         with self._cache_lock:
             now = time.time()
             # Не используем кэш для баланса - получаем актуальные данные
@@ -453,10 +472,39 @@ class BingXClient(ExchangeClient):
                 else:
                     balance_data = {}
 
+                total_balance = _first_positive_float(
+                    balance_data,
+                    [
+                        "equity",
+                        "balance",
+                        "walletBalance",
+                        "totalBalance",
+                        "totalWalletBalance",
+                        "marginBalance",
+                    ],
+                )
+                available_balance = _first_positive_float(
+                    balance_data,
+                    [
+                        "availableBalance",
+                        "availableMargin",
+                        "available",
+                        "free",
+                        "balance",
+                    ],
+                )
+                wallet_balance = _float_value(balance_data, "walletBalance")
+                base_balance = _float_value(balance_data, "balance")
+                unrealized_pnl = _float_value(balance_data, "unrealizedProfit")
+                if unrealized_pnl == 0 and wallet_balance and base_balance:
+                    unrealized_pnl = wallet_balance - base_balance
+
                 balance = Balance(
-                    total_balance=float(balance_data.get("balance", 0) or 0),
-                    available_balance=float(balance_data.get("availableBalance", 0) or 0),
-                    unrealized_pnl=float(balance_data.get("walletBalance", 0) or 0) - float(balance_data.get("balance", 0) or 0),
+                    total_balance=total_balance,
+                    available_balance=available_balance,
+                    unrealized_pnl=unrealized_pnl,
+                    locked_balance=max(total_balance - available_balance, 0.0),
+                    asset=str(balance_data.get("asset") or "USDT"),
                 )
 
                 # Update cache
