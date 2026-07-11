@@ -263,3 +263,8 @@ The system supports hot-reload for:
 Changing `strategy_instances`, assigning profiles, enabling/disabling instances, and editing `disabled_symbols` is done through `config/active.json` and is checked by workers every 30 seconds.
 
 Changes to `config/base.json` and strategy files require restart.
+# Выбор биржи и рынка
+
+Биржа и рынок выбираются через `.env`: `EXCHANGE=bingx|mexc` и `MARKET_TYPE=perpetual|spot`. Старый список `symbols.bingx` остаётся допустимым. Для нескольких продуктов используется вложенная схема `symbols.<exchange>.<market_type>`. Одновременное смешивание рынков в одном runtime не поддерживается; после смены нужен restart.
+
+Комиссии в `base.json` поддерживают ту же вложенность `exchange.fees.<exchange>.<market_type>`, а старый плоский BingX-формат сохраняется.

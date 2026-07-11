@@ -377,11 +377,20 @@ class TestScalpSignalGenerator:
     def test_exit_volume_capitulation(self, generator):
         position = {"type": "BUY", "entry": 50000, "avgPrice": 50000}
         indicators = self._bullish_indicators()
-        indicators["current_price"] = 49900  # At loss
+        indicators["current_price"] = 49500  # Убыток -1%, ниже порога -0.5%
         indicators["volume_ratio"] = 2.5  # Volume spike
         exit_signal = generator.check_exit(indicators, position)
         assert exit_signal["should_close"] is True
         assert "Capitulation" in exit_signal["reason"]
+
+    def test_no_volume_capitulation_on_shallow_loss(self, generator):
+        """Обычный шум меньше 0.5% не должен принудительно закрывать позицию."""
+        position = {"type": "BUY", "entry": 50000}
+        indicators = self._bullish_indicators()
+        indicators["current_price"] = 49900  # -0.2%
+        indicators["volume_ratio"] = 2.5
+        exit_signal = generator.check_exit(indicators, position)
+        assert exit_signal["should_close"] is False
 
     def test_pattern_momentum(self, generator):
         ind = self._bullish_indicators()

@@ -8,9 +8,12 @@ import json
 import gzip
 import time
 import sys
+import pytest
+
+pytestmark = pytest.mark.live
 
 
-def test_ws_connection(symbol="BTC-USDT", interval="1m", duration=30):
+def run_ws_connection(symbol="BTC-USDT", interval="1m", duration=30):
     """Тест WebSocket соединения с BingX."""
 
     print(f"=== Тест WebSocket: {symbol} @ {interval} ===")
@@ -124,9 +127,13 @@ def test_ws_connection(symbol="BTC-USDT", interval="1m", duration=30):
         return True
 
 
+def test_ws_connection():
+    assert run_ws_connection(duration=30) is True
+
+
 if __name__ == "__main__":
     symbol = sys.argv[1] if len(sys.argv) > 1 else "BTC-USDT"
     interval = sys.argv[2] if len(sys.argv) > 2 else "1m"
 
-    success = test_ws_connection(symbol, interval, duration=30)
+    success = run_ws_connection(symbol, interval, duration=30)
     sys.exit(0 if success else 1)

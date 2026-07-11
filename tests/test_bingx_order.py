@@ -2,6 +2,9 @@ import os
 import sys
 import time
 import json
+import pytest
+
+pytestmark = pytest.mark.live
 
 # Add project root to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

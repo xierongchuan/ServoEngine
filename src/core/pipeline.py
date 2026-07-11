@@ -73,7 +73,7 @@ class PipelineOrchestrator:
             # Setup shared WebSocket cache
             if ws_cache is not None and ws_ready is not None:
                 try:
-                    from src.exchanges.bingx_ws_data_provider import set_shared_cache
+                    from src.exchanges.ws_provider_factory import set_shared_cache
                     set_shared_cache(ws_cache, ws_ready)
                 except Exception as e:
                     warning(f"⚠️ Failed to set shared cache: {e}")

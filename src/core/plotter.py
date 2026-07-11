@@ -163,17 +163,6 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     with open(price_file) as f:
         prices = json.load(f)
 
-    # ... (rest of data loading logic remains, just signature changed above) ...
-
-    # [SKIP UNCHANGED LINES TO RETAIN CONTEXT IF NEEDED, BUT HERE I PASTE FULL START TO BE SAFE OR USE CHUNK]
-    # actually I can't skip too much without breaking tool usage rules about context match.
-    # The tool requires exact match.
-
-    # I will split this into two edits for safety.
-    # Edit 1: Signature change.
-    # Edit 2: Plotting logic.
-
-
     # Determine time range settings
     if time_range is None:
         time_range = DEFAULT_PLOTTER_RANGE
@@ -190,7 +179,7 @@ def plot_symbol(symbol, time_range=None, current_position=None):
 
     if not range_config:
         info(f"⚠️ Range '{time_range}' not found in config. Using default 1D.")
-        range_config = PLOTTER_RANGES.get("1D")
+        range_config = PLOTTER_RANGES.get("1D") or {"days": 1}
         time_range = "1D"
 
     # Calculate cutoff time

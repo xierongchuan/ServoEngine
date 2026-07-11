@@ -243,12 +243,21 @@ _config_mtime = get_config_mtime()
 
 # Exchange selection
 EXCHANGE = os.getenv("EXCHANGE", "bingx")
+MARKET_TYPE = os.getenv("MARKET_TYPE", "perpetual").lower()
+if EXCHANGE.lower() == "bingx":
+    MARKET_TYPE = "perpetual"
 
 # Trading settings from config
 EXCHANGE_SYMBOLS = BOT_CONFIG.get("EXCHANGE_SYMBOLS", {})
-SYMBOLS = EXCHANGE_SYMBOLS.get(EXCHANGE, ["BTC/USD"])
+_symbols_value = EXCHANGE_SYMBOLS.get(EXCHANGE, ["BTC/USD"])
+if isinstance(_symbols_value, dict):
+    SYMBOLS = _symbols_value.get(MARKET_TYPE, ["BTC/USD"])
+else:
+    SYMBOLS = _symbols_value
 EXCHANGE_FEES = BOT_CONFIG.get("EXCHANGE_FEES", {"bingx": {"maker": 0.02, "taker": 0.05}})
 _fee_value = EXCHANGE_FEES.get(EXCHANGE, 0.05)
+if isinstance(_fee_value, dict) and MARKET_TYPE in _fee_value:
+    _fee_value = _fee_value[MARKET_TYPE]
 if isinstance(_fee_value, dict):
     TRADING_FEE_MAKER = _fee_value.get("maker", 0.02)
     TRADING_FEE_TAKER = _fee_value.get("taker", 0.05)
@@ -289,7 +298,7 @@ CHARTS_DIR = "charts"
 # Chart settings
 CHART_RANGES = BOT_CONFIG.get("CHART_RANGES", {})
 DEFAULT_CHART_RANGE = BOT_CONFIG.get("DEFAULT_CHART_RANGE", "1D")
-PLOTTER_RANGES = BOT_CONFIG.get("PLOTTER_RANGES", {})
+PLOTTER_RANGES = BOT_CONFIG.get("PLOTTER_RANGES") or CHART_RANGES
 DEFAULT_PLOTTER_RANGE = BOT_CONFIG.get("DEFAULT_PLOTTER_RANGE", "1D")
 CLEANUP_SETTINGS = BOT_CONFIG.get("CLEANUP_SETTINGS", {
     "cleanup_old_charts": True, "charts_retention_days": 7,
@@ -491,11 +500,16 @@ print(f"🤖 AI Provider: OpenRouter ({AI_MODEL})")
 if not AI_API_KEY:
     print(f"⚠️ WARNING: API Key for provider '{AI_PROVIDER}' is missing!")
 
-# BingX API
+# Exchange API
 BINGX_API_KEY = os.getenv("BINGX_API_KEY", "")
 BINGX_SECRET_KEY = os.getenv("BINGX_SECRET_KEY", "")
 BINGX_API_URL = "https://open-api-vst.bingx.com" if MODE == "demo" else "https://open-api.bingx.com"
-print(f"🌐 BingX API endpoint: {BINGX_API_URL} ({'Demo (VST)' if MODE == 'demo' else 'Real'})")
+MEXC_API_KEY = os.getenv("MEXC_API_KEY", "")
+MEXC_SECRET_KEY = os.getenv("MEXC_SECRET_KEY", "")
+if EXCHANGE.lower() == "mexc":
+    print(f"🌐 MEXC API endpoint: https://api.mexc.com ({MARKET_TYPE}, live API; MODE={MODE})")
+else:
+    print(f"🌐 BingX API endpoint: {BINGX_API_URL} ({'Demo (VST)' if MODE == 'demo' else 'Real'})")
 print(f"📰 Новости: {'ВКЛЮЧЕНЫ' if ENABLE_NEWS else 'ОТКЛЮЧЕНЫ'}")
 
 

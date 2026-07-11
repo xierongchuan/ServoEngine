@@ -181,7 +181,12 @@ class ConfigFactory:
     _initialized: bool = False
 
     @classmethod
-    def register(cls, name: str, config_class: type[ExchangeConfig]) -> None:
+    def register(
+        cls,
+        name: str,
+        config_class: type[ExchangeConfig],
+        market_type: Optional[str] = None,
+    ) -> None:
         """
         Зарегистрировать конфигурацию биржи.
 
@@ -190,12 +195,18 @@ class ConfigFactory:
             config_class: Класс конфигурации
         """
         name_lower = name.lower()
-        if name_lower in cls._configs:
-            raise ValueError(f"Config for '{name}' already registered")
-        cls._configs[name_lower] = config_class
+        key = f"{name_lower}:{market_type.lower()}" if market_type else name_lower
+        if key in cls._configs:
+            raise ValueError(f"Config for '{key}' already registered")
+        cls._configs[key] = config_class
 
     @classmethod
-    def create(cls, exchange_name: str, is_demo: bool = False) -> ExchangeConfig:
+    def create(
+        cls,
+        exchange_name: str,
+        is_demo: bool = False,
+        market_type: Optional[str] = None,
+    ) -> ExchangeConfig:
         """
         Создать конфигурацию биржи.
 
@@ -210,18 +221,20 @@ class ConfigFactory:
             ValueError: Если биржа не зарегистрирована
         """
         name = exchange_name.lower()
+        market = (market_type or ("perpetual" if name == "mexc" else "")).lower()
+        key = f"{name}:{market}" if market else name
 
         # Инициализация стандартных бирж при первом вызове
         if not cls._initialized:
             cls._init_default_configs()
 
-        if name not in cls._configs:
+        if key not in cls._configs:
             raise ValueError(
-                f"Exchange '{exchange_name}' not supported. "
+                f"Exchange '{exchange_name}' market '{market or 'default'}' not supported. "
                 f"Available: {list(cls._configs.keys())}"
             )
 
-        return cls._configs[name](is_demo=is_demo)
+        return cls._configs[key](is_demo=is_demo)
 
     @classmethod
     def _init_default_configs(cls) -> None:
@@ -232,6 +245,13 @@ class ConfigFactory:
             cls.register("bingx", BingXConfig)
         except ImportError:
             # Игнорируем если модуль ещё не создан
+            pass
+
+        try:
+            from .mexc_config import MEXCFuturesConfig, MEXCSpotConfig
+            cls.register("mexc", MEXCFuturesConfig, "perpetual")
+            cls.register("mexc", MEXCSpotConfig, "spot")
+        except ImportError:
             pass
 
         cls._initialized = True
@@ -250,7 +270,11 @@ class ConfigFactory:
         cls._initialized = False
 
 
-def create_config(exchange_name: str, is_demo: bool = False) -> ExchangeConfig:
+def create_config(
+    exchange_name: str,
+    is_demo: bool = False,
+    market_type: Optional[str] = None,
+) -> ExchangeConfig:
     """
     Удобная функция для создания конфигурации.
 
@@ -261,4 +285,4 @@ def create_config(exchange_name: str, is_demo: bool = False) -> ExchangeConfig:
     Returns:
         Конфигурация биржи
     """
-    return ConfigFactory.create(exchange_name, is_demo)
+    return ConfigFactory.create(exchange_name, is_demo, market_type)

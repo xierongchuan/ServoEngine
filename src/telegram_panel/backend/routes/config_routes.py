@@ -11,6 +11,7 @@ Provides endpoints for:
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -191,13 +192,41 @@ def _validate_strategy_instance(raw: dict) -> dict:
     }
 
 
-def _get_strategy_instances(active: dict, exchange: str = "bingx") -> list[dict]:
+def _runtime_exchange(exchange: str | None = None) -> str:
+    return str(exchange or os.getenv("EXCHANGE", "bingx")).lower()
+
+
+def _runtime_market() -> str:
+    return os.getenv("MARKET_TYPE", "perpetual").lower()
+
+
+def _get_exchange_symbols(active: dict, exchange: str) -> list[str]:
+    value = active.get("symbols", {}).get(exchange, [])
+    if isinstance(value, dict):
+        value = value.get(_runtime_market(), [])
+    return list(value)
+
+
+def _set_exchange_symbols(active: dict, exchange: str, symbols: list[str]) -> None:
+    all_symbols = dict(active.get("symbols", {}))
+    current = all_symbols.get(exchange)
+    if isinstance(current, dict) or exchange == "mexc":
+        markets = dict(current or {})
+        markets[_runtime_market()] = symbols
+        all_symbols[exchange] = markets
+    else:
+        all_symbols[exchange] = symbols
+    active["symbols"] = all_symbols
+
+
+def _get_strategy_instances(active: dict, exchange: str | None = None) -> list[dict]:
     """Return normalized strategy instances, with fallback from legacy active fields."""
     raw_instances = active.get("strategy_instances") or []
     if raw_instances:
         return [_validate_strategy_instance(item) for item in raw_instances]
 
-    symbols = active.get("symbols", {}).get(exchange, [])
+    exchange = _runtime_exchange(exchange)
+    symbols = _get_exchange_symbols(active, exchange)
     strategy = str(active.get("strategy", "MACDX")).upper()
     symbol_profiles = active.get("symbol_profiles", {})
     return [
@@ -212,7 +241,7 @@ def _get_strategy_instances(active: dict, exchange: str = "bingx") -> list[dict]
     ]
 
 
-def _sync_active_legacy_fields(active: dict, exchange: str = "bingx") -> dict:
+def _sync_active_legacy_fields(active: dict, exchange: str | None = None) -> dict:
     """
     Keep legacy active fields in sync with strategy_instances.
 
@@ -220,6 +249,7 @@ def _sync_active_legacy_fields(active: dict, exchange: str = "bingx") -> dict:
     При нескольких инстансах одного символа symbol_profiles хранит только первый профиль,
     а точная настройка остаётся в strategy_instances.
     """
+    exchange = _runtime_exchange(exchange)
     instances = _get_strategy_instances(active, exchange)
     if not instances:
         return active
@@ -229,7 +259,7 @@ def _sync_active_legacy_fields(active: dict, exchange: str = "bingx") -> dict:
     visible_instances = enabled_instances or instances
     symbols = sorted({_normalize_symbol_key(item["symbol"]) for item in visible_instances})
 
-    active["symbols"] = {**active.get("symbols", {}), exchange: symbols}
+    _set_exchange_symbols(active, exchange, symbols)
     active["strategy"] = visible_instances[0]["strategy"]
 
     symbol_profiles = dict(active.get("symbol_profiles", {}))
@@ -323,7 +353,7 @@ def _build_merged_config() -> dict:
 
         # Map new config keys to legacy format for backward compat
         merged["STRATEGY_STYLE"] = active.get("strategy") or (instances[0]["strategy"] if instances else "MACDX")
-        merged["EXCHANGE_SYMBOLS"] = active.get("symbols") or {"bingx": symbols}
+        merged["EXCHANGE_SYMBOLS"] = active.get("symbols") or {_runtime_exchange(): symbols}
         merged["DISABLED_SYMBOLS"] = active.get("disabled_symbols", [])
         merged["STRATEGY_INSTANCES"] = instances
 
@@ -701,7 +731,7 @@ async def add_active_symbol(request: Request, _user: dict = Depends(get_current_
         body = await request.body()
         data = json.loads(body)
         symbol = data.get("symbol")
-        exchange = data.get("exchange", "bingx")
+        exchange = _runtime_exchange(data.get("exchange"))
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
@@ -715,13 +745,13 @@ async def add_active_symbol(request: Request, _user: dict = Depends(get_current_
     active = _load_json(active_path)
 
     symbols = active.get("symbols", {})
-    exchange_symbols = symbols.get(exchange, [])
+    exchange_symbols = _get_exchange_symbols(active, exchange)
 
     symbol_upper = symbol.upper()
     if symbol_upper not in exchange_symbols:
         exchange_symbols.append(symbol_upper)
-        symbols[exchange] = exchange_symbols
-        active["symbols"] = symbols
+        _set_exchange_symbols(active, exchange, exchange_symbols)
+        symbols = active["symbols"]
 
     instances = _get_strategy_instances(active, exchange)
     strategy = str(data.get("strategy") or active.get("strategy") or "HYBRID").upper()
@@ -748,7 +778,7 @@ async def add_active_symbol(request: Request, _user: dict = Depends(get_current_
 
 
 @router.delete("/active/symbol/{symbol}")
-async def remove_active_symbol(symbol: str, exchange: str = "bingx", _user: dict = Depends(get_current_user)) -> dict:
+async def remove_active_symbol(symbol: str, exchange: str | None = None, _user: dict = Depends(get_current_user)) -> dict:
     """Remove a symbol from the active configuration."""
     if not _use_new_config_system():
         raise HTTPException(status_code=400, detail="New config system not available")
@@ -756,14 +786,15 @@ async def remove_active_symbol(symbol: str, exchange: str = "bingx", _user: dict
     active_path = CONFIG_DIR / "active.json"
     active = _load_json(active_path)
 
+    exchange = _runtime_exchange(exchange)
     symbols = active.get("symbols", {})
-    exchange_symbols = symbols.get(exchange, [])
+    exchange_symbols = _get_exchange_symbols(active, exchange)
 
     symbol_upper = symbol.upper()
     if symbol_upper in exchange_symbols:
         exchange_symbols.remove(symbol_upper)
-        symbols[exchange] = exchange_symbols
-        active["symbols"] = symbols
+        _set_exchange_symbols(active, exchange, exchange_symbols)
+        symbols = active["symbols"]
 
     instances = [
         item for item in _get_strategy_instances(active, exchange)
@@ -903,7 +934,7 @@ async def delete_strategy_instance(instance_id: str, _user: dict = Depends(get_c
     if updated_instances:
         active = _sync_active_legacy_fields(active)
     else:
-        active["symbols"] = {"bingx": []}
+        _set_exchange_symbols(active, _runtime_exchange(), [])
         active["symbol_profiles"] = {}
 
     try:

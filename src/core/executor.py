@@ -4,6 +4,7 @@ from src.config import DATA_DIR, TAKE_PROFIT_PERCENT, STOP_LOSS_PERCENT, POSITIO
 from src.utils.logger import info, error, warning, log_trade
 from src.exchanges.exchange_factory import get_exchange_client
 from src.exchanges.dto.models import Balance, OrderType, OrderSide, PositionSide
+from src.exchanges.errors import ExchangeStateUnavailableError
 
 # Файл кэша для хранения данных позиций (если нужно)
 
@@ -40,7 +41,7 @@ def get_open_positions():
         return positions
     except Exception as e:
         error(f"❌ Ошибка получения позиций: {str(e)}")
-        return {}
+        raise ExchangeStateUnavailableError("Не удалось достоверно загрузить позиции") from e
 
 def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unknown", confidence=0.0, size_pct=None, order_type="MARKET"):
     """Создает ордер с TP/SL через ExchangeClient"""
@@ -190,16 +191,15 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         # Convert order_type string to OrderType enum
         order_type_enum = OrderType.MARKET if order_type == "MARKET" else OrderType.LIMIT
 
-        # Place order WITHOUT SL/TP first
-        # We will set SL/TP separately using set_sl_tp to ensure reliability and correct mode handling
+        attached_protection = client.capabilities.attached_protection is True
         order_id = client.place_order(
             symbol=symbol,
             side=direction,
             price=price,
             quantity=quantity,
             order_type=order_type_enum,
-            sl=None,
-            tp=None,
+            sl=sl_price if attached_protection else None,
+            tp=tp_price if attached_protection else None,
             leverage=leverage,
         )
 
@@ -208,7 +208,7 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
             client.invalidate_cache("positions")
 
             # Set SL/TP immediately after order placement
-            if tp_price or sl_price:
+            if (tp_price or sl_price) and not attached_protection:
                 info(f"🔄 Setting SL/TP for new order {order_id}...")
                 try:
                     # Determine position side (use enum for new client)
@@ -227,13 +227,16 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
                             # Verify and retry once
                             open_orders = client.get_open_orders(symbol)
                             sl_tp_types = {"STOP_MARKET", "TAKE_PROFIT_MARKET"}
-                            existing = {o.get("type") for o in open_orders} & sl_tp_types
+                            existing = {
+                                (o.raw_data.get("type") if hasattr(o, "raw_data") else o.get("type"))
+                                for o in open_orders
+                            } & sl_tp_types
                             missing = sl_tp_types - existing
                             if missing:
                                 warning(f"⚠️ {symbol}: Retry SL/TP — missing: {missing}")
                                 retry_tp = tp_price if "TAKE_PROFIT_MARKET" in missing else None
                                 retry_sl = sl_price if "STOP_MARKET" in missing else None
-                                BingXClient.invalidate_positions_cache()
+                                client.invalidate_cache("positions")
                                 retry_ok = client.set_sl_tp(symbol, pos_side, tp=retry_tp, sl=retry_sl)
                                 if retry_ok:
                                     info(f"✅ SL/TP retry succeeded for {symbol}")
@@ -244,6 +247,10 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
                         warning("⚠️ Client does not support set_sl_tp, SL/TP might not be set")
                 except Exception as e:
                     error(f"❌ Failed to set SL/TP for new order {order_id}: {e}")
+
+            if attached_protection:
+                _save_sl_tp(symbol, sl_price, tp_price)
+                info(f"✅ TP/SL прикреплены к entry order {order_id}")
 
             log_trade(f"📌 {symbol}: открыт ордер {direction} по {price:.5f} "
                       f"(Qty={quantity}, TP={tp_price}, SL={sl_price}, ID={order_id}) "

@@ -18,6 +18,7 @@ Tiered scoring (max 10 base + 3 interaction = 13):
 from typing import Dict, Optional
 from src.config import SCALP_SETTINGS
 from src.utils.logger import info
+from src.core.signals.utils import PositionAdapter, calculate_pnl_pct
 
 
 class ScalpSignalGenerator:
@@ -357,7 +358,7 @@ class ScalpSignalGenerator:
 
         return result
 
-    def check_exit(self, indicators: Dict, position: Dict) -> Dict:
+    def check_exit(self, indicators: Dict, position) -> Dict:
         """
         Check if an open position should be closed based on deterministic rules.
 
@@ -371,8 +372,9 @@ class ScalpSignalGenerator:
         if not position:
             return {"should_close": False, "reason": "No position", "urgency": "low"}
 
-        pos_type = position.get("type", "").upper()
-        entry_price = float(position.get("entry", position.get("avgPrice", 0)))
+        adapter = PositionAdapter(position)
+        pos_type = adapter.direction
+        entry_price = adapter.entry_price
         current_price = indicators.get("current_price", 0)
         rsi = indicators.get("rsi", 50)
         ema_fast = indicators.get("ema_fast", 0)
@@ -384,10 +386,7 @@ class ScalpSignalGenerator:
             return {"should_close": False, "reason": "Invalid prices", "urgency": "low"}
 
         # PnL calculation
-        if pos_type == "BUY":
-            pnl_pct = (current_price - entry_price) / entry_price * 100
-        else:
-            pnl_pct = (entry_price - current_price) / entry_price * 100
+        pnl_pct = calculate_pnl_pct(entry_price, current_price, pos_type)
 
         # 1. RSI extreme exit
         if pos_type == "BUY" and rsi > 80:

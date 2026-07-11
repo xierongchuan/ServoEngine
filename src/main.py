@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Главный файл запуска автоматизированной торговой системы.
-Интегрирует BingX API для торговых операций и AI API для анализа рынка.
+Интегрирует API выбранной биржи для торговых операций и AI API для анализа рынка.
 
 Автор: Claude Code
 Версия: 1.0
@@ -48,6 +48,11 @@ def check_prerequisites():
 
     # Check exchange prerequisites
     client = get_exchange_client()
+    if not client.capabilities.automated_strategy:
+        errors.append(
+            "❌ Выбранный рынок не поддерживает автоматический futures pipeline; "
+            "MEXC Spot доступен только через отдельный REST-клиент"
+        )
     if not client.check_prerequisites():
         errors.append("❌ Ошибка проверки предварительных условий биржи")
 
@@ -152,7 +157,7 @@ def run_multiprocess_pipeline():
     ws_cache = None
     ws_ready = None
     try:
-        from src.exchanges.bingx_ws_data_provider import start_ws_provider
+        from src.exchanges.ws_provider_factory import start_ws_provider
 
         intervals = set()
         for config in instance_configs.values():
@@ -167,12 +172,15 @@ def run_multiprocess_pipeline():
 
             ws_cache, ws_ready = start_ws_provider(symbols, interval=ws_interval)
 
-            # Wait for initial REST backfill to complete
-            print("   ⏳ Загрузка исторических данных...")
-            time.sleep(3)  # Give time for backfill
-
-            print("   ✅ WebSocket провайдер запущен")
-            info("✅ WebSocket провайдер запущен и кэш заполнен")
+            if ws_cache is None:
+                print("   ℹ️ Для выбранного рынка используется REST market-data fallback")
+                info("📡 WebSocket отключён для выбранного рынка; используем REST")
+            else:
+                # Backfill выполняется синхронно внутри provider.
+                print("   ⏳ Загрузка исторических данных...")
+                time.sleep(3)
+                print("   ✅ WebSocket провайдер запущен")
+                info("✅ WebSocket провайдер запущен и кэш заполнен")
         else:
             info(f"📡 WebSocket кэш отключён: разные timeframe у инстансов ({sorted(intervals)}). Используем REST.")
 
@@ -384,7 +392,7 @@ def run_multiprocess_pipeline():
     finally:
         # Stop WebSocket provider
         try:
-            from src.exchanges.bingx_ws_data_provider import stop_ws_provider
+            from src.exchanges.ws_provider_factory import stop_ws_provider
             stop_ws_provider()
             info("📡 WebSocket провайдер остановлен")
         except Exception:

@@ -2,7 +2,7 @@ import json
 import os
 from typing import Any, Dict, List
 
-from ..exchanges.bingx_client import BingXClient
+from ..exchanges.exchange_factory import get_market_data_client
 from ..utils.logger import error, info, warning
 
 
@@ -24,8 +24,8 @@ class DataLoader:
     def fetch_data_from_exchange(self) -> List[Dict[str, Any]]:
         """Получает данные свечей с биржи."""
         try:
-            client = BingXClient()
-            klines = client.get_klines(self.symbol, self.timeframe, self.limit)
+            client = get_market_data_client()
+            klines = client.get_kline_data(self.symbol, self.timeframe, self.limit)
             if klines:
                 # Сохранить в файл
                 os.makedirs(os.path.dirname(self.data_path), exist_ok=True)

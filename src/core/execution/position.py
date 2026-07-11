@@ -19,9 +19,7 @@ def get_position_entry(position: Any) -> float:
 
 def get_position_deal_id(position: Any) -> str:
     """Извлекает ID сделки из позиции."""
-    if hasattr(position, 'position_id'):
-        return position.position_id
-    return position.get("dealId", "")
+    return PositionAdapter(position).position_id
 
 
 def calculate_position_pnl(position: Any, current_price: float) -> float:

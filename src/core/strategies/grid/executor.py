@@ -6,6 +6,9 @@ from typing import List, Dict, Optional
 from src.exchanges.exchange_factory import get_exchange_client
 from src.utils.logger import info, error, warning
 from src.config import POSITION_LIMITS
+from src.core.signals.utils import OrderAdapter, PositionAdapter, calculate_pnl_pct
+from src.exchanges.errors import ExchangeStateUnavailableError
+from src.exchanges.dto.models import OrderSide, OrderType, PositionSide
 
 
 @dataclass
@@ -54,10 +57,9 @@ class GridExecutor:
         self.inventory_limit = config.get("inventory_limit", 100.0)
         self.emergency_stop_loss_pct = config.get("emergency_stop_loss_pct", 5.0)
 
-        # Fee rate from config (default 0.1% for BingX)
-        from src.config import BOT_CONFIG
-        exchange_fees = BOT_CONFIG.get("EXCHANGE_FEES", {})
-        self.fee_rate = exchange_fees.get("bingx", 0.1)  # 0.1%
+        # Комиссия уже выбрана для текущих exchange и market type.
+        from src.config import TRADING_FEE_TAKER
+        self.fee_rate = TRADING_FEE_TAKER
 
         # Precision
         self.price_precision = POSITION_LIMITS.get("price_precision", 4)
@@ -144,8 +146,9 @@ class GridExecutor:
             # Ключ: (price, side) -> order
             existing_orders: Dict[tuple, dict] = {}
             for order in open_orders:
-                price = float(order.get("price", 0))
-                side = order.get("side", "").upper()
+                adapter = OrderAdapter(order)
+                price = adapter.price
+                side = adapter.side
                 if price > 0:
                     existing_orders[(round(price, self.price_precision), side)] = order
 
@@ -159,7 +162,7 @@ class GridExecutor:
             # 3. Отменяем ордера вне целевых уровней
             for (price, side), order in existing_orders.items():
                 if (price, side) not in target_set:
-                    order_id = order.get("orderId")
+                    order_id = OrderAdapter(order).order_id
                     if order_id:
                         self.client.cancel_order(self.symbol, order_id)
                         info(f"[GRID] Cancelled stale {side} order at {price}")
@@ -194,15 +197,16 @@ class GridExecutor:
                 return None
 
             # Определяем positionSide для hedge mode
-            position_side = "LONG" if side == "BUY" else "SHORT"
+            side_enum = OrderSide.BUY if side == "BUY" else OrderSide.SELL
+            position_side = PositionSide.LONG if side == "BUY" else PositionSide.SHORT
 
             order_id = self.client.place_order(
                 symbol=self.symbol,
-                side=side,
+                side=side_enum,
                 price=price,
                 quantity=quantity,
-                type="LIMIT",
-                positionSide=position_side
+                order_type=OrderType.LIMIT,
+                position_side=position_side,
             )
 
             if order_id:
@@ -251,12 +255,10 @@ class GridExecutor:
             symbol_pos = positions.get(norm_symbol, [])
 
             if symbol_pos:
-                pos = symbol_pos[0]
-                size = float(pos.get("size", 0))
-                side = pos.get("type", "buy")
+                adapter = PositionAdapter(symbol_pos[0])
 
                 # Inventory: positive для long, negative для short
-                self.state.inventory = size if side == "buy" else -size
+                self.state.inventory = adapter.size if adapter.is_long else -adapter.size
             else:
                 self.state.inventory = 0.0
 
@@ -264,7 +266,7 @@ class GridExecutor:
 
         except Exception as e:
             error(f"[GRID] Error updating inventory: {e}")
-            return self.state.inventory
+            raise ExchangeStateUnavailableError("Не удалось обновить GRID inventory") from e
 
     def check_emergency_conditions(self, current_price: float) -> bool:
         """
@@ -285,16 +287,17 @@ class GridExecutor:
             symbol_pos = positions.get(norm_symbol, [])
 
             if symbol_pos:
-                float(symbol_pos[0].get("pnl", 0))
-                entry = float(symbol_pos[0].get("entry", current_price))
+                adapter = PositionAdapter(symbol_pos[0])
+                entry = adapter.entry_price
 
                 if entry > 0:
-                    pnl_pct = ((current_price - entry) / entry) * 100
-                    if abs(pnl_pct) > self.emergency_stop_loss_pct:
+                    pnl_pct = calculate_pnl_pct(entry, current_price, adapter.direction)
+                    if pnl_pct <= -self.emergency_stop_loss_pct:
                         warning(f"[GRID] Emergency: PnL {pnl_pct:.2f}% exceeds limit")
                         return True
         except Exception as e:
             error(f"[GRID] Error checking emergency: {e}")
+            raise ExchangeStateUnavailableError("Не удалось проверить GRID emergency conditions") from e
 
         return False
 
@@ -308,8 +311,8 @@ class GridExecutor:
         warning(f"[GRID] EMERGENCY CLOSE triggered for {self.symbol}")
 
         try:
-            # 1. Отменяем все ордера
-            self.client.cancel_all_orders(self.symbol)
+            # 1. Отменяем только ордера, которыми владеет эта сетка.
+            success = self.cancel_managed_orders()
 
             # 2. Закрываем все позиции
             positions = self.client.get_positions()
@@ -317,20 +320,37 @@ class GridExecutor:
             symbol_pos = positions.get(norm_symbol, [])
 
             for pos in symbol_pos:
-                deal_id = pos.get("dealId")
+                deal_id = PositionAdapter(pos).position_id
                 if deal_id:
-                    self.client.close_position(self.symbol, deal_id)
+                    success = self.client.close_position(self.symbol, deal_id) and success
+                else:
+                    success = False
 
-            # 3. Сбрасываем состояние
-            self.state.inventory = 0.0
-            self.active_orders.clear()
+            # 3. Сбрасываем inventory только после подтверждённого закрытия.
+            if success:
+                self.state.inventory = 0.0
 
-            info(f"[GRID] Emergency close completed for {self.symbol}")
-            return True
+            if success:
+                info(f"[GRID] Emergency close completed for {self.symbol}")
+            return success
 
         except Exception as e:
             error(f"[GRID] Error during emergency close: {e}")
             return False
+
+    def cancel_managed_orders(self) -> bool:
+        """Отменяет только известные GRID-ордера, не затрагивая ручные заявки."""
+        success = True
+        for order_id in list(self.active_orders):
+            try:
+                if self.client.cancel_order(self.symbol, order_id):
+                    del self.active_orders[order_id]
+                else:
+                    success = False
+            except Exception as e:
+                success = False
+                warning(f"[GRID] Не удалось отменить managed order {order_id}: {e}")
+        return success
 
     def check_filled_orders(self) -> List[dict]:
         """
@@ -342,14 +362,29 @@ class GridExecutor:
         try:
             # Получаем текущие открытые ордера с биржи
             current_orders = self.client.get_open_orders(self.symbol)
-            current_order_ids = {o.get("orderId") for o in current_orders if o.get("orderId")}
+            current_order_ids = {
+                OrderAdapter(order).order_id for order in current_orders
+                if OrderAdapter(order).order_id
+            }
+            recent_orders = self.client.get_recent_orders(self.symbol, limit=100)
+            recent_by_id = {
+                OrderAdapter(order).order_id: OrderAdapter(order)
+                for order in recent_orders if OrderAdapter(order).order_id
+            }
 
             filled = []
 
             # Проверяем какие из наших активных ордеров исчезли (исполнены)
             for order_id, level in list(self.active_orders.items()):
-                if order_id not in current_order_ids:
-                    # Ордер исполнен или отменен
+                if str(order_id) not in current_order_ids:
+                    resolved = recent_by_id.get(str(order_id))
+                    if resolved is None:
+                        warning(f"[GRID] Состояние ордера {order_id} пока неизвестно; ждём reconciliation")
+                        continue
+                    if resolved.status != "FILLED":
+                        if resolved.status in {"CANCELED", "REJECTED", "EXPIRED"}:
+                            del self.active_orders[order_id]
+                        continue
                     filled.append({
                         "side": level.side,
                         "price": level.price,

@@ -8,6 +8,7 @@ Provides unified data structures across all exchange implementations.
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional, List, Dict, Any, Union
 from enum import Enum
 
@@ -57,6 +58,92 @@ class PositionStatus(Enum):
     LIQUIDATED = "LIQUIDATED"
 
 
+class MarketType(Enum):
+    """Тип торгового продукта."""
+    PERPETUAL = "perpetual"
+    SPOT = "spot"
+
+
+class SubmissionStatus(Enum):
+    """Результат отправки торговой команды."""
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    REJECTED = "REJECTED"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True)
+class ExchangeCapabilities:
+    """Явно описывает возможности клиента и запрещает опасные догадки."""
+    market_type: MarketType
+    market_data: bool = True
+    account_balances: bool = True
+    orders: bool = True
+    positions: bool = False
+    shorting: bool = False
+    leverage: bool = False
+    funding: bool = False
+    native_protection: bool = False
+    attached_protection: bool = False
+    automated_strategy: bool = False
+
+
+@dataclass(frozen=True)
+class InstrumentRules:
+    """Торговые ограничения инструмента в точных Decimal-единицах."""
+    symbol: str
+    exchange_symbol: str
+    base_asset: str
+    quote_asset: str
+    tradable: bool
+    price_step: Decimal
+    quantity_step: Decimal
+    min_quantity: Decimal
+    max_quantity: Decimal
+    min_notional: Decimal = Decimal("0")
+    max_notional: Decimal = Decimal("0")
+    contract_size: Decimal = Decimal("1")
+    min_leverage: int = 1
+    max_leverage: int = 1
+    leverage_tiers: tuple[Dict[str, Any], ...] = ()
+    order_types: tuple[str, ...] = ()
+    trade_side_type: int = 1
+
+
+@dataclass(frozen=True)
+class AssetBalance:
+    """Баланс отдельного Spot-актива."""
+    asset: str
+    free: Decimal
+    locked: Decimal = Decimal("0")
+
+    @property
+    def total(self) -> Decimal:
+        return self.free + self.locked
+
+
+@dataclass(frozen=True)
+class SpotOrderRequest:
+    """Spot-ордер с раздельными base и quote количествами."""
+    symbol: str
+    side: OrderSide
+    order_type: OrderType
+    base_quantity: Optional[Decimal] = None
+    quote_quantity: Optional[Decimal] = None
+    price: Optional[Decimal] = None
+    client_order_id: Optional[str] = None
+    test_only: bool = False
+
+
+@dataclass(frozen=True)
+class OrderSubmission:
+    """Результат отправки ордера с поддержкой неоднозначного состояния."""
+    status: SubmissionStatus
+    order_id: Optional[str] = None
+    client_order_id: Optional[str] = None
+    message: str = ""
+    raw_data: Dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class Position:
     """
@@ -75,6 +162,8 @@ class Position:
     margin: Optional[float] = None  # Залог
     created_at: Optional[datetime] = None  # Время открытия
     updated_at: Optional[datetime] = None  # Время обновления
+    exchange_quantity: Optional[float] = None  # Нативный объём биржи (контракты)
+    contract_size: Optional[float] = None  # Размер одного контракта
 
     @property
     def is_long(self) -> bool:

@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![Status](https://img.shields.io/badge/status-active-success)
 
-**Servo Engine** — профессиональная автоматизированная торговая система для торговли криптовалютными фьючерсами на бирже **BingX** (Standard & VST Futures).
+**Servo Engine** — автоматизированная торговая система для **BingX Perpetual** и **MEXC USDT‑M Perpetual**, а также REST-интеграция **MEXC Spot**.
 
 Система использует модели искусственного интеллекта (**Gemini**, **Claude**, **DeepSeek** и другие через **OpenRouter**) для принятия торговых решений, комбинируя детерминированный технический анализ с AI-подтверждением, адаптивным риск-менеджментом и многопроцессной архитектурой.
 
@@ -32,7 +32,7 @@
 >
 > Данное программное обеспечение предоставляется **"КАК ЕСТЬ"** в образовательных целях. Автор не несет ответственности за любые финансовые потери, понесенные в результате использования данного бота.
 >
-> 1. **ВСЕГДА** начинайте с демо-счета (BingX VST Futures).
+> 1. **ВСЕГДА** начинайте с демо-счета BingX либо MEXC в read-only режиме. У MEXC нет API sandbox.
 > 2. **НИКОГДА** не торгуйте на деньги, которые не можете позволить себе потерять.
 > 3. **НЕ ОСТАВЛЯЙТЕ** бота без присмотра на реальном счете на длительное время.
 
@@ -52,10 +52,13 @@ cp .env.example .env
 | Переменная | Описание |
 |------------|----------|
 | `MODE` | `demo` (VST) или `real` |
-| `EXCHANGE` | `bingx` |
+| `EXCHANGE` | `bingx` или `mexc` |
+| `MARKET_TYPE` | `perpetual` или `spot` (для BingX всегда `perpetual`) |
 | `OPENROUTER_API_KEY` | API ключ OpenRouter |
 | `BINGX_API_KEY` | API ключ BingX |
 | `BINGX_SECRET_KEY` | Секретный ключ BingX |
+| `MEXC_API_KEY` / `MEXC_SECRET_KEY` | Ключи MEXC без withdrawal permission |
+| `MEXC_ENABLE_LIVE_TRADING` | Явный предохранитель реальных MEXC-мутаций; default `false` |
 | `TELEGRAM_BOT_TOKEN` | Токен Telegram бота (опционально) |
 | `TELEGRAM_ADMIN_ID` | Ваш Telegram ID (опционально) |
 
@@ -158,7 +161,7 @@ cp .env.example .env
 - **OS**: Linux (рекомендуется), macOS, Windows (через WSL)
 - **Python**: 3.12+
 - **Podman**: Для контейнерного запуска, сборки и тестов
-- **Аккаунт BingX**: Standard Futures для торговли
+- **Аккаунт BingX** либо прошедший KYC аккаунт MEXC для Futures
 - **OpenRouter API key**: Для AI-анализа
 
 > [!IMPORTANT]
@@ -179,7 +182,7 @@ config/
 
 src/
 ├── core/               # Ядро: worker, collector, analyzer, risk manager
-├── exchanges/          # Биржи: bingx_client, ws_data_provider
+├── exchanges/          # BingX, MEXC Spot/Futures, REST/WS providers
 ├── prompts/            # Промпты: builder, strategies
 ├── telegram_panel/     # FastAPI + React панель
 └── utils/              # Logger, helpers
@@ -250,6 +253,16 @@ SERVO_RUNTIME_SUPERVISOR=0 ./scripts/run_trading_bot.sh
 ### Hot-reload
 
 `active.json` и `trading.json` проверяются каждые 30 секунд. Изменения применяются без перезапуска. Остальные файлы требуют перезапуска бота.
+
+### MEXC
+
+Один процесс обслуживает только одну пару `EXCHANGE` + `MARKET_TYPE`; её смена требует restart. Для полной автоторговли используйте `EXCHANGE=mexc`, `MARKET_TYPE=perpetual`, `MODE=real` и только после read-only проверки включите `MEXC_ENABLE_LIVE_TRADING=true`. Поддерживаются USDT‑M perpetual, hedge/one-way и isolated/cross.
+
+MEXC Spot предоставляет market data, asset balances, комиссии и Market/Limit/test REST-ордера через `MEXCSpotClient`, но намеренно не подключён к futures strategy pipeline: Spot-баланс не считается позицией бота, short/leverage/funding/TP-SL запрещены. Для ключа включайте только нужные account/order permissions, отключите withdrawal и задайте IP whitelist. Допустимые пары берутся из `config/active.json`, например:
+
+```json
+{"symbols": {"bingx": ["BTCUSDT"], "mexc": {"perpetual": ["BTCUSDT"], "spot": ["BTCUSDT"]}}}
+```
 
 ### Config loader
 

@@ -1398,15 +1398,19 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         # Пересчитываем pnl без leverage для совместимости со старыми порогами
         leverage = self.preset.get("leverage", 6)
         pnl_raw = pnl_pct / leverage if leverage > 0 else pnl_pct
+        reversal_profit = float(std_cfg.get("macd_reversal_profit", 0.5))
+        reversal_loss = float(std_cfg.get("macd_reversal_loss", -1.0))
+        rsi_overbought = float(std_cfg.get("rsi_overbought", 80))
+        rsi_oversold = float(std_cfg.get("rsi_oversold", 20))
 
         if pos_type == "BUY" and macd_hist < 0:
-            if pnl_raw >= 0.5:
+            if pnl_raw >= reversal_profit:
                 return {
                     "should_close": True,
                     "reason": f"MACD\u2193 + profit {pnl_raw:.1f}%",
                     "urgency": "medium",
                 }
-            elif pnl_raw < -1.0:
+            elif pnl_raw < reversal_loss:
                 return {
                     "should_close": True,
                     "reason": f"MACD\u2193 + loss {pnl_raw:.1f}%",
@@ -1414,26 +1418,26 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 }
 
         if pos_type == "SELL" and macd_hist > 0:
-            if pnl_raw >= 0.5:
+            if pnl_raw >= reversal_profit:
                 return {
                     "should_close": True,
                     "reason": f"MACD\u2191 + profit {pnl_raw:.1f}%",
                     "urgency": "medium",
                 }
-            elif pnl_raw < -1.0:
+            elif pnl_raw < reversal_loss:
                 return {
                     "should_close": True,
                     "reason": f"MACD\u2191 + loss {pnl_raw:.1f}%",
                     "urgency": "high",
                 }
 
-        if pos_type == "BUY" and rsi > 80:
+        if pos_type == "BUY" and rsi > rsi_overbought:
             return {
                 "should_close": True,
                 "reason": f"RSI {rsi:.0f} > 80 (overbought)",
                 "urgency": "high",
             }
-        if pos_type == "SELL" and rsi < 20:
+        if pos_type == "SELL" and rsi < rsi_oversold:
             return {
                 "should_close": True,
                 "reason": f"RSI {rsi:.0f} < 20 (oversold)",

@@ -4,7 +4,7 @@ from src.config import SYMBOLS, DATA_DIR, ENABLE_NEWS, CHART_RANGES, DEFAULT_CHA
 from src.utils.logger import info, error, warning
 from src.utils.helpers import get_filename
 from src.utils.news_api import get_news_for_symbol
-from src.exchanges.exchange_factory import get_exchange_client
+from src.exchanges.exchange_factory import get_market_data_client as get_exchange_client
 
 def ensure_dirs():
     """Создает необходимые директории"""
@@ -150,10 +150,6 @@ def process_symbol(symbol):
 def main():
     """Основная функция сбора данных"""
     ensure_dirs()
-
-    client = get_exchange_client()
-    if not client.check_prerequisites():
-        return
 
     # Check config for parallel collection
     from src.config import ENABLE_PARALLEL_COLLECTION

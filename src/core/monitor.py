@@ -4,14 +4,16 @@ from src.config import *
 from . import executor
 from src.utils.logger import info, error, warning, log_trade
 from src.exchanges.exchange_factory import get_exchange_client
+from src.core.signals.utils import PositionAdapter
 
 
 def _format_pnl_with_fees(pnl, position):
     """Formats PnL string with estimated fee breakdown."""
     from src.config import TRADING_FEE_TAKER
     try:
-        size = float(position.get("size", 0))
-        entry = float(position.get("entry", position.get("avgPrice", 0)))
+        adapter = PositionAdapter(position)
+        size = adapter.size
+        entry = adapter.entry_price
         if size > 0 and entry > 0:
             position_value = size * entry
             round_trip_fee = position_value * (TRADING_FEE_TAKER / 100.0) * 2.0
@@ -64,20 +66,11 @@ def monitor_symbol(symbol, all_positions=None):
         # Log details for this symbol
         for i, position in enumerate(position_list):
             try:
-                created_time = position.get("created", "")
-                pnl = position.get("pnl", 0)
+                adapter = PositionAdapter(position)
+                created_date = adapter.created_at
+                pnl = adapter.unrealized_pnl
 
-                if created_time:
-                    try:
-                        if isinstance(created_time, (int, float)):
-                             # Timestamp in ms
-                             created_date = datetime.fromtimestamp(created_time / 1000)
-                        else:
-                            created_date = datetime.fromisoformat(created_time.replace('Z', '+00:00'))
-                    except ValueError:
-                         warning(f"⚠️ {symbol}: Could not parse date: {created_time}")
-                         continue
-
+                if created_date:
                     # Timezone naive vs aware fix
                     if created_date.tzinfo:
                          now = datetime.now(created_date.tzinfo)
@@ -121,22 +114,11 @@ def main():
         # Теперь positions[sym] это список позиций
         for i, position in enumerate(position_list):
             try:
-                created_time = position.get("created", "")
-                str(position.get("dealId", ""))
-                pnl = position.get("pnl", 0)
+                adapter = PositionAdapter(position)
+                created_date = adapter.created_at
+                pnl = adapter.unrealized_pnl
 
-                if created_time:
-                    # Парсим время создания позиции
-                    try:
-                        if isinstance(created_time, (int, float)):
-                             # Timestamp in ms
-                             created_date = datetime.fromtimestamp(created_time / 1000)
-                        else:
-                            created_date = datetime.fromisoformat(created_time.replace('Z', '+00:00'))
-                    except ValueError:
-                         warning(f"⚠️ Could not parse date: {created_time}")
-                         continue
-
+                if created_date:
                     now = datetime.now(created_date.tzinfo) if created_date.tzinfo else datetime.now()
                     minutes_held = (now - created_date).total_seconds() / 60
 

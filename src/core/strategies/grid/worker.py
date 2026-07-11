@@ -109,8 +109,7 @@ def run_grid_worker(symbol: str, config: dict, runtime_config: dict = None):
                 # 3.5.1 Если ADX показывает сильный тренд - ставим сетку на паузу
                 if should_pause:
                     warning(f"[GRID] Strong trend detected (ADX={adx_info['adx']:.1f}) - pausing grid for 60s")
-                    # Отменяем все ордера при паузе
-                    client.cancel_all_orders(symbol)
+                    grid.cancel_managed_orders()
                     time.sleep(60)
                     continue
 
@@ -304,8 +303,8 @@ def _first_symbol_position(symbol: str, positions: Dict):
 def _graceful_shutdown(grid: GridExecutor):
     """Graceful shutdown - отменяем ордера при остановке."""
     try:
-        info("[GRID] Graceful shutdown - cancelling all orders...")
-        grid.client.cancel_all_orders(grid.symbol)
+        info("[GRID] Graceful shutdown - cancelling managed orders...")
+        grid.cancel_managed_orders()
         info("[GRID] Shutdown complete.")
     except Exception as e:
         error(f"[GRID] Error during shutdown: {e}")

@@ -20,6 +20,7 @@ from urllib.parse import urlencode
 from typing import Optional, List, Dict
 
 from ..exchange_client import ExchangeClient
+from ..errors import ExchangeStateUnavailableError
 from ..config.base import ExchangeConfig
 from ..dto.models import (
     Position,
@@ -512,7 +513,10 @@ class BingXClient(ExchangeClient):
                 self._balance_cache_time = now
                 return balance
 
-            return Balance(total_balance=0.0, available_balance=0.0)
+            code = response.get("code") if isinstance(response, dict) else None
+            raise ExchangeStateUnavailableError(
+                f"BingX balance недоступен или невалиден (code={code})"
+            )
 
     def get_commission_rate(self, symbol: str) -> Optional[CommissionRate]:
         """Получить ставки комиссий."""
@@ -609,41 +613,46 @@ class BingXClient(ExchangeClient):
 
         response = self._make_request("get", endpoint)
 
+        if not response or response.get("code") != 0:
+            code = response.get("code") if isinstance(response, dict) else None
+            raise ExchangeStateUnavailableError(
+                f"BingX positions недоступны или невалидны (code={code})"
+            )
+        data = response.get("data", [])
+        if not isinstance(data, list):
+            raise ExchangeStateUnavailableError("BingX positions вернул не список")
+
         positions: PositionsDict = {}
+        for pos in data:
+            size = float(pos.get("positionAmt", 0))
+            if size == 0:
+                continue
 
-        if response and response.get("code") == 0:
-            data = response.get("data", [])
+            # Normalize symbol
+            symbol = pos.get("symbol", "").replace("-", "")
 
-            for pos in data:
-                size = float(pos.get("positionAmt", 0))
-                if size == 0:
-                    continue
+            if symbol not in positions:
+                positions[symbol] = []
 
-                # Normalize symbol
-                symbol = pos.get("symbol", "").replace("-", "")
+            # Determine side
+            pos_side = pos.get("positionSide", "").upper()
+            if pos_side == "SHORT":
+                side = PositionSide.SHORT
+            elif pos_side == "LONG":
+                side = PositionSide.LONG
+            else:
+                side = PositionSide.LONG if size > 0 else PositionSide.SHORT
 
-                if symbol not in positions:
-                    positions[symbol] = []
-
-                # Determine side
-                pos_side = pos.get("positionSide", "").upper()
-                if pos_side == "SHORT":
-                    side = PositionSide.SHORT
-                elif pos_side == "LONG":
-                    side = PositionSide.LONG
-                else:
-                    side = PositionSide.LONG if size > 0 else PositionSide.SHORT
-
-                positions[symbol].append(Position(
-                    symbol=symbol,
-                    side=side,
-                    size=abs(size),
-                    entry_price=float(pos.get("avgPrice", 0)),
-                    unrealized_pnl=float(pos.get("unrealizedProfit", 0)),
-                    leverage=int(float(pos.get("leverage", 0))) or None,
-                    position_id=pos.get("positionId", ""),
-                    mark_price=float(pos.get("markPrice", 0)) or None,
-                ))
+            positions[symbol].append(Position(
+                symbol=symbol,
+                side=side,
+                size=abs(size),
+                entry_price=float(pos.get("avgPrice", 0)),
+                unrealized_pnl=float(pos.get("unrealizedProfit", 0)),
+                leverage=int(float(pos.get("leverage", 0))) or None,
+                position_id=pos.get("positionId", ""),
+                mark_price=float(pos.get("markPrice", 0)) or None,
+            ))
 
         with self._cache_lock:
             self._positions_cache = positions
@@ -686,9 +695,6 @@ class BingXClient(ExchangeClient):
             return False
 
         info(f"📉 Closing {percentage*100}% of position {position_id}")
-
-        # Cancel existing SL/TP
-        self.cancel_all_orders(symbol)
 
         endpoint = "/openApi/swap/v2/trade/order"
         params = {

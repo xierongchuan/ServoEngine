@@ -16,13 +16,14 @@ import os
 import time
 import threading
 import traceback
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from src.config import SCALP_SETTINGS, ERROR_HANDLING, DATA_DIR
 from src.config import should_reload_config, reload_bot_config
 from src.config import AI_VETO_OVERRIDE, AI_REGIME_OVERRIDE, AI_MODEL
 from src.utils.logger import info, error, warning
 from src.utils.helpers import get_filename
+from src.core.signals.utils import PositionAdapter, calculate_pnl_pct
 
 
 class TrailingStopManager:
@@ -403,7 +404,8 @@ class ScalpEngine:
         # Shared state between fast/slow loops (protected by lock)
         self._lock = threading.Lock()
         self._regime: Optional[Dict] = None
-        self._position: Optional[Dict] = None
+        self._position: Optional[Any] = None
+        self._position_state_available: bool = False
         self._position_open_time: float = 0.0
         self._pending_veto: Optional[Dict] = None
         self._pending_veto_cycle: int = 0  # Fast loop cycle when veto was queued
@@ -444,6 +446,11 @@ class ScalpEngine:
         self._veto_skip_reasons: Dict[str, int] = {}
         self._last_veto_skip_log_cycle: int = 0
         self._veto_skip_log_interval: int = 40  # ~60s
+
+        # REST fallback не должен обращаться к API на каждом fast-loop tick.
+        self._rest_candle_cache: list = []
+        self._rest_candle_cache_time: float = 0.0
+        self._rest_candle_cache_ttl: float = 5.0
 
         # Lazy-loaded components
         self._analyzer = None
@@ -520,13 +527,16 @@ class ScalpEngine:
                 with self._lock:
                     position = self._position
                     regime = self._regime
+                    position_state_available = self._position_state_available
 
                 # 3. Position management (if in position)
                 if position:
                     self._manage_position(indicators, position)
-                else:
+                elif position_state_available:
                     # 4. Signal detection (if no position)
                     self._check_entry(indicators, regime)
+                elif self._fast_cycle % 60 == 0:
+                    warning(f"[SCALP] {self.symbol}: Вход пропущен — состояние позиций недоступно")
 
                 self._fast_cycle += 1
 
@@ -546,6 +556,7 @@ class ScalpEngine:
             except Exception as e:
                 error(f"[SCALP] {self.symbol}: Fast loop error: {e}")
                 error(traceback.format_exc())
+                self._fast_cycle += 1
                 time.sleep(ERROR_HANDLING.get("cycle_error_fallback_sleep", 5))
 
     def _slow_loop(self):
@@ -611,19 +622,19 @@ class ScalpEngine:
 
             time.sleep(self._slow_interval)
 
-    def _manage_position(self, indicators: Dict, position: Dict):
+    def _manage_position(self, indicators: Dict, position: Any):
         """Fast-loop position management: trailing, time exit, exit signals."""
         current_price = indicators["current_price"]
         atr = indicators.get("atr", 0)
 
-        entry_price = float(position.get("entry", position.get("avgPrice", 0)))
-        pos_type = position.get("type", "").upper()
+        adapter = PositionAdapter(position)
+        entry_price = adapter.entry_price
+        pos_type = adapter.direction
+        if entry_price <= 0:
+            raise ValueError(f"Некорректная цена входа позиции: {entry_price}")
 
         # PnL
-        if pos_type == "BUY":
-            pnl_pct = (current_price - entry_price) / entry_price * 100
-        else:
-            pnl_pct = (entry_price - current_price) / entry_price * 100
+        pnl_pct = calculate_pnl_pct(entry_price, current_price, pos_type)
 
         # 1. Time exit check
         hold_time_sec = time.time() - self._position_open_time
@@ -829,21 +840,22 @@ class ScalpEngine:
             error(f"[SCALP] {self.symbol}: Entry FAILED for {direction}")
             self._trailing.reset()
 
-    def _close_position(self, position: Dict, reason: str):
+    def _close_position(self, position: Any, reason: str):
         """Close the current position."""
-        deal_id = position.get("dealId", "")
-        entry_price = float(position.get("entry", position.get("avgPrice", 0)))
-        pos_type = position.get("type", "").upper()
+        adapter = PositionAdapter(position)
+        deal_id = adapter.position_id
+        entry_price = adapter.entry_price
+        pos_type = adapter.direction
+        if not deal_id:
+            error(f"[SCALP] {self.symbol}: Закрытие заблокировано — отсутствует position_id")
+            return
 
         try:
             result = self._client.close_position(self.symbol, deal_id, percentage=1.0)
             if result:
                 # Calculate PnL for session tracking
-                current_price = float(position.get("markPrice", entry_price))
-                if pos_type == "BUY":
-                    pnl_pct = (current_price - entry_price) / entry_price * 100
-                else:
-                    pnl_pct = (entry_price - current_price) / entry_price * 100
+                current_price = adapter.mark_price
+                pnl_pct = calculate_pnl_pct(entry_price, current_price, pos_type)
 
                 self._session.record_exit(pnl_pct)
                 self._trailing.reset()
@@ -879,16 +891,19 @@ class ScalpEngine:
                 if self._position:
                     return True  # Position appeared → order filled
 
-        # Timeout — cancel the order
+        # Timeout — отменяем только созданный этим engine ордер.
         try:
-            self._client.cancel_all_orders(self.symbol)
+            self._client.cancel_order(self.symbol, order_id)
         except Exception as e:
             warning(f"[SCALP] {self.symbol}: Failed to cancel limit order: {e}")
         return False
 
-    def _partial_close(self, position: Dict, pct: float, reason: str):
+    def _partial_close(self, position: Any, pct: float, reason: str):
         """Close a percentage of the current position."""
-        deal_id = position.get("dealId", "")
+        deal_id = PositionAdapter(position).position_id
+        if not deal_id:
+            warning(f"[SCALP] {self.symbol}: Partial close заблокирован — отсутствует position_id")
+            return
         try:
             result = self._client.close_position(self.symbol, deal_id, percentage=pct)
             if result:
@@ -898,10 +913,9 @@ class ScalpEngine:
         except Exception as e:
             warning(f"[SCALP] {self.symbol}: Partial close error: {e}")
 
-    def _update_sl_on_exchange(self, position: Dict, new_sl: float):
+    def _update_sl_on_exchange(self, position: Any, new_sl: float):
         """Update stop loss on exchange (throttled)."""
-        pos_type = position.get("type", "").upper()
-        pos_side = "LONG" if pos_type == "BUY" else "SHORT"
+        pos_side = "LONG" if PositionAdapter(position).is_long else "SHORT"
 
         try:
             if hasattr(self._client, "set_sl_tp"):
@@ -935,12 +949,20 @@ class ScalpEngine:
         """Sync position state from exchange."""
         try:
             positions = self._client.get_positions()
-            symbol_positions = positions.get(self.symbol, [])
+            if not isinstance(positions, dict):
+                raise TypeError(f"get_positions вернул {type(positions).__name__}, ожидался dict")
+            normalized_symbol = self.symbol.upper().replace("-", "").replace("/", "").replace("_", "")
+            symbol_positions = next((
+                value for key, value in positions.items()
+                if str(key).upper().replace("-", "").replace("/", "").replace("_", "") == normalized_symbol
+            ), [])
             real_position = symbol_positions[0] if symbol_positions else None
+            adapter = PositionAdapter(real_position) if real_position is not None else None
 
             with self._lock:
                 old_pos = self._position
                 self._position = real_position
+                self._position_state_available = True
 
                 # Detect position closed externally
                 if old_pos and not real_position:
@@ -953,10 +975,10 @@ class ScalpEngine:
                     self._position_open_time = self._position_open_time or time.time()
                     # Initialize trailing if not already done
                     if not self._trailing._pos_side:
-                        entry = float(real_position.get("entry", real_position.get("avgPrice", 0)))
+                        entry = adapter.entry_price
                         atr = self._analyzer.get_snapshot().get("atr", 0) if self._analyzer else 0
                         if entry > 0 and atr > 0:
-                            side = real_position.get("type", "BUY").upper()
+                            side = adapter.direction
                             self._trailing.init_position(side, entry, atr)
 
             # Sync with trade tracker
@@ -964,6 +986,8 @@ class ScalpEngine:
                 self._tracker.sync_position(self.symbol, real_position, exchange_client=self._client)
 
         except Exception as e:
+            with self._lock:
+                self._position_state_available = False
             warning(f"[SCALP] {self.symbol}: Position sync error: {e}")
 
     def _update_regime_deterministic(self):
@@ -1247,7 +1271,7 @@ class ScalpEngine:
 
     def _get_candles(self, limit: int = 5) -> list:
         """Get candles from WS cache, fallback to REST."""
-        from src.exchanges.bingx_ws_data_provider import get_klines_from_shared_cache, is_cache_ready
+        from src.exchanges.ws_provider_factory import get_klines_from_shared_cache, is_cache_ready
 
         if is_cache_ready(self.symbol):
             candles = get_klines_from_shared_cache(self.symbol, limit)
@@ -1258,12 +1282,20 @@ class ScalpEngine:
                     info(f"[SCALP-CACHE] {self.symbol}: Got {len(candles)} candles from cache, last_price={last_price}")
                 return candles
 
+        now = time.time()
+        if self._rest_candle_cache and now - self._rest_candle_cache_time < self._rest_candle_cache_ttl:
+            if len(self._rest_candle_cache) >= limit:
+                return self._rest_candle_cache[-limit:]
+
         # REST fallback (slower, should be rare)
         try:
             candles = self._client.get_kline_data(self.symbol, interval="1m", limit=limit)
+            if candles:
+                self._rest_candle_cache = list(candles)
+                self._rest_candle_cache_time = now
             if candles and self._fast_cycle % 60 == 0:
                 info(f"[SCALP-CACHE] {self.symbol}: REST fallback, got {len(candles)} candles")
-            return candles if candles else []
+            return list(candles)[-limit:] if candles else []
         except Exception as e:
             warning(f"[SCALP] {self.symbol}: Candle fetch failed: {e}")
             return []

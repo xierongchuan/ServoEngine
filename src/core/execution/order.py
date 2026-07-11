@@ -8,6 +8,7 @@ from src.config import *
 from src.utils.logger import info, error, warning, log_trade
 from src.exchanges.exchange_factory import get_exchange_client
 from src.exchanges.dto.models import Balance, OrderType, PositionSide
+from src.exchanges.errors import ExchangeStateUnavailableError
 
 
 def _save_sl_tp(symbol: str, sl: float, tp: float):
@@ -39,7 +40,7 @@ def get_open_positions() -> Dict:
         return positions
     except Exception as e:
         error(f"❌ Ошибка получения позиций: {str(e)}")
-        return {}
+        raise ExchangeStateUnavailableError("Не удалось достоверно загрузить позиции") from e
 
 
 def create_order(
@@ -156,21 +157,22 @@ def create_order(
 
         order_type_enum = OrderType.MARKET if order_type == "MARKET" else OrderType.LIMIT
 
+        attached_protection = client.capabilities.attached_protection is True
         order_id = client.place_order(
             symbol=symbol,
             side=direction,
             price=price,
             quantity=quantity,
             order_type=order_type_enum,
-            sl=None,
-            tp=None,
+            sl=sl_price if attached_protection else None,
+            tp=tp_price if attached_protection else None,
             leverage=leverage,
         )
 
         if order_id:
             client.invalidate_cache("positions")
 
-            if tp_price or sl_price:
+            if (tp_price or sl_price) and not attached_protection:
                 info(f"🔄 Setting SL/TP for new order {order_id}...")
                 try:
                     direction_str = direction.value if hasattr(direction, 'value') else direction

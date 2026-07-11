@@ -240,7 +240,20 @@ def resolve_symbol_config(symbol: str, strategy: Optional[str] = None, profile: 
     return config
 
 
-def get_strategy_instances(exchange: str = 'bingx') -> List[StrategyInstance]:
+def _current_exchange_market(exchange: Optional[str] = None) -> tuple[str, str]:
+    if exchange is not None:
+        return exchange, os.getenv('MARKET_TYPE', 'perpetual').lower()
+    return os.getenv('EXCHANGE', 'bingx').lower(), os.getenv('MARKET_TYPE', 'perpetual').lower()
+
+
+def _symbols_for_market(symbols_config: Dict[str, Any], exchange: str, market_type: str) -> List[str]:
+    symbols = symbols_config.get(exchange, ['BTCUSDT'])
+    if isinstance(symbols, dict):
+        symbols = symbols.get(market_type, ['BTCUSDT'])
+    return symbols
+
+
+def get_strategy_instances(exchange: Optional[str] = None) -> List[StrategyInstance]:
     """Get enabled strategy instances from active.json.
 
     Preferred schema:
@@ -251,6 +264,7 @@ def get_strategy_instances(exchange: str = 'bingx') -> List[StrategyInstance]:
     Legacy fallback:
         active.strategy + active.symbols[exchange] + active.symbol_profiles
     """
+    exchange, market_type = _current_exchange_market(exchange)
     active = load_active_config()
     disabled_symbols = {normalize_symbol_key(symbol) for symbol in active.get('disabled_symbols', [])}
     raw_instances = active.get('strategy_instances') or []
@@ -259,7 +273,7 @@ def get_strategy_instances(exchange: str = 'bingx') -> List[StrategyInstance]:
         instances = [StrategyInstance.from_dict(item) for item in raw_instances]
     else:
         symbols_config = active.get('symbols', {})
-        symbols = symbols_config.get(exchange, ['BTCUSDT'])
+        symbols = _symbols_for_market(symbols_config, exchange, market_type)
         strategy = active.get('strategy', 'MACDX')
         instances = build_legacy_instances(symbols, strategy, active.get('symbol_profiles', {}))
 
@@ -269,8 +283,9 @@ def get_strategy_instances(exchange: str = 'bingx') -> List[StrategyInstance]:
     ]
 
 
-def resolve_strategy_instance_config(instance: Union[StrategyInstance, Dict[str, Any]], exchange: str = 'bingx') -> Dict[str, Any]:
+def resolve_strategy_instance_config(instance: Union[StrategyInstance, Dict[str, Any]], exchange: Optional[str] = None) -> Dict[str, Any]:
     """Build legacy-compatible BOT_CONFIG for one StrategyInstance."""
+    exchange, market_type = _current_exchange_market(exchange)
     strategy_instance = StrategyInstance.from_dict(instance) if isinstance(instance, dict) else instance
 
     # Собираем полный resolved config для конкретного symbol/strategy/profile.
@@ -285,7 +300,11 @@ def resolve_strategy_instance_config(instance: Union[StrategyInstance, Dict[str,
     legacy['STRATEGY_INSTANCE_ID'] = strategy_instance.id
     legacy['STRATEGY_INSTANCE'] = strategy_instance.to_dict()
     legacy['SYMBOLS'] = [strategy_instance.symbol]
-    legacy['EXCHANGE_SYMBOLS'] = {exchange: [strategy_instance.symbol]}
+    # Старый BingX shape сохраняется без миграции; новые рынки используют второй уровень.
+    if exchange == "bingx":
+        legacy['EXCHANGE_SYMBOLS'] = {exchange: [strategy_instance.symbol]}
+    else:
+        legacy['EXCHANGE_SYMBOLS'] = {exchange: {market_type: [strategy_instance.symbol]}}
     legacy['DISABLED_SYMBOLS'] = []
 
     preset = legacy.get('STYLE_PRESETS', {}).get(strategy_instance.strategy, {})
@@ -303,11 +322,12 @@ def get_strategy() -> str:
     return active.get('strategy', 'MACDX')
 
 
-def get_symbols(exchange: str = 'bingx') -> List[str]:
+def get_symbols(exchange: Optional[str] = None) -> List[str]:
     """Get list of active symbols for an exchange."""
+    exchange, market_type = _current_exchange_market(exchange)
     active = load_active_config()
     symbols_config = active.get('symbols', {})
-    return symbols_config.get(exchange, ['BTCUSDT'])
+    return _symbols_for_market(symbols_config, exchange, market_type)
 
 
 def get_disabled_symbols() -> List[str]:

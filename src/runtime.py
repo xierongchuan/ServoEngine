@@ -77,7 +77,10 @@ def apply_legacy_runtime_config(config_module: Any, bot_config: Dict[str, Any]) 
 
     config_module.DISABLED_SYMBOLS = bot_config.get("DISABLED_SYMBOLS", [])
     config_module.EXCHANGE_SYMBOLS = bot_config.get("EXCHANGE_SYMBOLS", {})
-    config_module.SYMBOLS = bot_config.get("SYMBOLS", bot_config.get("EXCHANGE_SYMBOLS", {}).get(config_module.EXCHANGE, []))
+    exchange_symbols = bot_config.get("EXCHANGE_SYMBOLS", {}).get(config_module.EXCHANGE, [])
+    if isinstance(exchange_symbols, dict):
+        exchange_symbols = exchange_symbols.get(getattr(config_module, "MARKET_TYPE", "perpetual"), [])
+    config_module.SYMBOLS = bot_config.get("SYMBOLS", exchange_symbols)
 
     config_module.POSITION_SIZE_PERCENT = bot_config.get("POSITION_SIZE_PERCENT", 5.0)
     config_module.MIN_TRADE_AMOUNT_USDT = bot_config.get("MIN_TRADE_AMOUNT_USDT", 10.0)
@@ -105,7 +108,9 @@ def apply_legacy_runtime_config(config_module: Any, bot_config: Dict[str, Any]) 
     config_module.CHART_SETTINGS = bot_config.get("CHART_SETTINGS", {})
     config_module.CHART_RANGES = bot_config.get("CHART_RANGES", {})
     config_module.DEFAULT_CHART_RANGE = bot_config.get("DEFAULT_CHART_RANGE", config_module.DEFAULT_CHART_RANGE)
-    config_module.PLOTTER_RANGES = bot_config.get("PLOTTER_RANGES", {})
+    config_module.PLOTTER_RANGES = bot_config.get("PLOTTER_RANGES") or bot_config.get(
+        "CHART_RANGES", config_module.CHART_RANGES
+    )
     config_module.DEFAULT_PLOTTER_RANGE = bot_config.get("DEFAULT_PLOTTER_RANGE", config_module.DEFAULT_PLOTTER_RANGE)
     config_module.ERROR_HANDLING = bot_config.get("ERROR_HANDLING", {"cycle_error_fallback_sleep": 5})
     config_module.MOMENTUM_STRATEGY = bot_config.get("MOMENTUM_STRATEGY", {})
@@ -120,6 +125,9 @@ def apply_legacy_runtime_config(config_module: Any, bot_config: Dict[str, Any]) 
 
     exchange_fees = bot_config.get("EXCHANGE_FEES", {"bingx": {"maker": 0.02, "taker": 0.05}})
     fee_value = exchange_fees.get(config_module.EXCHANGE, 0.05)
+    market_type = getattr(config_module, "MARKET_TYPE", "perpetual")
+    if isinstance(fee_value, dict) and market_type in fee_value:
+        fee_value = fee_value[market_type]
     if isinstance(fee_value, dict):
         config_module.TRADING_FEE_MAKER = fee_value.get("maker", 0.02)
         config_module.TRADING_FEE_TAKER = fee_value.get("taker", 0.05)

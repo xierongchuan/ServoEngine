@@ -81,6 +81,7 @@ def _make_settings(**overrides):
                 "fallback_on_error": "skip",
             },
             "emergency": {
+                "enabled": True,
                 "max_loss_atr": 2.0,
                 "max_loss_pct": 3.0,
                 "max_hold_candles": 80,
@@ -92,6 +93,13 @@ def _make_settings(**overrides):
                 "RANGING": {"weakening_threshold": 0.60, "trailing_drawdown": 0.35, "impulse_min_profit": 0.8},
                 "VOLATILE": {"weakening_threshold": 0.55, "trailing_drawdown": 0.30, "impulse_min_profit": 1.0},
                 "TRANSITIONAL": {"weakening_threshold": 0.50, "trailing_drawdown": 0.40, "impulse_min_profit": 1.5},
+            },
+            "standard_exits": {
+                "enabled": True,
+                "rsi_overbought": 80,
+                "rsi_oversold": 20,
+                "macd_reversal_profit": 0.5,
+                "macd_reversal_loss": -1.0,
             },
         },
     }

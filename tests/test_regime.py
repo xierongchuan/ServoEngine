@@ -265,80 +265,93 @@ class TestClassifyRegime:
             "NO_TREND", "NORMAL", "CHOPPY", 3.0
         )
         assert regime == "VOLATILE"
-        assert confidence == 0.9
+        assert confidence == pytest.approx(0.84)
+
+    def test_volatile_confidence_reaches_one_only_at_extreme_atr(self, detector):
+        _, confidence = detector._classify_regime(
+            "NO_TREND", "NORMAL", "CHOPPY", 5.0
+        )
+        assert confidence == 1.0
 
     def test_trending_strong_directional(self, detector):
         regime, confidence = detector._classify_regime(
-            "STRONG_TREND", "NORMAL", "DIRECTIONAL", 1.0
+            "STRONG_TREND", "NORMAL", "DIRECTIONAL", 1.0,
+            trend_strength=1.0, directional_consistency=0.75,
         )
         assert regime == "TRENDING"
-        assert confidence == 0.85
+        assert confidence == pytest.approx(0.95)
 
     def test_trending_moderate_expanded_directional(self, detector):
         regime, confidence = detector._classify_regime(
-            "MODERATE_TREND", "EXPANDED", "DIRECTIONAL", 1.0
+            "MODERATE_TREND", "EXPANDED", "DIRECTIONAL", 1.0,
+            trend_strength=0.65, directional_consistency=0.75,
         )
         assert regime == "TRENDING"
-        assert confidence == 0.85
+        assert confidence == pytest.approx(0.8975)
 
     def test_ranging_no_trend_compressed_choppy(self, detector):
         regime, confidence = detector._classify_regime(
             "NO_TREND", "COMPRESSED", "CHOPPY", 1.0
         )
         assert regime == "RANGING"
-        assert confidence == 0.8
+        assert confidence == 1.0
 
     def test_ranging_weak_trend_normal_mixed(self, detector):
         regime, confidence = detector._classify_regime(
-            "WEAK_TREND", "NORMAL", "MIXED", 1.0
+            "WEAK_TREND", "NORMAL", "MIXED", 1.0,
+            trend_strength=0.25, directional_consistency=0.4,
         )
         assert regime == "RANGING"
-        assert confidence == 0.8
+        assert confidence == pytest.approx(0.835)
 
     def test_volatile_expanded_no_trend(self, detector):
         regime, confidence = detector._classify_regime(
             "NO_TREND", "EXPANDED", "DIRECTIONAL", 1.5
         )
         assert regime == "VOLATILE"
-        assert confidence == 0.75
+        assert confidence == 0.85
 
     def test_volatile_expanded_weak_trend(self, detector):
         regime, confidence = detector._classify_regime(
             "WEAK_TREND", "EXPANDED", "DIRECTIONAL", 1.5
         )
         assert regime == "VOLATILE"
-        assert confidence == 0.75
+        assert confidence == 0.85
 
     def test_strong_trend_choppy_is_ranging(self, detector):
         # Strong trend + choppy = trend exhaustion, treat as ranging
         regime, confidence = detector._classify_regime(
-            "STRONG_TREND", "COMPRESSED", "CHOPPY", 1.0
+            "STRONG_TREND", "COMPRESSED", "CHOPPY", 1.0,
+            trend_strength=1.0,
         )
         assert regime == "RANGING"
-        assert confidence == 0.6
+        assert confidence == 0.8
 
     def test_moderate_trend_choppy_is_ranging(self, detector):
         regime, confidence = detector._classify_regime(
-            "MODERATE_TREND", "COMPRESSED", "CHOPPY", 1.0
+            "MODERATE_TREND", "COMPRESSED", "CHOPPY", 1.0,
+            trend_strength=0.65,
         )
         assert regime == "RANGING"
-        assert confidence == 0.6
+        assert confidence == pytest.approx(0.695)
 
     def test_compressed_directional_is_trending(self, detector):
         # Compressed + directional = pre-breakout, treat as trending
         regime, confidence = detector._classify_regime(
-            "NO_TREND", "COMPRESSED", "DIRECTIONAL", 1.0
+            "NO_TREND", "COMPRESSED", "DIRECTIONAL", 1.0,
+            directional_consistency=0.75,
         )
         assert regime == "TRENDING"
-        assert confidence == 0.55
+        assert confidence == pytest.approx(0.725)
 
     def test_moderate_trend_normal_mixed_is_trending(self, detector):
         # Moderate trend + normal vol + mixed = still tradeable as trending
         regime, confidence = detector._classify_regime(
-            "MODERATE_TREND", "NORMAL", "MIXED", 1.0
+            "MODERATE_TREND", "NORMAL", "MIXED", 1.0,
+            trend_strength=0.65, directional_consistency=0.4,
         )
         assert regime == "TRENDING"
-        assert confidence == 0.65
+        assert confidence == pytest.approx(0.77)
 
     def test_atr_extreme_overrides_everything(self, detector):
         # Even with strong trend + directional, extreme ATR -> VOLATILE
@@ -346,7 +359,7 @@ class TestClassifyRegime:
             "STRONG_TREND", "NORMAL", "DIRECTIONAL", 2.6
         )
         assert regime == "VOLATILE"
-        assert confidence == 0.9
+        assert confidence == pytest.approx(0.808)
 
 
 class TestDetect:

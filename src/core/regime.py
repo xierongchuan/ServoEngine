@@ -283,8 +283,9 @@ class MarketRegimeDetector:
         """
         # Правило 1: Экстремальная волатильность -> VOLATILE
         if atr_ratio > 2.5:
-            # Уверенность растёт с уровнем ATR ratio
-            confidence = 0.8 + min((atr_ratio - 2.5) / 2.5, 0.2)
+            # Уверенность плавно растёт от 0.8 при ATR=2.5 до 1.0 при ATR=5.0.
+            normalized_excess = min(max((atr_ratio - 2.5) / 2.5, 0.0), 1.0)
+            confidence = 0.8 + normalized_excess * 0.2
             return "VOLATILE", min(confidence, 1.0)
 
         # Правило 2: Сильный/умеренный тренд + норм./высокая волатильность + направленность -> TRENDING

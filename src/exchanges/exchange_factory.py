@@ -1,91 +1,77 @@
-"""
-Factory for creating exchange client instances.
-
-Этот модуль предоставляет унифицированный способ создания клиентов бирж.
-"""
+"""Фабрика клиентов по паре (биржа, торговый продукт)."""
 
 import logging
-import traceback
-from typing import Optional, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .exchange_client import ExchangeClient
-
+from typing import Dict, Tuple
 
 logger = logging.getLogger(__name__)
 
+_client_instances: Dict[Tuple[str, str, bool], object] = {}
+# Старое имя сохранено для интеграций и тестов, которые сбрасывают singleton напрямую.
+_client_instance = None
 
-_client_instance: Optional["ExchangeClient"] = None
+
+def _selection(exchange=None, market_type=None):
+    from src import config as runtime_config
+    selected_exchange = str(exchange or runtime_config.EXCHANGE).lower()
+    default_market = "perpetual" if selected_exchange in {"bingx", "mexc"} else ""
+    selected_market = str(market_type or getattr(runtime_config, "MARKET_TYPE", default_market)).lower()
+    if selected_exchange == "bingx":
+        selected_market = "perpetual"
+    return selected_exchange, selected_market, runtime_config.MODE == "demo"
+
+
+def _create_client(exchange: str, market_type: str, is_demo: bool, use_new_impl: bool = True):
+    if exchange == "bingx":
+        if not use_new_impl:
+            from .bingx_client import BingXClient
+            return BingXClient()
+        from .config.base import ConfigFactory
+        from .impl.bingx_client import BingXClient
+        return BingXClient(ConfigFactory.create("bingx", is_demo=is_demo))
+
+    if exchange == "mexc":
+        from .config.base import ConfigFactory
+        config = ConfigFactory.create("mexc", is_demo=is_demo, market_type=market_type)
+        if market_type == "spot":
+            from .impl.mexc_spot_client import MEXCSpotClient
+            return MEXCSpotClient(config)
+        if market_type == "perpetual":
+            from .impl.mexc_futures_client import MEXCFuturesClient
+            return MEXCFuturesClient(config)
+        raise ValueError(f"MEXC market type not supported: {market_type}")
+
+    raise ValueError(f"Unknown exchange: {exchange}")
+
+
+def get_trading_client(exchange=None, market_type=None, use_new_impl: bool = True):
+    selected_exchange, selected_market, is_demo = _selection(exchange, market_type)
+    key = (selected_exchange, selected_market, bool(use_new_impl))
+    if key not in _client_instances:
+        _client_instances[key] = _create_client(
+            selected_exchange, selected_market, is_demo, use_new_impl=use_new_impl
+        )
+    return _client_instances[key]
+
+
+def get_market_data_client(exchange=None, market_type=None):
+    """Публичный клиент; MEXC разрешён и при MODE=demo, без торговых мутаций."""
+    return get_trading_client(exchange=exchange, market_type=market_type, use_new_impl=True)
 
 
 def get_exchange_client(use_new_impl: bool = True):
-    """
-    Factory function to get the appropriate exchange client instance.
-
-    Args:
-        use_new_impl: Использовать новую реализацию (по умолчанию True).
-
-    Returns:
-        Экземпляр ExchangeClient (singleton per process)
-
-    Raises:
-        ValueError: Если биржа не поддерживается
-    """
+    """Обратно совместимый alias торгового клиента."""
     global _client_instance
-
-    # Если инстанс уже создан - возвращаем его
-    if _client_instance is not None:
-        return _client_instance
-
-    from src.config import EXCHANGE, MODE
-
-    exchange = EXCHANGE.lower()
-
-    if use_new_impl:
-        # Новая реализация (с использованием SOLID архитектуры)
-        try:
-            from .config.base import ConfigFactory
-
-            # Инициализация конфигурации
-            config = ConfigFactory.create(exchange, is_demo=(MODE == "demo"))
-
-            # Выбор клиента
-            if exchange == "bingx":
-                from .impl.bingx_client import BingXClient
-                _client_instance = BingXClient(config)
-            else:
-                raise ValueError(f"Unknown exchange: {EXCHANGE}")
-
-        except Exception as e:
-            # Fallback на новую реализацию без конфига
-            logger.warning(f"⚠️ New implementation failed for {exchange}, falling back: {e}")
-            logger.debug(f"Traceback: {traceback.format_exc()}")
-            if exchange == "bingx":
-                from .impl.bingx_client import BingXClient
-                _client_instance = BingXClient()
-            else:
-                raise ValueError(f"Unknown exchange: {EXCHANGE}")
-    else:
-        # Старая реализация (для обратной совместимости)
-        if exchange == "bingx":
-            from .bingx_client import BingXClient
-            _client_instance = BingXClient()
-        else:
-            raise ValueError(f"Unknown exchange: {EXCHANGE}")
-
+    if _client_instance is None:
+        _client_instance = get_trading_client(use_new_impl=use_new_impl)
     return _client_instance
 
 
 def reset_client():
-    """
-    Сбросить singleton экземпляр (для тестирования или смены биржи).
-    """
     global _client_instance
+    _client_instances.clear()
     _client_instance = None
 
 
-# Alias
 __all__ = [
-    "get_exchange_client",
-    "reset_client",
+    "get_exchange_client", "get_market_data_client", "get_trading_client", "reset_client",
 ]

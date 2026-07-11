@@ -21,6 +21,9 @@ from .dto.models import (
     PositionsDict,
     OrdersList,
     KlinesList,
+    ExchangeCapabilities,
+    InstrumentRules,
+    MarketType,
 )
 
 
@@ -37,6 +40,23 @@ class ExchangeClient(ABC):
 
     # Имя биржи (должно быть переопределено в подклассе)
     EXCHANGE_NAME: str = "unknown"
+
+    @property
+    def capabilities(self) -> ExchangeCapabilities:
+        """Возможности деривативного клиента по умолчанию."""
+        return ExchangeCapabilities(
+            market_type=MarketType.PERPETUAL,
+            positions=True,
+            shorting=True,
+            leverage=True,
+            funding=True,
+            native_protection=True,
+            automated_strategy=True,
+        )
+
+    def get_instrument_rules(self, symbol: str) -> Optional[InstrumentRules]:
+        """Вернуть торговые правила, если биржа их предоставляет."""
+        return None
 
     # =========================================================================
     # Market Data - получение рыночных данных

@@ -1,47 +1,35 @@
-#!/usr/bin/env python3
-"""Test script to verify the duplicate fix in trade_tracker.py"""
-import os
-import sys
+"""Поведенческие тесты дедупликации истории сделок."""
 
-# Add project root to path
-sys.path.insert(0, '/app')
+import json
 
-def test_duplicate_fix():
-    print('Test 1: Importing TradeTracker...')
-    from src.core.trade_tracker import TradeTracker
-    print('✅ TradeTracker imported successfully')
+import pytest
 
-    print('\nTest 2: Testing _is_duplicate_in_history method...')
-    tracker = TradeTracker()
 
-    # Check if method exists
-    if hasattr(tracker, '_is_duplicate_in_history'):
-        print('✅ Method _is_duplicate_in_history exists')
+@pytest.fixture
+def tracker_with_history(tmp_path, monkeypatch):
+    import src.core.trade_tracker as tracker_module
 
-        # Test with existing dealId from trade_history.json
-        result = tracker._is_duplicate_in_history('2035412681785081857')
-        print(f'  - Check for existing dealId (2035412681785081857): {result}')
-        assert result == True, "Should return True for existing dealId"
+    history_path = tmp_path / "trade_history.json"
+    active_path = tmp_path / "active_trades.json"
+    history_path.write_text(json.dumps([
+        {"dealId": "known-string", "symbol": "BTCUSDT"},
+        {"dealId": 123456, "symbol": "ETHUSDT"},
+    ]), encoding="utf-8")
+    active_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(tracker_module, "HISTORY_FILE", str(history_path))
+    monkeypatch.setattr(tracker_module, "ACTIVE_TRADES_FILE", str(active_path))
+    return tracker_module.TradeTracker()
 
-        # Test with non-existing dealId
-        result2 = tracker._is_duplicate_in_history('NONEXISTENT123')
-        print(f'  - Check for non-existing dealId (NONEXISTENT123): {result2}')
-        assert result2 == False, "Should return False for non-existing dealId"
 
-        # Test with None/empty dealId
-        result3 = tracker._is_duplicate_in_history('')
-        print(f'  - Check for empty dealId: {result3}')
-        assert result3 == False, "Should return False for empty dealId"
+def test_existing_deal_id_is_duplicate(tracker_with_history):
+    assert tracker_with_history._is_duplicate_in_history("known-string") is True
 
-        result4 = tracker._is_duplicate_in_history(None)
-        print(f'  - Check for None dealId: {result4}')
-        assert result4 == False, "Should return False for None dealId"
-    else:
-        print('❌ Method _is_duplicate_in_history NOT found')
-        return False
 
-    print('\n✅ All tests passed!')
-    return True
+def test_numeric_exchange_id_matches_string_runtime_id(tracker_with_history):
+    assert tracker_with_history._is_duplicate_in_history("123456") is True
 
-if __name__ == '__main__':
-    test_duplicate_fix()
+
+def test_unknown_or_empty_id_is_not_duplicate(tracker_with_history):
+    assert tracker_with_history._is_duplicate_in_history("unknown") is False
+    assert tracker_with_history._is_duplicate_in_history("") is False
+    assert tracker_with_history._is_duplicate_in_history(None) is False

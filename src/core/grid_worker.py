@@ -53,9 +53,12 @@ def run_grid_worker(symbol: str, config: dict):
 
                 # 4.1 Получаем текущую цену
                 ticker = client.get_ticker(symbol)
-                bid = ticker.get("bid", 0)
-                ask = ticker.get("ask", 0)
-                ticker.get("last", 0)
+                if hasattr(ticker, "bid_price"):
+                    bid = float(ticker.bid_price or 0)
+                    ask = float(ticker.ask_price or 0)
+                else:
+                    bid = float(ticker.get("bid", ticker.get("bid_price", 0)) or 0)
+                    ask = float(ticker.get("ask", ticker.get("ask_price", 0)) or 0)
 
                 if bid <= 0 or ask <= 0:
                     warning(f"[GRID] Invalid ticker data: bid={bid}, ask={ask}. Skipping cycle.")
@@ -92,7 +95,7 @@ def run_grid_worker(symbol: str, config: dict):
                 if should_pause:
                     warning(f"[GRID] Strong trend detected (ADX={adx_info['adx']:.1f}) - pausing grid for 60s")
                     # Отменяем все ордера при паузе
-                    client.cancel_all_orders(symbol)
+                    grid.cancel_managed_orders()
                     time.sleep(60)
                     continue
 
@@ -414,8 +417,8 @@ def _graceful_shutdown(grid):
     """Graceful shutdown - отменяем ордера при остановке."""
     try:
         from src.utils.logger import info
-        info("[GRID] Graceful shutdown - cancelling all orders...")
-        grid.client.cancel_all_orders(grid.symbol)
+        info("[GRID] Graceful shutdown - cancelling managed orders...")
+        grid.cancel_managed_orders()
         info("[GRID] Shutdown complete.")
     except Exception as e:
         from src.utils.logger import error

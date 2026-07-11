@@ -12,7 +12,7 @@ from src.config import (
 from src.utils.logger import info, error, warning
 from src.utils.helpers import get_filename
 from src.utils.news_api import get_news_for_symbol
-from src.exchanges.exchange_factory import get_exchange_client
+from src.exchanges.exchange_factory import get_market_data_client as get_exchange_client
 
 
 def _runtime_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -167,10 +167,6 @@ def process_symbol(symbol: str, config: Optional[Dict[str, Any]] = None) -> bool
 def main():
     """Основная функция сбора данных."""
     ensure_dirs()
-
-    client = get_exchange_client()
-    if not client.check_prerequisites():
-        return
 
     if ENABLE_PARALLEL_COLLECTION:
         import concurrent.futures

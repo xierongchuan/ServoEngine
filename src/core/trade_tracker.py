@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 from src.config import DATA_DIR
 from src.utils.logger import info, warning, log_trade
+from src.core.signals.utils import OrderAdapter
 
 HISTORY_FILE = os.path.join(DATA_DIR, "trade_history.json")
 ACTIVE_TRADES_FILE = os.path.join(DATA_DIR, "active_trades.json")
@@ -151,7 +152,8 @@ class TradeTracker:
                             if isinstance(history, list):
                                 # Check by dealId
                                 for trade in history:
-                                    if isinstance(trade, dict) and trade.get('dealId') == deal_id:
+                                    if (isinstance(trade, dict)
+                                            and str(trade.get('dealId', '')) == str(deal_id)):
                                         return True
                                 return False
                         except json.JSONDecodeError:
@@ -342,15 +344,16 @@ class TradeTracker:
 
                 close_order = None
                 for order in recent_orders:
-                    if (order.get("status", "").upper() == "FILLED" and
-                            order.get("side", "").upper() == close_side):
+                    adapter = OrderAdapter(order)
+                    if adapter.status == "FILLED" and adapter.side == close_side:
                         close_order = order
                         break
 
                 if close_order:
-                    close_price = close_order["avgPrice"]
-                    realized_pnl = close_order["profit"]
-                    close_fee = abs(close_order["commission"])
+                    adapter = OrderAdapter(close_order)
+                    close_price = adapter.average_price
+                    realized_pnl = adapter.realized_pnl
+                    close_fee = abs(adapter.commission)
                     entry_fee = stored_trade.get("estimated_entry_fee", 0)
 
                     stored_trade["close_price"] = close_price
@@ -359,15 +362,11 @@ class TradeTracker:
                     stored_trade["actual_close_fee"] = round(close_fee, 4)
                     stored_trade["actual_total_fees"] = round(entry_fee + close_fee, 4)
                     stored_trade["net_pnl"] = round(realized_pnl - entry_fee - close_fee, 4)
-                    stored_trade["close_order_id"] = close_order["orderId"]
+                    stored_trade["close_order_id"] = adapter.order_id
 
                     # Use actual close time from exchange
-                    update_time = close_order.get("updateTime", 0)
-                    if update_time:
-                        import time as _time
-                        stored_trade["close_time"] = _time.strftime(
-                            '%Y-%m-%dT%H:%M:%S', _time.gmtime(update_time / 1000)
-                        )
+                    if adapter.updated_at:
+                        stored_trade["close_time"] = adapter.updated_at.isoformat()
 
                     enriched = True
                     info(f"💰 [TradeTracker] Enriched close data for {symbol}: "

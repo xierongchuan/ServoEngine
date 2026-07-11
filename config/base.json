@@ -7,6 +7,16 @@
       "bingx": {
         "maker": 0.02,
         "taker": 0.05
+      },
+      "mexc": {
+        "perpetual": {
+          "maker": 0.06,
+          "taker": 0.08
+        },
+        "spot": {
+          "maker": 0.1,
+          "taker": 0.1
+        }
       }
     }
   },
@@ -59,6 +69,18 @@
       "candles": 60,
       "interval": "1m",
       "ai_context_candles": 60
+    },
+    "2h": {
+      "hours": 2,
+      "candles": 120,
+      "interval": "1m",
+      "ai_context_candles": 120
+    },
+    "4h": {
+      "hours": 4,
+      "candles": 240,
+      "interval": "1m",
+      "ai_context_candles": 240
     },
     "6h": {
       "hours": 6,

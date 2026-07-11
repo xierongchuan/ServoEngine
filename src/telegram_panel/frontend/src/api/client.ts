@@ -297,15 +297,16 @@ export function updateBaseConfig(data: Partial<BaseConfig>) {
   });
 }
 
-export function addSymbol(symbol: string, exchange: string = 'bingx') {
+export function addSymbol(symbol: string, exchange?: string) {
   return fetchAPI<{ status: string; symbols: Record<string, string[]> }>('/api/config/active/symbol', {
     method: 'POST',
     body: JSON.stringify({ symbol, exchange }),
   });
 }
 
-export function removeSymbol(symbol: string, exchange: string = 'bingx') {
-  return fetchAPI<{ status: string; symbols: Record<string, string[]> }>(`/api/config/active/symbol/${encodeURIComponent(symbol)}?exchange=${encodeURIComponent(exchange)}`, {
+export function removeSymbol(symbol: string, exchange?: string) {
+  const query = exchange ? `?exchange=${encodeURIComponent(exchange)}` : '';
+  return fetchAPI<{ status: string; symbols: Record<string, string[]> }>(`/api/config/active/symbol/${encodeURIComponent(symbol)}${query}`, {
     method: 'DELETE',
   });
 }

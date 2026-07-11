@@ -228,7 +228,7 @@ def setup_worker(symbol: str, ws_cache=None, ws_ready=None):
     print(f"[PROCESS] ws_cache type: {type(ws_cache)}, ws_ready type: {type(ws_ready)}")
     if ws_cache is not None and ws_ready is not None:
         try:
-            from src.exchanges.bingx_ws_data_provider import set_shared_cache
+            from src.exchanges.ws_provider_factory import set_shared_cache
             set_shared_cache(ws_cache, ws_ready)
         except Exception as e:
             print(f"⚠️ Failed to set shared cache: {e}")
