@@ -1,41 +1,41 @@
 {
   "_description": "Active runtime configuration - strategy and symbol profile mapping",
   "_version": "1.0.0",
-  "strategy": "SCALP",
+  "strategy": "MACDX",
   "strategy_instances": [
     {
       "id": "btcusdt",
       "symbol": "BTCUSDT",
-      "strategy": "SCALP",
-      "profile": "scalp_no_ai",
+      "strategy": "MACDX",
+      "profile": "macdx_30m",
       "enabled": true
     },
     {
       "id": "bnbusdt",
       "symbol": "BNBUSDT",
-      "strategy": "SCALP",
-      "profile": "scalp_no_ai",
+      "strategy": "MACDX",
+      "profile": "macdx_1h",
       "enabled": true
     },
     {
-      "id": "ltcusdt",
+      "id": "trxusdt",
       "symbol": "LTCUSDT",
-      "strategy": "SCALP",
-      "profile": "scalp_no_ai",
+      "strategy": "MACDX",
+      "profile": "macdx_1d",
       "enabled": true
     },
     {
       "id": "ethusdt",
       "symbol": "ETHUSDT",
-      "strategy": "SCALP",
-      "profile": "scalp_no_ai",
+      "strategy": "MACDX",
+      "profile": "macdx_1h",
       "enabled": true
     },
     {
       "id": "zecusdt",
       "symbol": "ZECUSDT",
-      "strategy": "SCALP",
-      "profile": "scalp_no_ai",
+      "strategy": "MACDX",
+      "profile": "macdx_30m",
       "enabled": true
     }
   ],
