@@ -4,38 +4,38 @@
   "strategy": "SCALP",
   "strategy_instances": [
     {
-      "id": "btcusdt_hybrid",
+      "id": "btcusdt",
       "symbol": "BTCUSDT",
       "strategy": "SCALP",
       "profile": "scalp_no_ai",
       "enabled": true
     },
     {
-      "id": "bnbusdt_hybrid",
+      "id": "bnbusdt",
       "symbol": "BNBUSDT",
-      "strategy": "MACDX",
-      "profile": "default",
+      "strategy": "SCALP",
+      "profile": "scalp_no_ai",
       "enabled": true
     },
     {
-      "id": "ltcusdt_hybrid",
+      "id": "ltcusdt",
       "symbol": "LTCUSDT",
-      "strategy": "MACDX",
-      "profile": "default",
+      "strategy": "SCALP",
+      "profile": "scalp_no_ai",
       "enabled": true
     },
     {
-      "id": "ethusdt_macdx",
+      "id": "ethusdt",
       "symbol": "ETHUSDT",
-      "strategy": "MACDX",
-      "profile": "default",
+      "strategy": "SCALP",
+      "profile": "scalp_no_ai",
       "enabled": true
     },
     {
-      "id": "zecusdt_macdx",
+      "id": "zecusdt",
       "symbol": "ZECUSDT",
-      "strategy": "MACDX",
-      "profile": "default",
+      "strategy": "SCALP",
+      "profile": "scalp_no_ai",
       "enabled": true
     }
   ],
@@ -50,10 +50,10 @@
   },
   "symbol_profiles": {
     "BTCUSDT": "scalp_no_ai",
-    "BNBUSDT": "default",
-    "LTCUSDT": "default",
-    "ETHUSDT": "default",
-    "ZECUSDT": "default"
+    "BNBUSDT": "scalp_no_ai",
+    "LTCUSDT": "scalp_no_ai",
+    "ETHUSDT": "scalp_no_ai",
+    "ZECUSDT": "scalp_no_ai"
   },
   "disabled_symbols": []
 }
