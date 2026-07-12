@@ -13,6 +13,7 @@ Persistence: data/scalp_performance.json, data/scalp_calibration.json
 import json
 import os
 import time
+import fcntl
 from datetime import datetime
 from typing import Dict, List, Any
 
@@ -56,6 +57,24 @@ class ScalpPerformanceTracker:
         except Exception as e:
             warning(f"[ScalpPerf] Save error: {e}")
 
+    def _append_trade(self, record: Dict[str, Any]):
+        """Межпроцессное append без потери сделок других symbol workers."""
+        lock_path = f"{self._file}.lock"
+        try:
+            os.makedirs(os.path.dirname(self._file), exist_ok=True)
+            with open(lock_path, "a+", encoding="utf-8") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                trades = self._load()
+                trades.append(record)
+                temp_path = f"{self._file}.{os.getpid()}.tmp"
+                with open(temp_path, "w", encoding="utf-8") as handle:
+                    json.dump(trades, handle, indent=2, ensure_ascii=False)
+                os.replace(temp_path, self._file)
+                self._trades = trades
+                fcntl.flock(lock, fcntl.LOCK_UN)
+        except Exception as exc:
+            warning(f"[ScalpPerf] Atomic append error: {exc}")
+
     def record_entry(self, symbol: str, context: Dict[str, Any]):
         """
         Record trade entry context.
@@ -79,7 +98,8 @@ class ScalpPerformanceTracker:
             "entry_ts": time.time(),
         }
 
-    def record_exit(self, symbol: str, pnl_pct: float, exit_reason: str):
+    def record_exit(self, symbol: str, pnl_pct: float, exit_reason: str,
+                    price_pnl_pct: float = 0.0, net_pnl_usdt: float = 0.0):
         """Record trade exit and archive to history."""
         pending = self._pending.pop(symbol, None)
         if not pending:
@@ -100,14 +120,15 @@ class ScalpPerformanceTracker:
 
         record = {**pending}
         record["pnl_pct"] = pnl_pct
+        record["price_pnl_pct"] = price_pnl_pct
+        record["net_pnl_usdt"] = net_pnl_usdt
         record["exit_reason"] = exit_reason
         record["hold_time_sec"] = round(hold_time_sec, 1)
         record["exit_time"] = datetime.now().isoformat()
         # Remove internal timestamp
         record.pop("entry_ts", None)
 
-        self._trades.append(record)
-        self._save()
+        self._append_trade(record)
 
         info(f"[ScalpPerf] {symbol}: recorded exit pnl={pnl_pct:.2f}% "
              f"regime={record['regime']} pattern={record['pattern']} "

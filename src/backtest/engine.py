@@ -54,6 +54,15 @@ class BacktestEngine:
         commission_config = self.backtest_config.get("commission", {})
         maker_rate = commission_config.get("maker_rate", 0.0002)
         taker_rate = commission_config.get("taker_rate", 0.0005)
+        if commission_config.get("use_exchange_rates", True):
+            exchange_name = os.getenv("EXCHANGE", "bingx").lower()
+            market_type = os.getenv("MARKET_TYPE", "perpetual").lower()
+            fee_cfg = self.config.get("exchange", {}).get("fees", {}).get(exchange_name, {})
+            if isinstance(fee_cfg, dict) and market_type in fee_cfg:
+                fee_cfg = fee_cfg[market_type]
+            if isinstance(fee_cfg, dict):
+                maker_rate = float(fee_cfg.get("maker", maker_rate * 100)) / 100
+                taker_rate = float(fee_cfg.get("taker", taker_rate * 100)) / 100
 
         # Default SL/TP: приоритет - preset стратегии → backtest.json
         defaults_config = self.backtest_config.get("defaults", {})
@@ -71,6 +80,7 @@ class BacktestEngine:
             default_sl_percent=default_sl / 100,  # Конвертируем % в долю
             default_tp_percent=default_tp / 100,
             capital_mode=capital_mode,
+            slippage_bps=self.backtest_config.get("execution", {}).get("slippage_bps", 2.0),
         )
         # Equity tracking for chart generation
         self._equity_curve: List[Dict[str, Any]] = []
@@ -126,7 +136,8 @@ class BacktestEngine:
                 kline_time = kline.get("snapshotTimeUTC", "")
 
                 # 1. Проверить SL/TP через TradeCommand
-                sl_tp_cmd = self.simulator.check_sl_tp_command(self.symbol, current_price)
+                management_cmd = self._update_scalp_position(i, current_price)
+                sl_tp_cmd = management_cmd or self.simulator.check_sl_tp_command(self.symbol, current_price)
                 if sl_tp_cmd:
                     self.simulator.execute(sl_tp_cmd)
                     self.signal_generator.reset_exit_context()
@@ -147,6 +158,11 @@ class BacktestEngine:
                     result = self.simulator.execute(command)
 
                     if command.action.is_entry:
+                        if self.strategy.upper() == "SCALP" and self.symbol in self.simulator.positions:
+                            position_state = self.simulator.positions[self.symbol]
+                            position_state["entry_index"] = i
+                            position_state["entry_atr"] = self.signal_generator.last_indicators.get("atr", 0)
+                            position_state["best_price"] = current_price
                         self.signal_generator.reset_exit_context()
                         side = "BUY" if command.action == TradeAction.BUY else "SELL"
                         self._record_trade_marker(kline_time, current_price, side.lower(), signal.get("reason", ""))
@@ -191,6 +207,50 @@ class BacktestEngine:
             traceback.print_exc()
             return {}
 
+    def _update_scalp_position(self, index: int, current_price: float) -> Optional[TradeCommand]:
+        """Свечной replay trailing/breakeven/time-exit реального SCALP."""
+        if self.strategy.upper() != "SCALP" or self.symbol not in self.simulator.positions:
+            return None
+        position = self.simulator.positions[self.symbol]
+        side = position["side"]
+        entry = float(position["entry_price"])
+        atr = float(position.get("entry_atr", 0) or 0)
+        best = float(position.get("best_price", entry))
+        best = max(best, current_price) if side == "LONG" else min(best, current_price)
+        position["best_price"] = best
+        pnl_pct = ((current_price - entry) / entry if side == "LONG" else (entry - current_price) / entry) * 100
+
+        sltp = self.config.get("sl_tp", {})
+        breakeven = self.config.get("breakeven", {})
+        if breakeven.get("enabled", True) and pnl_pct >= float(breakeven.get("trigger_pct", 0.3)):
+            fee_buffer = max(
+                float(breakeven.get("fee_buffer_pct", 0.05)),
+                self.simulator.commission_calculator.taker_rate * 2 * 100 + self.simulator.slippage_bps / 100,
+            )
+            be_price = entry * (1 + fee_buffer / 100 if side == "LONG" else 1 - fee_buffer / 100)
+            if side == "LONG":
+                position["sl_price"] = max(float(position.get("sl_price", 0)), be_price)
+            else:
+                position["sl_price"] = min(float(position.get("sl_price", float("inf"))), be_price)
+
+        if atr > 0:
+            activation = float(sltp.get("trailing_activation_mult", 1.5)) * atr
+            distance = float(sltp.get("trailing_distance_mult", 0.5)) * atr
+            if side == "LONG" and best - entry >= activation:
+                position["sl_price"] = max(float(position.get("sl_price", 0)), best - distance)
+            elif side == "SHORT" and entry - best >= activation:
+                position["sl_price"] = min(float(position.get("sl_price", float("inf"))), best + distance)
+
+        held_bars = index - int(position.get("entry_index", index))
+        time_cfg = self.config.get("time_exit", {})
+        max_hold = int(time_cfg.get("max_hold_minutes", 15))
+        be_timeout = int(time_cfg.get("breakeven_timeout_minutes", 8))
+        if max_hold > 0 and held_bars >= max_hold:
+            return TradeCommand.close(self.symbol, current_price, reason="SCALP time exit", strategy="SCALP")
+        if be_timeout > 0 and held_bars >= be_timeout and pnl_pct < float(breakeven.get("trigger_pct", 0.3)):
+            return TradeCommand.close(self.symbol, current_price, reason="SCALP breakeven timeout", strategy="SCALP")
+        return None
+
     def _signal_to_command(self, signal: Dict[str, Any], current_price: float) -> TradeCommand:
         """
         Конвертирует сигнал от SignalGenerator в TradeCommand.
@@ -218,6 +278,7 @@ class BacktestEngine:
                 reason=signal.get("reason", ""),
                 stop_loss=signal.get("stop_loss"),
                 take_profit=signal.get("take_profit"),
+                size_pct=signal.get("size_pct"),
                 strategy=self.strategy,
                 score=signal.get("score", 0),
             )

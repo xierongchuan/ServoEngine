@@ -6,10 +6,10 @@ This file provides guidance to agents when working with code in this repository.
 
 ```bash
 # Run tests in container (pytest not in main requirements)
-podman run --rm -v .:/app:Z -w /app python:3.12-slim sh -c "pip install -q requests pandas matplotlib pytest && python -m pytest tests/ -x -q"
+podman run --rm -v .:/app:Z -w /app python:3.12-slim sh -c "pip install -q -r requirements.txt -r src/telegram_panel/requirements.txt pytest && python -m pytest tests/ -x -q"
 
 # Run single test
-podman run --rm -v .:/app:Z -w /app python:3.12-slim sh -c "pip install -q requests pandas matplotlib pytest && python -m pytest tests/test_bingx.py -x -q"
+podman run --rm -v .:/app:Z -w /app python:3.12-slim sh -c "pip install -q -r requirements.txt -r src/telegram_panel/requirements.txt pytest && python -m pytest tests/test_bingx.py -x -q"
 ```
 
 ## Non-Obvious Project Rules

@@ -12,7 +12,13 @@
   "commission": {
     "maker_rate": 0.0002,
     "taker_rate": 0.0005,
+    "use_exchange_rates": true,
     "_description": "Commission rates as decimals (0.0002 = 0.02%)"
+  },
+
+  "execution": {
+    "slippage_bps": 2.0,
+    "_description": "Adverse market-order slippage in basis points per fill"
   },
 
   "defaults": {

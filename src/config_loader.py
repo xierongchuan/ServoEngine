@@ -638,7 +638,11 @@ def _convert_scalp_config(config: Dict[str, Any]) -> Dict[str, Any]:
         'loops': config.get('loops', {}),
         'regime_overrides': config.get('regime_overrides', {}),
         'interaction_rules': config.get('interaction_rules', {}),
-        'ai_integration': config.get('ai_integration', {})
+        'ai_integration': config.get('ai_integration', {}),
+        'session_awareness': config.get('session_awareness', {}),
+        'limit_entries': config.get('limit_entries', {}),
+        'partial_tp': config.get('partial_tp', {}),
+        'performance': config.get('performance', {}),
     }
 
 

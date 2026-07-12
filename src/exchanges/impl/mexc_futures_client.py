@@ -62,6 +62,7 @@ class MEXCFuturesClient(ExchangeClient):
         self._positions_cache_time = 0.0
         self._balance_cache: Optional[Balance] = None
         self._balance_cache_time = 0.0
+        self.last_protection_confirmed = True
 
     @property
     def capabilities(self) -> ExchangeCapabilities:
@@ -310,6 +311,8 @@ class MEXCFuturesClient(ExchangeClient):
             raise ValueError(f"Leverage {lev} outside {rules.min_leverage}..{rules.max_leverage}")
         self.set_leverage(symbol, lev, pos_side)
         contracts = self._contracts_from_base(rules, quantity)
+        sl = float(_floor_step(_decimal(sl), rules.price_step)) if sl is not None else None
+        tp = float(_floor_step(_decimal(tp), rules.price_step)) if tp is not None else None
         direction = 1 if pos_side == PositionSide.LONG else 3
         order_type_id = 5 if order_type == OrderType.MARKET else 1
         external_id = f"se{uuid.uuid4().hex[:28]}"
@@ -328,6 +331,7 @@ class MEXCFuturesClient(ExchangeClient):
             "lossTrend": 2 if sl else None,
             "profitTrend": 2 if tp else None,
         }
+        self.last_protection_confirmed = not bool(sl or tp)
         try:
             response = self._transport.request(
                 "POST", "/api/v1/private/order/create", params,
@@ -336,13 +340,24 @@ class MEXCFuturesClient(ExchangeClient):
         except ExchangeStateUnavailableError as exc:
             found = self._query_external(rules.exchange_symbol, external_id)
             if found:
+                raw = found.raw_data
+                self.last_protection_confirmed = bool(
+                    (not sl or raw.get("stopLossPrice"))
+                    and (not tp or raw.get("takeProfitPrice"))
+                )
                 return found.order_id
             raise UnknownOrderStateError(f"Состояние Futures ордера {external_id} неизвестно") from exc
         order_id = (response.get("data") or {}).get("orderId")
         if not order_id:
             raise ExchangeAPIError("MEXC Futures не вернул orderId")
         if sl or tp:
-            attached = self._query_external(rules.exchange_symbol, external_id)
+            attached = None
+            for attempt in range(3):
+                attached = self._query_external(rules.exchange_symbol, external_id)
+                if attached is not None:
+                    break
+                if attempt < 2:
+                    time.sleep(0.2)
             if attached is None:
                 logger.warning(f"⚠️ MEXC пока не подтвердил attached TP/SL для ордера {order_id}")
             else:
@@ -351,6 +366,8 @@ class MEXCFuturesClient(ExchangeClient):
                 missing_tp = tp and not raw.get("takeProfitPrice")
                 if missing_sl or missing_tp:
                     logger.error(f"❌ MEXC не подтвердил всю защиту entry order {order_id}")
+                else:
+                    self.last_protection_confirmed = True
         self.invalidate_cache("positions")
         return str(order_id)
 
@@ -434,9 +451,26 @@ class MEXCFuturesClient(ExchangeClient):
         if target is None or target.exchange_quantity is None:
             raise ExchangeStateUnavailableError(f"Позиция {symbol} {side.value} не найдена для TP/SL")
         rules = self.get_instrument_rules(symbol)
+        sl = float(_floor_step(_decimal(sl), rules.price_step)) if sl is not None else None
+        tp = float(_floor_step(_decimal(tp), rules.price_step)) if tp is not None else None
         contracts = _decimal(target.exchange_quantity)
         if quantity is not None:
             contracts = self._contracts_from_base(rules, quantity)
+        existing = self._get_position_stop_orders(rules.exchange_symbol, target.position_id)
+        if existing:
+            current = existing[0]
+            effective_sl = sl if sl is not None else current.get("stopLossPrice")
+            effective_tp = tp if tp is not None else current.get("takeProfitPrice")
+            stop_id = current.get("id") or current.get("stopPlanOrderId")
+            if not stop_id:
+                raise ExchangeStateUnavailableError("MEXC stop-order не содержит id")
+            self._transport.request("POST", "/api/v1/private/stoporder/change_plan_price", {
+                "stopPlanOrderId": int(stop_id),
+                "stopLossPrice": effective_sl,
+                "takeProfitPrice": effective_tp,
+            }, private=True, mutation=True)
+            self.last_protection_confirmed = True
+            return True
         params = {
             "lossTrend": 2,
             "profitTrend": 2,
@@ -453,7 +487,26 @@ class MEXCFuturesClient(ExchangeClient):
             "stopLossOrderPrice": 0,
         }
         self._transport.request("POST", "/api/v1/private/stoporder/place", params, private=True, mutation=True)
+        self.last_protection_confirmed = True
         return True
+
+    def _get_position_stop_orders(self, exchange_symbol: str, position_id: str) -> List[dict]:
+        """Получить активную биржевую защиту позиции для безопасного изменения."""
+        response = self._transport.request("GET", "/api/v1/private/stoporder/list/orders", {
+            "symbol": exchange_symbol,
+            "is_finished": 0,
+            "page_num": 1,
+            "page_size": 100,
+        }, private=True)
+        data = response.get("data", []) if isinstance(response, dict) else []
+        if isinstance(data, dict):
+            data = data.get("resultList", data.get("list", []))
+        return [
+            item for item in (data or [])
+            if str(item.get("positionId", "")) == str(position_id)
+            and int(item.get("isFinished", 0) or 0) == 0
+            and int(item.get("state", 1) or 1) == 1
+        ]
 
     def cancel_order(self, symbol: str, order_id: str) -> bool:
         response = self._transport.request("POST", "/api/v1/private/order/cancel", [int(order_id)], private=True, mutation=True)

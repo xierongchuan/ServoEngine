@@ -207,6 +207,25 @@ def test_futures_entry_has_external_id_and_attached_protection():
     assert payload["stopLossPrice"] == 59000
     assert payload["takeProfitPrice"] == 62000
     assert payload["externalOid"].startswith("se")
+    assert client.last_protection_confirmed is False
+
+
+def test_futures_trailing_updates_existing_stop_plan():
+    transport = FuturesTransport({
+        "/api/v1/private/stoporder/list/orders": {"success": True, "data": [{
+            "id": 88, "positionId": 42, "stopLossPrice": 59000,
+            "takeProfitPrice": 62000, "state": 1, "isFinished": 0,
+        }]},
+        "/api/v1/private/stoporder/change_plan_price": {"success": True},
+    })
+    client = MEXCFuturesClient(config(), transport)
+
+    assert client.set_sl_tp("BTCUSDT", PositionSide.LONG, sl=60000)
+    change = next(call for call in transport.calls if call[1].endswith("change_plan_price"))
+    assert change[2]["stopPlanOrderId"] == 88
+    assert change[2]["stopLossPrice"] == 60000
+    assert change[2]["takeProfitPrice"] == 62000
+    assert not any(call[1].endswith("stoporder/place") for call in transport.calls)
 
 
 def test_futures_timeout_reconciles_by_external_id_without_duplicate():

@@ -50,7 +50,15 @@ def test_dynamic_sltp():
         # Mock balance to allow order creation
         mock_client.get_balance.return_value = {"balance": 1000}
         mock_client.check_prerequisites.return_value = True
-        mock_client.get_positions.return_value = {} # No positions initially
+        opened_position = {
+            "symbol": "BTCUSDT", "type": "buy", "size": 0.01,
+            "entry": 92000, "dealId": "position-12345", "pnl": 0,
+        }
+        position_reads = {"count": 0}
+        def positions_after_entry():
+            position_reads["count"] += 1
+            return {} if position_reads["count"] <= 2 else {"BTCUSDT": [opened_position]}
+        mock_client.get_positions.side_effect = positions_after_entry
         mock_client.place_order.return_value = "12345"
 
         predictions = [{
@@ -146,6 +154,10 @@ def test_create_order_passes_runtime_leverage(monkeypatch):
         mock_get_client.return_value = mock_client
         mock_client.get_balance.return_value = {"balance": 1000}
         mock_client.place_order.return_value = "12345"
+        mock_client.get_positions.return_value = {
+            "BTCUSDT": [{"symbol": "BTCUSDT", "type": "buy", "size": 1,
+                         "entry": 100, "dealId": "position-12345", "pnl": 0}]
+        }
 
         order_id = create_order(
             "BTCUSDT",

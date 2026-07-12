@@ -27,6 +27,7 @@
     "tier1_required": true,
     "conflict_friction_threshold": 2,
     "auto_execute_quality": 0.6,
+    "no_ai_execute_quality": 0.4,
 
     "rsi_long_zone": [25, 40],
     "rsi_short_zone": [60, 75],
@@ -65,6 +66,9 @@
 
   "risk_limits": {
     "base_position_pct": 5,
+    "risk_per_trade_pct": 0.35,
+    "min_position_pct": 2,
+    "max_position_pct": 7,
     "max_consecutive_losses": 5,
     "consecutive_loss_cooldown_minutes": 30,
     "daily_loss_limit_pct": 3,

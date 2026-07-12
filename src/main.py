@@ -39,7 +39,24 @@ def check_prerequisites():
 
     errors = []
 
-    if not AI_API_KEY or AI_API_KEY == "":
+    ai_required = True
+    try:
+        from src.config_loader import get_strategy_instances, resolve_strategy_instance_config
+        ai_required = False
+        for instance in get_strategy_instances():
+            config = resolve_strategy_instance_config(instance)
+            strategy = instance.strategy.upper()
+            if strategy == "SCALP":
+                ai_cfg = config.get("SCALP_SETTINGS", {}).get("ai_integration", {})
+                ai_required = ai_required or bool(
+                    ai_cfg.get("regime_enabled", True) or ai_cfg.get("veto_enabled", True)
+                )
+            elif strategy not in {"MACDX", "GRID"}:
+                ai_required = True
+    except Exception as exc:
+        warning(f"⚠️ Не удалось определить потребность runtime в ИИ: {exc}")
+
+    if ai_required and (not AI_API_KEY or AI_API_KEY == ""):
         errors.append(f"❌ API Key для провайдера {AI_PROVIDER} не настроен. Установите соответствующую переменную окружения.")
 
     # Validation: Check for conflicting strategies (REMOVED: Smart Filter handles this now)

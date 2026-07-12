@@ -25,6 +25,7 @@ class BacktestSimulator(BaseCommandExecutor):
         default_sl_percent: float = 0.01,
         default_tp_percent: float = 0.03,
         capital_mode: str = "isolated",
+        slippage_bps: float = 0.0,
     ):
         self.initial_balance = initial_balance
         self.balance = initial_balance
@@ -33,6 +34,7 @@ class BacktestSimulator(BaseCommandExecutor):
         self.capital_mode = capital_mode
         self.default_sl_percent = default_sl_percent
         self.default_tp_percent = default_tp_percent
+        self.slippage_bps = max(float(slippage_bps), 0.0)
         self.positions: Dict[str, Dict[str, Any]] = {}  # symbol -> position
         self.pnl_tracker = PnLTracker()
         self.commission_calculator = CommissionCalculator(
@@ -149,6 +151,10 @@ class BacktestSimulator(BaseCommandExecutor):
             warning(f"⚠️ Позиция для {symbol} уже открыта")
             return False
 
+        raw_entry_price = entry_price
+        slip = self.slippage_bps / 10000.0
+        entry_price = raw_entry_price * (1 + slip if side == "LONG" else 1 - slip)
+
         if sl_percent is None:
             sl_percent = self.default_sl_percent
         if tp_percent is None:
@@ -206,6 +212,8 @@ class BacktestSimulator(BaseCommandExecutor):
 
         position = self.positions.pop(symbol)
         side = position["side"]
+        slip = self.slippage_bps / 10000.0
+        exit_price = exit_price * (1 - slip if side == "LONG" else 1 + slip)
         entry_price = position["entry_price"]
         size = position["size"]
 

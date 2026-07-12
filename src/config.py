@@ -115,11 +115,27 @@ def load_bot_config():
 def get_config_mtime() -> float:
     """Get modification time of config file(s)."""
     if _use_new_config_system():
-        active_path = os.path.join(_NEW_CONFIG_DIR, 'active.json')
-        try:
-            return os.path.getmtime(active_path)
-        except OSError:
-            pass
+        paths = [
+            os.path.join(_NEW_CONFIG_DIR, 'active.json'),
+            os.path.join(_NEW_CONFIG_DIR, 'trading.json'),
+            os.path.join(_NEW_CONFIG_DIR, 'base.json'),
+        ]
+        current = globals().get("BOT_CONFIG", {})
+        instance = current.get("STRATEGY_INSTANCE", {}) if isinstance(current, dict) else {}
+        strategy = str(instance.get("strategy") or current.get("STRATEGY_STYLE", "")).lower()
+        profile = str(instance.get("profile") or "default")
+        if strategy:
+            paths.append(os.path.join(_NEW_CONFIG_DIR, 'strategies', f'{strategy}.json'))
+        if profile and profile != "default":
+            paths.append(os.path.join(_NEW_CONFIG_DIR, 'profiles', f'{profile}.json'))
+        mtimes = []
+        for path in paths:
+            try:
+                mtimes.append(os.path.getmtime(path))
+            except OSError:
+                continue
+        if mtimes:
+            return max(mtimes)
     try:
         return os.path.getmtime(_CONFIG_PATH)
     except OSError:
@@ -158,7 +174,13 @@ def reload_bot_config() -> dict:
     old_config = BOT_CONFIG.copy()
 
     try:
-        BOT_CONFIG = load_bot_config()
+        current_instance = old_config.get("STRATEGY_INSTANCE")
+        if current_instance and _use_new_config_system():
+            from src.config_loader import clear_config_cache, resolve_strategy_instance_config
+            clear_config_cache()
+            BOT_CONFIG = resolve_strategy_instance_config(current_instance)
+        else:
+            BOT_CONFIG = load_bot_config()
     except Exception as e:
         print(f"⚠️ Config reload failed: {e}. Keeping previous config.")
         return BOT_CONFIG
@@ -202,6 +224,8 @@ def reload_bot_config() -> dict:
     # Reload fee rates
     _exchange_fees = BOT_CONFIG.get("EXCHANGE_FEES", {"bingx": {"maker": 0.02, "taker": 0.05}})
     _fee_val = _exchange_fees.get(EXCHANGE, 0.05)
+    if isinstance(_fee_val, dict) and MARKET_TYPE in _fee_val:
+        _fee_val = _fee_val[MARKET_TYPE]
     if isinstance(_fee_val, dict):
         TRADING_FEE_MAKER = _fee_val.get("maker", 0.02)
         TRADING_FEE_TAKER = _fee_val.get("taker", 0.05)

@@ -1,10 +1,12 @@
 import os
+import time
 import json
 from src.config import DATA_DIR, TAKE_PROFIT_PERCENT, STOP_LOSS_PERCENT, POSITION_LIMITS, POSITION_SIZE_PERCENT, LEVERAGE, MIN_TRADE_AMOUNT_USDT, AGGRESSIVE_MODE, AGGRESSIVE_SETTINGS, MIN_CONFIDENCE_THRESHOLD
 from src.utils.logger import info, error, warning, log_trade
 from src.exchanges.exchange_factory import get_exchange_client
 from src.exchanges.dto.models import Balance, OrderType, OrderSide, PositionSide
 from src.exchanges.errors import ExchangeStateUnavailableError
+from src.core.signals.utils import PositionAdapter
 
 # Файл кэша для хранения данных позиций (если нужно)
 
@@ -43,6 +45,44 @@ def get_open_positions():
         error(f"❌ Ошибка получения позиций: {str(e)}")
         raise ExchangeStateUnavailableError("Не удалось достоверно загрузить позиции") from e
 
+
+def _wait_for_position(client, symbol, position_side, timeout: float = 4.0):
+    """Дождаться фактической позиции перед установкой отдельной защиты."""
+    deadline = time.time() + max(timeout, 0.0)
+    normalized = symbol.replace("-", "").replace("/", "").replace("_", "").upper()
+    while time.time() <= deadline:
+        try:
+            client.invalidate_cache("positions")
+            positions = client.get_positions()
+            candidates = positions.get(normalized, []) if isinstance(positions, dict) else []
+            for position in candidates:
+                if PositionAdapter(position).direction == ("BUY" if position_side == PositionSide.LONG else "SELL"):
+                    return position
+        except Exception:
+            pass
+        time.sleep(0.2)
+    return None
+
+
+def _emergency_close_unprotected(client, symbol, position_side) -> bool:
+    """Fail-closed: закрыть позицию, если биржевая защита не установлена."""
+    position = _wait_for_position(client, symbol, position_side, timeout=2.0)
+    if position is None:
+        error(f"❌ {symbol}: аварийное закрытие невозможно — позиция не найдена")
+        return False
+    deal_id = PositionAdapter(position).position_id
+    if not deal_id:
+        error(f"❌ {symbol}: аварийное закрытие невозможно — нет position_id")
+        return False
+    try:
+        closed = bool(client.close_position(symbol, deal_id, percentage=1.0))
+        if closed:
+            error(f"🛑 {symbol}: незащищённая позиция аварийно закрыта")
+        return closed
+    except Exception as exc:
+        error(f"❌ {symbol}: КРИТИЧЕСКИ — не удалось закрыть незащищённую позицию: {exc}")
+        return False
+
 def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unknown", confidence=0.0, size_pct=None, order_type="MARKET"):
     """Создает ордер с TP/SL через ExchangeClient"""
     client = get_exchange_client()
@@ -51,6 +91,11 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         from src import config as runtime_config
 
         leverage = runtime_config.LEVERAGE
+        position_limits = runtime_config.POSITION_LIMITS
+        position_size_percent = runtime_config.POSITION_SIZE_PERCENT
+        min_trade_amount = runtime_config.MIN_TRADE_AMOUNT_USDT
+        take_profit_percent = runtime_config.TAKE_PROFIT_PERCENT
+        stop_loss_percent = runtime_config.STOP_LOSS_PERCENT
         price = float(price)
 
         # Calculate absolute TP/SL prices
@@ -58,11 +103,11 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
         # Handle both string and OrderSide enum
         direction_str = direction.value if hasattr(direction, 'value') else direction
         if direction_str.upper() == "BUY":
-            tp_price = price * (1 + TAKE_PROFIT_PERCENT / 100)
-            sl_price = price * (1 - STOP_LOSS_PERCENT / 100)
+            tp_price = price * (1 + take_profit_percent / 100)
+            sl_price = price * (1 - stop_loss_percent / 100)
         else:
-            tp_price = price * (1 - TAKE_PROFIT_PERCENT / 100)
-            sl_price = price * (1 + STOP_LOSS_PERCENT / 100)
+            tp_price = price * (1 - take_profit_percent / 100)
+            sl_price = price * (1 + stop_loss_percent / 100)
 
         # Override with AI values if provided
         if ai_tp:
@@ -73,7 +118,7 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
             sl_price = float(ai_sl)
 
         # Rounding (optional, but good for APIs)
-        _price_prec = POSITION_LIMITS.get("price_precision", 4)
+        _price_prec = position_limits.get("price_precision", 4)
         tp_price = round(tp_price, _price_prec)
         sl_price = round(sl_price, _price_prec)
 
@@ -147,29 +192,29 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
             return None
 
         # Calculate trade amount in USDT (use dynamic size if provided)
-        effective_size_pct = size_pct if size_pct else POSITION_SIZE_PERCENT
+        effective_size_pct = size_pct if size_pct else position_size_percent
         trade_amount = total_balance * (effective_size_pct / 100.0)
         if size_pct:
-            info(f"📐 Dynamic position size: {effective_size_pct:.1f}% (default: {POSITION_SIZE_PERCENT}%)")
+            info(f"📐 Dynamic position size: {effective_size_pct:.1f}% (default: {position_size_percent}%)")
 
         # Reserve fee from margin before sizing (round-trip: entry + exit)
         from src.config import TRADING_FEE_TAKER
         estimated_round_trip_fee = trade_amount * leverage * (TRADING_FEE_TAKER / 100.0) * 2.0
         fee_adjusted_amount = trade_amount - estimated_round_trip_fee
-        if fee_adjusted_amount >= MIN_TRADE_AMOUNT_USDT:
+        if fee_adjusted_amount >= min_trade_amount:
             info(f"💰 Fee reserve: ${estimated_round_trip_fee:.2f} (taker={TRADING_FEE_TAKER}% × 2 × {leverage}x) | ${trade_amount:.2f} → ${fee_adjusted_amount:.2f}")
             trade_amount = fee_adjusted_amount
         else:
             info(f"💰 Fee reserve skipped (would reduce below min): ${estimated_round_trip_fee:.2f}")
 
         # Enforce Minimum Trade Amount
-        if trade_amount < MIN_TRADE_AMOUNT_USDT:
-            info(f"⚠️ Calculated amount ${trade_amount:.2f} is less than min ${MIN_TRADE_AMOUNT_USDT}. Using min amount.")
-            trade_amount = MIN_TRADE_AMOUNT_USDT
+        if trade_amount < min_trade_amount:
+            info(f"⚠️ Calculated amount ${trade_amount:.2f} is less than min ${min_trade_amount}. Using min amount.")
+            trade_amount = min_trade_amount
 
         # Check if we have enough balance for this trade (simplified check)
         if trade_amount > total_balance:
-             _safety = POSITION_LIMITS.get("balance_safety_margin", 0.95)
+             _safety = position_limits.get("balance_safety_margin", 0.95)
              warning(f"⚠️ Trade amount ${trade_amount:.2f} exceeds balance ${total_balance:.2f}. Adjusting to {_safety*100:.0f}% of balance.")
              trade_amount = total_balance * _safety
 
@@ -179,7 +224,7 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
 
         # Round quantity to appropriate precision (e.g., 4 decimals for crypto)
         # In a real scenario, this should be symbol-specific
-        _qty_prec = POSITION_LIMITS.get("quantity_precision", 4)
+        _qty_prec = position_limits.get("quantity_precision", 4)
         quantity = round(quantity, _qty_prec)
 
         # Enhanced position size logging with leverage info
@@ -190,11 +235,12 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
 
         # Convert order_type string to OrderType enum
         order_type_enum = OrderType.MARKET if order_type == "MARKET" else OrderType.LIMIT
+        direction_enum = OrderSide(direction_str.upper())
 
         attached_protection = client.capabilities.attached_protection is True
         order_id = client.place_order(
             symbol=symbol,
-            side=direction,
+            side=direction_enum,
             price=price,
             quantity=quantity,
             order_type=order_type_enum,
@@ -208,7 +254,8 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
             client.invalidate_cache("positions")
 
             # Set SL/TP immediately after order placement
-            if (tp_price or sl_price) and not attached_protection:
+            protection_confirmed = bool(getattr(client, "last_protection_confirmed", attached_protection))
+            if (tp_price or sl_price) and (not attached_protection or not protection_confirmed):
                 info(f"🔄 Setting SL/TP for new order {order_id}...")
                 try:
                     # Determine position side (use enum for new client)
@@ -216,6 +263,8 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
                     pos_side = PositionSide.LONG if direction_str.upper() == "BUY" else PositionSide.SHORT
 
                     if hasattr(client, "set_sl_tp"):
+                        if _wait_for_position(client, symbol, pos_side, timeout=4.0) is None:
+                            raise ExchangeStateUnavailableError("позиция не появилась после entry order")
                         # Don't pass quantity — let set_sl_tp fetch actual position size
                         # from exchange to avoid mismatch with filled quantity
                         success = client.set_sl_tp(symbol, pos_side, tp=tp_price, sl=sl_price)
@@ -242,11 +291,17 @@ def create_order(symbol, direction, price, ai_sl=None, ai_tp=None, reason="Unkno
                                     info(f"✅ SL/TP retry succeeded for {symbol}")
                                     _save_sl_tp(symbol, sl_price, tp_price)
                                 else:
-                                    error(f"❌ SL/TP retry FAILED for {symbol} — ТРЕБУЕТСЯ РУЧНАЯ УСТАНОВКА!")
+                                    error(f"❌ SL/TP retry FAILED for {symbol} — выполняется аварийное закрытие")
+                                    _emergency_close_unprotected(client, symbol, pos_side)
+                                    return None
                     else:
-                        warning("⚠️ Client does not support set_sl_tp, SL/TP might not be set")
+                        error("❌ Client does not support set_sl_tp — выполняется аварийное закрытие")
+                        _emergency_close_unprotected(client, symbol, pos_side)
+                        return None
                 except Exception as e:
                     error(f"❌ Failed to set SL/TP for new order {order_id}: {e}")
+                    _emergency_close_unprotected(client, symbol, pos_side)
+                    return None
 
             if attached_protection:
                 _save_sl_tp(symbol, sl_price, tp_price)

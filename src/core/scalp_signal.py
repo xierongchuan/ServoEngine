@@ -414,16 +414,17 @@ class ScalpSignalGenerator:
 
     def _get_weights(self, regime: Optional[Dict]) -> Dict:
         """Get indicator weights, applying regime overrides if available."""
+        configured = self.rules.get("weights", {})
         base = {
-            "ema_weight": self.rules.get("ema_weight", 2),
-            "rsi_weight": self.rules.get("rsi_weight", 2),
-            "volume_weight": self.rules.get("volume_weight", 1),
-            "momentum_weight": self.rules.get("momentum_weight", 1),
-            "vwap_weight": self.rules.get("vwap_weight", 1),
-            "ob_imbalance_weight": self.rules.get("ob_imbalance_weight", 1),
-            "macd_weight": self.rules.get("macd_weight", 1),
-            "bb_weight": self.rules.get("bb_weight", 1),
-            "cvd_weight": self.rules.get("cvd_weight", 1),
+            "ema_weight": configured.get("ema", self.rules.get("ema_weight", 2)),
+            "rsi_weight": configured.get("rsi", self.rules.get("rsi_weight", 2)),
+            "volume_weight": configured.get("volume", self.rules.get("volume_weight", 1)),
+            "momentum_weight": configured.get("momentum", self.rules.get("momentum_weight", 1)),
+            "vwap_weight": configured.get("vwap", self.rules.get("vwap_weight", 1)),
+            "ob_imbalance_weight": configured.get("ob_imbalance", self.rules.get("ob_imbalance_weight", 1)),
+            "macd_weight": configured.get("macd", self.rules.get("macd_weight", 1)),
+            "bb_weight": configured.get("bb", self.rules.get("bb_weight", 1)),
+            "cvd_weight": configured.get("cvd", self.rules.get("cvd_weight", 0)),
             "min_score": self.rules.get("min_score_for_signal", 4),
         }
 

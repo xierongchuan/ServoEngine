@@ -103,3 +103,45 @@ def test_close_position_does_not_cancel_unrelated_orders():
     assert params["side"] == "SELL"
     assert params["positionSide"] == "LONG"
     assert params["quantity"] == 0.02
+
+
+def test_set_sl_replaces_only_old_sl_and_preserves_tp():
+    from types import SimpleNamespace
+    client = BingXClient.__new__(BingXClient)
+    position = Position(
+        symbol="BTCUSDT", side=PositionSide.LONG, size=0.02,
+        entry_price=50_000, unrealized_pnl=0, position_id="position-1",
+    )
+    client.get_positions = lambda: {"BTCUSDT": [position]}
+    client._format_symbol = lambda symbol: "BTC-USDT"
+    old_sl = SimpleNamespace(order_id="sl-old", raw_data={"type": "STOP_MARKET", "positionSide": "LONG"})
+    old_tp = SimpleNamespace(order_id="tp-old", raw_data={"type": "TAKE_PROFIT_MARKET", "positionSide": "LONG"})
+    client.get_open_orders = lambda symbol: [old_sl, old_tp]
+    client._make_request = MagicMock(return_value={"code": 0, "data": {"orderId": "sl-new"}})
+    client.cancel_order = MagicMock(return_value=True)
+    client.cancel_all_orders = MagicMock()
+
+    assert client.set_sl_tp("BTCUSDT", PositionSide.LONG, sl=49_500)
+    client.cancel_order.assert_called_once_with("BTCUSDT", "sl-old")
+    client.cancel_all_orders.assert_not_called()
+
+
+def test_place_order_normalizes_string_side_and_attaches_protection():
+    from types import SimpleNamespace
+    client = BingXClient.__new__(BingXClient)
+    client._config = SimpleNamespace(default_leverage=10)
+    client.set_leverage = MagicMock(return_value=True)
+    client._format_symbol = lambda symbol: "BTC-USDT"
+    client._make_request = MagicMock(return_value={"code": 0, "data": {"orderId": "entry-1"}})
+    client.invalidate_cache = MagicMock()
+
+    order_id = client.place_order(
+        "BTCUSDT", "BUY", 0.01, sl=49_500, tp=51_500, leverage=15,
+    )
+
+    assert order_id == "entry-1"
+    params = client._make_request.call_args.args[2]
+    assert params["side"] == "BUY"
+    assert params["positionSide"] == "LONG"
+    assert "stopLoss" in params and "takeProfit" in params
+    assert client.last_protection_confirmed is True

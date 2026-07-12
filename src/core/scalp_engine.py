@@ -157,6 +157,20 @@ class TrailingStopManager:
         self._trailing_active = False
         self._be_applied = False
 
+    def update_config(self, config: Dict, fee_buffer_pct: Optional[float] = None,
+                      breakeven_config: Optional[Dict] = None):
+        """Применить новые параметры без сброса состояния открытой позиции."""
+        self._sl_atr_mult = config.get("sl_atr_mult", self._sl_atr_mult)
+        self._tp_atr_mult = config.get("tp_atr_mult", self._tp_atr_mult)
+        self._trail_activation_mult = config.get("trailing_activation_mult", self._trail_activation_mult)
+        self._trail_distance_mult = config.get("trailing_distance_mult", self._trail_distance_mult)
+        if breakeven_config:
+            self._be_enabled = breakeven_config.get("enabled", self._be_enabled)
+            self._be_trigger_pct = breakeven_config.get("trigger_pct", self._be_trigger_pct)
+            self._be_fee_buffer_pct = breakeven_config.get("fee_buffer_pct", self._be_fee_buffer_pct)
+        if fee_buffer_pct is not None:
+            self._be_fee_buffer_pct = max(self._be_fee_buffer_pct, fee_buffer_pct)
+
     @property
     def current_sl(self) -> float:
         return self._current_sl
@@ -169,13 +183,18 @@ class TrailingStopManager:
     def is_trailing(self) -> bool:
         return self._trailing_active
 
+    @property
+    def breakeven_trigger_pct(self) -> float:
+        return self._be_trigger_pct
+
 
 class ScalpSession:
     """Tracks session state, risk limits, cooldowns, and session-aware sizing for a symbol."""
 
     def __init__(self, symbol: str, config: Optional[Dict] = None,
-                 session_config: Optional[Dict] = None):
+                 session_config: Optional[Dict] = None, state_path: Optional[str] = None):
         self.symbol = symbol
+        self._state_path = state_path
         cfg = config or SCALP_SETTINGS.get("risk_limits", {})
 
         self._max_consec_losses = cfg.get("max_consecutive_losses", 5)
@@ -206,6 +225,29 @@ class ScalpSession:
         self._session_hour: int = -1
         self._wins: int = 0
         self._losses: int = 0
+        self._load_state()
+        self._check_reset()
+
+    def update_config(self, config: Dict, session_config: Optional[Dict] = None):
+        """Обновить лимиты, сохранив накопленную статистику сессии."""
+        self._max_consec_losses = config.get("max_consecutive_losses", self._max_consec_losses)
+        self._consec_cooldown_min = config.get("consecutive_loss_cooldown_minutes", self._consec_cooldown_min)
+        self._daily_loss_limit = config.get("daily_loss_limit_pct", self._daily_loss_limit)
+        self._hourly_loss_limit = config.get("hourly_loss_limit_pct", self._hourly_loss_limit)
+        self._max_trades_per_hour = config.get("max_trades_per_hour", self._max_trades_per_hour)
+        self._max_trades_per_day = config.get("max_trades_per_day", self._max_trades_per_day)
+        self._min_cooldown_sec = config.get("min_cooldown_seconds", self._min_cooldown_sec)
+        if session_config:
+            self._session_aware_enabled = session_config.get("enabled", self._session_aware_enabled)
+            self._peak_hours = session_config.get("peak_hours_utc", self._peak_hours)
+            self._normal_hours = session_config.get("normal_hours_utc", self._normal_hours)
+            self._reduced_size_factor = session_config.get("reduced_size_factor", self._reduced_size_factor)
+            self._weekend_size_factor = session_config.get("weekend_size_factor", self._weekend_size_factor)
+
+    def enable_persistence(self, state_path: str):
+        self._state_path = state_path
+        self._load_state()
+        self._check_reset()
 
     def can_trade(self) -> tuple:
         """
@@ -251,6 +293,7 @@ class ScalpSession:
         self._last_trade_time = time.time()
         self._trades_today += 1
         self._trades_this_hour += 1
+        self._save_state()
 
     def record_exit(self, pnl_pct: float):
         """Record a trade exit with its P/L."""
@@ -274,6 +317,7 @@ class ScalpSession:
         info(f"[SCALP-SESSION] {self.symbol}: Trade closed PnL={pnl_pct:.2f}% | "
              f"Daily={self._daily_pnl_pct:.2f}% | W/L={self._wins}/{self._losses} | "
              f"Consec losses={self._consecutive_losses}")
+        self._save_state()
 
     def _check_reset(self):
         """Reset counters on new day/hour."""
@@ -281,6 +325,7 @@ class ScalpSession:
         current_date = time.strftime('%Y-%m-%d', now)
         current_hour = now.tm_hour
 
+        changed = False
         if current_date != self._session_date:
             self._session_date = current_date
             self._daily_pnl_pct = 0.0
@@ -288,11 +333,52 @@ class ScalpSession:
             self._wins = 0
             self._losses = 0
             info(f"[SCALP-SESSION] {self.symbol}: New day, counters reset")
+            changed = True
 
         if current_hour != self._session_hour:
             self._session_hour = current_hour
             self._hourly_pnl_pct = 0.0
             self._trades_this_hour = 0
+            changed = True
+        if changed:
+            self._save_state()
+
+    def _load_state(self):
+        if not self._state_path or not os.path.exists(self._state_path):
+            return
+        try:
+            with open(self._state_path, "r", encoding="utf-8") as handle:
+                state = json.load(handle)
+            for key, attr in {
+                "consecutive_losses": "_consecutive_losses", "daily_pnl_pct": "_daily_pnl_pct",
+                "hourly_pnl_pct": "_hourly_pnl_pct", "trades_today": "_trades_today",
+                "trades_this_hour": "_trades_this_hour", "last_trade_time": "_last_trade_time",
+                "paused_until": "_paused_until", "session_date": "_session_date",
+                "session_hour": "_session_hour", "wins": "_wins", "losses": "_losses",
+            }.items():
+                if key in state:
+                    setattr(self, attr, state[key])
+        except Exception as exc:
+            warning(f"[SCALP-SESSION] {self.symbol}: не удалось загрузить состояние: {exc}")
+
+    def _save_state(self):
+        if not self._state_path:
+            return
+        state = {
+            "consecutive_losses": self._consecutive_losses, "daily_pnl_pct": self._daily_pnl_pct,
+            "hourly_pnl_pct": self._hourly_pnl_pct, "trades_today": self._trades_today,
+            "trades_this_hour": self._trades_this_hour, "last_trade_time": self._last_trade_time,
+            "paused_until": self._paused_until, "session_date": self._session_date,
+            "session_hour": self._session_hour, "wins": self._wins, "losses": self._losses,
+        }
+        try:
+            os.makedirs(os.path.dirname(self._state_path), exist_ok=True)
+            temp_path = f"{self._state_path}.{os.getpid()}.tmp"
+            with open(temp_path, "w", encoding="utf-8") as handle:
+                json.dump(state, handle, ensure_ascii=False, indent=2)
+            os.replace(temp_path, self._state_path)
+        except Exception as exc:
+            warning(f"[SCALP-SESSION] {self.symbol}: не удалось сохранить состояние: {exc}")
 
     def get_session_size_factor(self) -> float:
         """
@@ -359,6 +445,7 @@ class ScalpEngine:
         self._ws_ready = ws_ready
 
         cfg = SCALP_SETTINGS
+        self._settings = cfg
         loop_cfg = cfg.get("loops", {})
         self._fast_interval = loop_cfg.get("fast_interval", 1.5)
         self._slow_interval = loop_cfg.get("slow_interval", 45)
@@ -395,11 +482,15 @@ class ScalpEngine:
         self._partial_tp_pct = partial_cfg.get("close_pct", 0.5)  # Close 50% at TP1
 
         # Components
-        self._trailing = TrailingStopManager()
-        self._session = ScalpSession(symbol)
+        self._trailing = TrailingStopManager(cfg.get("sl_tp", {}))
+        self._session_state_path = os.path.join(DATA_DIR, f"scalp_session_{get_filename(symbol)}.json")
+        self._session = ScalpSession(
+            symbol, cfg.get("risk_limits", {}), cfg.get("session_awareness", {}),
+            state_path=None,
+        )
 
         # Spread filter
-        self._spread_max_bps = SCALP_SETTINGS.get("signal_rules", {}).get("spread_max_bps", 5.0)
+        self._spread_max_bps = self._settings.get("signal_rules", {}).get("spread_max_bps", 5.0)
 
         # Shared state between fast/slow loops (protected by lock)
         self._lock = threading.Lock()
@@ -412,6 +503,11 @@ class ScalpEngine:
         self._ob_imbalance: float = 0.0
         self._ob_spread_bps: float = 0.0
         self._running = True
+        self._last_market_price: float = 0.0
+        self._veto_inflight: bool = False
+        from src import config as runtime_config
+        self._owner_id = runtime_config.BOT_CONFIG.get("STRATEGY_INSTANCE_ID", f"scalp_{get_filename(symbol)}")
+        self._ownership = None
 
         # AI regime advisor state
         self._last_ai_regime_time: float = 0.0
@@ -474,6 +570,46 @@ class ScalpEngine:
         # Run fast loop on main thread
         self._fast_loop()
 
+    def _reload_runtime_settings(self):
+        """Горячо применить resolved-конфиг именно текущего strategy instance."""
+        reload_bot_config()
+        from src import config as runtime_config
+        from src.core.lightweight_analyzer import LightweightAnalyzer
+        from src.core.scalp_signal import ScalpSignalGenerator
+
+        cfg = runtime_config.SCALP_SETTINGS
+        self._settings = cfg
+        loop_cfg = cfg.get("loops", {})
+        self._fast_interval = loop_cfg.get("fast_interval", self._fast_interval)
+        self._slow_interval = loop_cfg.get("slow_interval", self._slow_interval)
+        time_cfg = cfg.get("time_exit", {})
+        self._max_hold_minutes = time_cfg.get("max_hold_minutes", self._max_hold_minutes)
+        self._be_timeout_minutes = time_cfg.get("breakeven_timeout_minutes", self._be_timeout_minutes)
+        ai_cfg = cfg.get("ai_integration", {})
+        self._regime_ai_enabled = ai_cfg.get("regime_enabled", True)
+        self._regime_interval_sec = ai_cfg.get("regime_interval_seconds", 300)
+        self._veto_enabled = ai_cfg.get("veto_enabled", True)
+        self._veto_staleness_sec = ai_cfg.get("veto_staleness_seconds", 10)
+        self._veto_max_cycles = ai_cfg.get("veto_max_stale_cycles", 2)
+        self._borderline_quality = ai_cfg.get("borderline_quality_threshold", 0.3)
+        self._regime_model = runtime_config.AI_REGIME_OVERRIDE.get("model") or runtime_config.AI_MODEL
+        self._veto_model = runtime_config.AI_VETO_OVERRIDE.get("model") or runtime_config.AI_MODEL
+        self._spread_max_bps = cfg.get("signal_rules", {}).get("spread_max_bps", 5.0)
+        self._session.update_config(cfg.get("risk_limits", {}), cfg.get("session_awareness", {}))
+        self._trailing.update_config(
+            cfg.get("sl_tp", {}), breakeven_config=cfg.get("breakeven", {})
+        )
+        self._signal_gen = ScalpSignalGenerator(config=cfg)
+
+        # Периоды индикаторов также могут меняться в профиле; пересобираем
+        # analyzer из единого снимка свечей без потери позиции/session limits.
+        analyzer = LightweightAnalyzer(self.symbol, config=cfg.get("signal_rules", {}))
+        candles = self._get_candles(300)
+        if candles:
+            analyzer.bootstrap(candles)
+        self._analyzer = analyzer
+        info(f"[SCALP] {self.symbol}: resolved-конфиг применён без рестарта")
+
     def _init_components(self):
         """Lazy-initialize all dependencies."""
         from src.core.lightweight_analyzer import LightweightAnalyzer
@@ -483,12 +619,32 @@ class ScalpEngine:
 
         from src.core.scalp_performance import ScalpPerformanceTracker, ScalpCalibrator
 
-        self._analyzer = LightweightAnalyzer(self.symbol)
-        self._signal_gen = ScalpSignalGenerator()
+        self._analyzer = LightweightAnalyzer(self.symbol, config=self._settings.get("signal_rules", {}))
+        self._signal_gen = ScalpSignalGenerator(config=self._settings)
         self._client = get_exchange_client()
         self._tracker = TradeTracker()
         self._perf_tracker = ScalpPerformanceTracker()
         self._calibrator = ScalpCalibrator(self._perf_tracker)
+        self._session.enable_persistence(self._session_state_path)
+        from src.core.position_ownership import get_position_ownership_store
+        self._ownership = get_position_ownership_store()
+
+        # Breakeven должен покрывать обе taker-комиссии и небольшой запас
+        # на проскальзывание, иначе формальный BE фиксирует чистый убыток.
+        try:
+            commission = self._client.get_commission_rate(self.symbol)
+            taker = commission.taker if commission else None
+        except Exception as exc:
+            warning(f"[SCALP] {self.symbol}: комиссия биржи недоступна: {exc}")
+            taker = None
+        if taker is None:
+            from src import config as runtime_config
+            taker = runtime_config.TRADING_FEE_TAKER
+        fee_buffer = float(taker) * 2.0 + 0.02
+        self._trailing.update_config(
+            self._settings.get("sl_tp", {}), fee_buffer_pct=fee_buffer,
+            breakeven_config=self._settings.get("breakeven", {}),
+        )
 
         # Bootstrap analyzer from WS cache or REST
         candles = self._get_candles(300)
@@ -522,7 +678,7 @@ class ScalpEngine:
                     time.sleep(self._fast_interval)
                     continue
 
-                indicators["current_price"]
+                self._last_market_price = float(indicators["current_price"])
 
                 with self._lock:
                     position = self._position
@@ -568,7 +724,7 @@ class ScalpEngine:
                 # 1. Config hot-reload
                 if should_reload_config():
                     info(f"[SCALP] {self.symbol}: Config changed, reloading...")
-                    reload_bot_config()
+                    self._reload_runtime_settings()
 
                 # 2. Sync position from exchange
                 self._sync_position()
@@ -583,17 +739,13 @@ class ScalpEngine:
                 # 5. Update order book cache (OB imbalance + spread)
                 self._update_order_book()
 
-                # 6. Process pending AI veto (L3)
-                if self._veto_enabled and self._pending_veto:
-                    self._process_veto()
-
-                # 7. Re-bootstrap analyzer if needed
+                # 6. Re-bootstrap analyzer if needed
                 if self._analyzer and not self._analyzer._bootstrapped:
                     candles = self._get_candles(300)
                     if candles:
                         self._analyzer.bootstrap(candles)
 
-                # 8. Dump candles to price file (for chart worker)
+                # 7. Dump candles to price file (for chart worker)
                 self._dump_prices()
 
                 # 9. Log session stats
@@ -645,6 +797,12 @@ class ScalpEngine:
             self._close_position(position, f"Time exit ({hold_time_min:.0f}min)")
             return
 
+        if (self._be_timeout_minutes > 0 and hold_time_min >= self._be_timeout_minutes
+                and pnl_pct < self._trailing.breakeven_trigger_pct):
+            info(f"[SCALP] {self.symbol}: BREAKEVEN TIMEOUT ({hold_time_min:.1f}min, PnL={pnl_pct:.2f}%)")
+            self._close_position(position, f"Breakeven timeout ({hold_time_min:.0f}min)")
+            return
+
         # 2. Partial TP check (close portion at TP1, let rest run)
         if self._partial_tp_enabled and not self._partial_tp_done and self._entry_atr > 0:
             tp1_dist = self._entry_atr * self._partial_tp_atr_mult
@@ -682,6 +840,9 @@ class ScalpEngine:
 
     def _check_entry(self, indicators: Dict, regime: Optional[Dict]):
         """Fast-loop entry check: generate signal, possibly execute or queue."""
+        if self._ownership and self._ownership.is_owned_by_other(self.symbol, self._owner_id):
+            self._track_rejection("owned_by_other_strategy")
+            return
         # Session check
         can_trade, reason = self._session.can_trade()
         if not can_trade:
@@ -711,7 +872,9 @@ class ScalpEngine:
             return
 
         quality = signal["quality"]
-        auto_quality = SCALP_SETTINGS.get("signal_rules", {}).get("auto_execute_quality", 0.6)
+        auto_quality = self._settings.get("signal_rules", {}).get("auto_execute_quality", 0.6)
+        if not self._veto_enabled:
+            auto_quality = self._settings.get("signal_rules", {}).get("no_ai_execute_quality", 0.4)
 
         if quality >= auto_quality:
             # High quality → direct execution
@@ -728,12 +891,26 @@ class ScalpEngine:
                     "cycle": self._fast_cycle,
                 }
             info(f"[SCALP] {self.symbol}: Queued for AI veto: {signal['signal']} Q:{quality:.2f}")
+            with self._lock:
+                start_worker = not self._veto_inflight
+                if start_worker:
+                    self._veto_inflight = True
+            if start_worker:
+                threading.Thread(target=self._process_veto_async, daemon=True).start()
         else:
             # Veto not used - track why (Task 3)
             if not self._veto_enabled:
                 self._track_veto_skip("veto_disabled")
             else:
                 self._track_veto_skip("quality_below_borderline")
+
+    def _process_veto_async(self):
+        """Обработать veto немедленно, не блокируя fast-loop и не ожидая slow-loop."""
+        try:
+            self._process_veto()
+        finally:
+            with self._lock:
+                self._veto_inflight = False
 
     def _execute_entry(self, signal: Dict, indicators: Dict, ai_veto_used: bool = False):
         """Place a trade based on signal."""
@@ -745,6 +922,13 @@ class ScalpEngine:
             warning(f"[SCALP] {self.symbol}: Cannot execute, ATR is 0")
             return
 
+        acquired = False
+        if self._ownership:
+            acquired, owner = self._ownership.try_acquire(self.symbol, self._owner_id, "SCALP")
+            if not acquired:
+                warning(f"[SCALP] {self.symbol}: вход заблокирован владельцем {owner.owner_id if owner else '?'}")
+                return
+
         # Initialize trailing stop (sets initial SL/TP)
         self._trailing.init_position(direction, current_price, atr)
 
@@ -752,18 +936,28 @@ class ScalpEngine:
         tp = self._trailing.initial_tp
 
         # Dynamic position size
-        base_pct = SCALP_SETTINGS.get("risk_limits", {}).get("base_position_pct", 5.0)
+        risk_cfg = self._settings.get("risk_limits", {})
+        base_pct = risk_cfg.get("base_position_pct", 5.0)
         quality = signal.get("quality", 0.5)
-
-        # Simple quality-based sizing for scalp
-        size_pct = base_pct * (0.7 + quality * 0.6)  # 70%-130% of base
-        size_pct = max(3.0, min(10.0, size_pct))
+        stop_distance_pct = abs(current_price - sl) / current_price if current_price > 0 else 0
+        from src import config as runtime_config
+        leverage = max(float(runtime_config.LEVERAGE), 1.0)
+        risk_per_trade_pct = float(risk_cfg.get("risk_per_trade_pct", 0.35))
+        min_size_pct = float(risk_cfg.get("min_position_pct", 2.0))
+        max_size_pct = float(risk_cfg.get("max_position_pct", 7.0))
+        if stop_distance_pct > 0:
+            # equity_risk% = margin% * leverage * stop_distance_fraction
+            size_pct = risk_per_trade_pct / (leverage * stop_distance_pct)
+            size_pct *= 0.8 + quality * 0.4
+        else:
+            size_pct = base_pct
+        size_pct = max(min_size_pct, min(max_size_pct, size_pct))
 
         # Session-aware size adjustment
         session_factor = self._session.get_session_size_factor()
         if session_factor < 1.0:
             size_pct *= session_factor
-            size_pct = max(3.0, size_pct)
+            size_pct = max(min_size_pct, size_pct)
 
         # Determine order type (limit or market)
         entry_type = "MARKET"
@@ -797,6 +991,8 @@ class ScalpEngine:
                 if not filled:
                     info(f"[SCALP] {self.symbol}: Limit order not filled in {self._limit_timeout_sec}s, cancelled")
                     self._trailing.reset()
+                    if acquired and self._ownership:
+                        self._ownership.release_if_owner(self.symbol, self._owner_id)
                     return
 
             self._session.record_entry()
@@ -839,6 +1035,8 @@ class ScalpEngine:
         else:
             error(f"[SCALP] {self.symbol}: Entry FAILED for {direction}")
             self._trailing.reset()
+            if acquired and self._ownership:
+                self._ownership.release_if_owner(self.symbol, self._owner_id)
 
     def _close_position(self, position: Any, reason: str):
         """Close the current position."""
@@ -853,22 +1051,20 @@ class ScalpEngine:
         try:
             result = self._client.close_position(self.symbol, deal_id, percentage=1.0)
             if result:
-                # Calculate PnL for session tracking
-                current_price = adapter.mark_price
-                pnl_pct = calculate_pnl_pct(entry_price, current_price, pos_type)
-
-                self._session.record_exit(pnl_pct)
+                if not self._confirm_position_closed(deal_id):
+                    warning(f"[SCALP] {self.symbol}: close order принят, но закрытие позиции ещё не подтверждено")
+                    return
+                current_price = self._last_market_price or adapter.mark_price
+                pnl_pct = self._record_closed_trade(position, reason, current_price)
                 self._trailing.reset()
                 self._partial_tp_done = False
                 self._entry_atr = 0.0
 
-                # Record exit in performance tracker
-                if self._perf_tracker:
-                    self._perf_tracker.record_exit(self.symbol, pnl_pct, reason)
-
                 with self._lock:
                     self._position = None
                     self._position_open_time = 0.0
+                if self._ownership:
+                    self._ownership.release_if_owner(self.symbol, self._owner_id)
 
                 from src.utils.logger import log_trade
                 log_trade(f"[SCALP] {self.symbol}: CLOSED {pos_type} | PnL={pnl_pct:.2f}% | {reason}")
@@ -877,6 +1073,45 @@ class ScalpEngine:
                 error(f"[SCALP] {self.symbol}: Failed to close position {deal_id}")
         except Exception as e:
             error(f"[SCALP] {self.symbol}: Close error: {e}")
+
+    def _confirm_position_closed(self, position_id: str, timeout: float = 4.0) -> bool:
+        deadline = time.time() + timeout
+        normalized = self.symbol.upper().replace("-", "").replace("/", "").replace("_", "")
+        while time.time() <= deadline:
+            try:
+                self._client.invalidate_cache("positions")
+                positions = self._client.get_positions()
+                candidates = positions.get(normalized, []) if isinstance(positions, dict) else []
+                if not any(PositionAdapter(item).position_id == str(position_id) for item in candidates):
+                    return True
+            except Exception as exc:
+                warning(f"[SCALP] {self.symbol}: проверка закрытия не удалась: {exc}")
+            time.sleep(0.2)
+        return False
+
+    def _record_closed_trade(self, position: Any, reason: str, exit_price: float) -> float:
+        """Записать чистый результат сделки как долю equity, а не движение цены."""
+        adapter = PositionAdapter(position)
+        price_pnl_pct = calculate_pnl_pct(adapter.entry_price, exit_price, adapter.direction)
+        entry_notional = adapter.entry_price * adapter.size
+        exit_notional = exit_price * adapter.size
+        gross_pnl_usdt = entry_notional * price_pnl_pct / 100.0
+        from src import config as runtime_config
+        fee_rate = float(runtime_config.TRADING_FEE_TAKER) / 100.0
+        net_pnl_usdt = gross_pnl_usdt - (entry_notional + exit_notional) * fee_rate
+        try:
+            balance = self._client.get_balance()
+            equity = float(getattr(balance, "total_with_pnl", 0) or balance.total_balance)
+        except Exception:
+            equity = 0.0
+        equity_pnl_pct = net_pnl_usdt / equity * 100.0 if equity > 0 else price_pnl_pct
+        self._session.record_exit(equity_pnl_pct)
+        if self._perf_tracker:
+            self._perf_tracker.record_exit(
+                self.symbol, equity_pnl_pct, reason,
+                price_pnl_pct=price_pnl_pct, net_pnl_usdt=net_pnl_usdt,
+            )
+        return equity_pnl_pct
 
     def _wait_for_fill(self, order_id: str) -> bool:
         """Wait for a limit order to fill, cancel if timeout.
@@ -915,13 +1150,17 @@ class ScalpEngine:
 
     def _update_sl_on_exchange(self, position: Any, new_sl: float):
         """Update stop loss on exchange (throttled)."""
-        pos_side = "LONG" if PositionAdapter(position).is_long else "SHORT"
+        from src.exchanges.dto.models import PositionSide
+        pos_side = PositionSide.LONG if PositionAdapter(position).is_long else PositionSide.SHORT
 
         try:
             if hasattr(self._client, "set_sl_tp"):
-                self._client.set_sl_tp(self.symbol, pos_side, sl=new_sl)
-                info(f"[SCALP] {self.symbol}: SL updated to {new_sl:.2f} "
-                     f"(trailing={'YES' if self._trailing.is_trailing else 'NO'})")
+                updated = self._client.set_sl_tp(self.symbol, pos_side, sl=new_sl)
+                if updated:
+                    info(f"[SCALP] {self.symbol}: SL updated to {new_sl:.2f} "
+                         f"(trailing={'YES' if self._trailing.is_trailing else 'NO'})")
+                else:
+                    warning(f"[SCALP] {self.symbol}: биржа отклонила обновление SL {new_sl:.2f}")
         except Exception as e:
             warning(f"[SCALP] {self.symbol}: SL update failed: {e}")
 
@@ -957,8 +1196,16 @@ class ScalpEngine:
                 if str(key).upper().replace("-", "").replace("/", "").replace("_", "") == normalized_symbol
             ), [])
             real_position = symbol_positions[0] if symbol_positions else None
+            if self._ownership:
+                self._ownership.sync_with_positions(positions)
+                owner = self._ownership.get_owner(self.symbol)
+                if real_position is not None and owner and owner.owner_id != self._owner_id:
+                    real_position = None
+                    if self._fast_cycle % 60 == 0:
+                        info(f"[SCALP] {self.symbol}: позиция управляется {owner.owner_id}, SCALP ожидает")
             adapter = PositionAdapter(real_position) if real_position is not None else None
 
+            externally_closed = None
             with self._lock:
                 old_pos = self._position
                 self._position = real_position
@@ -967,6 +1214,7 @@ class ScalpEngine:
                 # Detect position closed externally
                 if old_pos and not real_position:
                     info(f"[SCALP] {self.symbol}: Position closed externally")
+                    externally_closed = old_pos
                     self._trailing.reset()
                     self._position_open_time = 0.0
 
@@ -980,6 +1228,17 @@ class ScalpEngine:
                         if entry > 0 and atr > 0:
                             side = adapter.direction
                             self._trailing.init_position(side, entry, atr)
+
+            if externally_closed is not None:
+                exit_price = self._last_market_price or PositionAdapter(externally_closed).mark_price
+                self._record_closed_trade(externally_closed, "Exchange protective order", exit_price)
+                if self._ownership:
+                    self._ownership.release_if_owner(self.symbol, self._owner_id)
+
+            if real_position is not None and self._ownership:
+                self._ownership.update_position_id(
+                    self.symbol, self._owner_id, PositionAdapter(real_position).position_id
+                )
 
             # Sync with trade tracker
             if self._tracker:

@@ -34,6 +34,9 @@ class SignalGenerator:
             if config
             else 0
         )
+        self._scalp_analyzer = None
+        self._scalp_signal_gen = None
+        self._scalp_last_index = -1
 
     def calculate_indicators(
         self, klines: List[Dict[str, Any]], index: int
@@ -160,6 +163,9 @@ class SignalGenerator:
             index: индекс текущей свечи
             position: открытая позиция {side: "LONG"/"SHORT", entry_price: float} или None
         """
+        if self.strategy.lower() == "scalp":
+            return self._generate_scalp_signal(klines, index, position)
+
         analysis = self.calculate_indicators(klines, index)
         self.last_indicators = analysis
         if not analysis:
@@ -265,6 +271,88 @@ class SignalGenerator:
                 }
 
         return normalized
+
+    def _generate_scalp_signal(self, klines, index, position=None) -> Dict[str, Any]:
+        """Свечной replay реального SCALP analyzer/signal generator без look-ahead."""
+        from ..core.lightweight_analyzer import LightweightAnalyzer
+        from ..core.scalp_signal import ScalpSignalGenerator
+        from ..core.regime import detect_regime
+
+        if index < 31:
+            return {"action": "HOLD", "reason": "Недостаточно данных"}
+
+        def normalized(item):
+            candle = dict(item)
+            candle.setdefault("timestamp", candle.get("snapshotTimeUTC", index))
+            return candle
+
+        if self._scalp_analyzer is None:
+            self._scalp_analyzer = LightweightAnalyzer(
+                self.config.get("_resolved", {}).get("symbol", "BACKTEST"),
+                config=self.config.get("signal_rules", {}),
+            )
+            self._scalp_signal_gen = ScalpSignalGenerator(config=self.config)
+            history = [normalized(item) for item in klines[:index + 1]]
+            if not self._scalp_analyzer.bootstrap(history):
+                return {"action": "HOLD", "reason": "Bootstrap SCALP не готов"}
+            self._scalp_last_index = index
+        elif index > self._scalp_last_index:
+            for candle_index in range(self._scalp_last_index + 1, index + 1):
+                self._scalp_analyzer.update(normalized(klines[candle_index]))
+            self._scalp_last_index = index
+
+        indicators = self._scalp_analyzer.get_snapshot()
+        self.last_indicators = indicators
+        regime = detect_regime({
+            "ema9": indicators.get("ema_fast", 0),
+            "ema21": indicators.get("ema_med", 0),
+            "bb_upper": indicators.get("bb_upper", 0),
+            "bb_lower": indicators.get("bb_lower", 0),
+            "close_prices": list(self._scalp_analyzer._recent_closes),
+            "atr_ratio": indicators.get("atr_ratio", 1),
+        })
+
+        if position:
+            exit_signal = self._scalp_signal_gen.check_exit(indicators, position)
+            if exit_signal.get("should_close"):
+                return {"action": "CLOSE", "reason": exit_signal.get("reason", "SCALP exit")}
+            return {"action": "HOLD", "reason": "Позиция сопровождается"}
+
+        result = self._scalp_signal_gen.generate(indicators, regime=regime, ob_imbalance=0.0)
+        action = result.get("signal", "HOLD")
+        quality = float(result.get("quality", 0.0))
+        auto_quality = self.config.get("signal_rules", {}).get("auto_execute_quality", 0.6)
+        ai_cfg = self.config.get("ai_integration", {})
+        if not ai_cfg.get("veto_enabled", True):
+            auto_quality = self.config.get("signal_rules", {}).get("no_ai_execute_quality", 0.4)
+        if action not in {"BUY", "SELL"} or quality < auto_quality:
+            return {
+                "action": "HOLD", "score": result.get("score", 0),
+                "reason": (result.get("reasons") or ["Нет сигнала"])[0],
+            }
+        price = float(indicators["current_price"])
+        atr = float(indicators.get("atr", 0))
+        sl_mult = self.config.get("sl_tp", {}).get("sl_atr_mult", 1.0)
+        tp_mult = self.config.get("sl_tp", {}).get("tp_atr_mult", 3.0)
+        risk_cfg = self.config.get("risk_limits", {})
+        leverage = max(float(self.config.get("preset", {}).get("leverage", 1)), 1.0)
+        stop_fraction = atr * sl_mult / price if price > 0 else 0
+        risk_pct = float(risk_cfg.get("risk_per_trade_pct", 0.35))
+        size_pct = risk_pct / (leverage * stop_fraction) if stop_fraction > 0 else risk_cfg.get("base_position_pct", 5)
+        size_pct *= 0.8 + quality * 0.4
+        size_pct = max(
+            float(risk_cfg.get("min_position_pct", 2)),
+            min(float(risk_cfg.get("max_position_pct", 7)), size_pct),
+        )
+        return {
+            "action": action,
+            "score": result.get("score", 0),
+            "quality": quality,
+            "size_pct": size_pct,
+            "reason": (result.get("reasons") or ["SCALP"])[0],
+            "stop_loss": price - atr * sl_mult if action == "BUY" else price + atr * sl_mult,
+            "take_profit": price + atr * tp_mult if action == "BUY" else price - atr * tp_mult,
+        }
 
     def _check_exit(
         self, gen, analysis: Dict[str, Any], position: Dict[str, Any]

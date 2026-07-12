@@ -107,6 +107,10 @@ class LightweightAnalyzer:
         # State flags
         self._bootstrapped = False
         self._prev_close: float = 0.0
+        # Последняя live-цена хранится отдельно от закрытия предыдущей свечи.
+        # Индикаторы обновляются только на новой свече, но fast-loop должен
+        # управлять стопами по актуальной внутрисвечной цене.
+        self._current_price: float = 0.0
         self._candle_count: int = 0
         self._last_timestamp: int = 0
 
@@ -283,6 +287,7 @@ class LightweightAnalyzer:
             self._recent_closes.append(c)
 
         self._prev_close = closes[-1]
+        self._current_price = closes[-1]
         self._candle_count = len(candles)
         self._last_timestamp = candles[-1].get("timestamp", 0)
         self._bootstrapped = True
@@ -310,6 +315,8 @@ class LightweightAnalyzer:
         high = float(candle.get("highPrice", 0))
         low = float(candle.get("lowPrice", 0))
         volume = float(candle.get("volume", 0))
+        if close > 0:
+            self._current_price = close
 
         is_new_candle = ts != self._last_timestamp
 
@@ -360,7 +367,7 @@ class LightweightAnalyzer:
         atr_ratio = self._atr_fast / self._atr if self._atr > 0 else 1.0
 
         # VWAP deviation (distance from VWAP in %)
-        vwap_dist_pct = ((self._prev_close - self._vwap) / self._vwap * 100) if self._vwap > 0 else 0.0
+        vwap_dist_pct = ((self._current_price - self._vwap) / self._vwap * 100) if self._vwap > 0 else 0.0
 
         # VWAP standard deviation band
         if self._vwap_cum_vol > 0:
@@ -406,7 +413,7 @@ class LightweightAnalyzer:
             "vwap_upper": self._vwap + vwap_std if vwap_std > 0 else self._vwap,
             "vwap_lower": self._vwap - vwap_std if vwap_std > 0 else self._vwap,
             "volume_ratio": self._volume_ratio,
-            "current_price": self._prev_close,
+            "current_price": self._current_price,
             "momentum_dir": momentum_dir,
             "choppiness": self._choppiness,
             "cvd": self._cvd,

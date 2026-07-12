@@ -251,6 +251,17 @@ class TestLightweightAnalyzer:
         }
         snap2 = analyzer.update(tick)
         assert snap2["candle_count"] == snap1["candle_count"]  # No increment
+        assert snap2["current_price"] == tick["closePrice"]
+
+    def test_nested_configured_weights_are_applied(self):
+        from src.core.scalp_signal import ScalpSignalGenerator
+        generator = ScalpSignalGenerator(config={
+            "signal_rules": {"weights": {"ema": 4, "cvd": 0}},
+            "interaction_rules": {}, "regime_overrides": {},
+        })
+        weights = generator._get_weights(None)
+        assert weights["ema_weight"] == 4
+        assert weights["cvd_weight"] == 0
 
 
 # =============================================================
@@ -555,6 +566,17 @@ class TestScalpSession:
                 "min_cooldown_seconds": 2,
             }
             return ScalpSession("BTCUSDT", config=risk_cfg)
+
+    def test_state_survives_restart(self, tmp_path):
+        from src.core.scalp_engine import ScalpSession
+        state_path = str(tmp_path / "session.json")
+        first = ScalpSession("BTCUSDT", config={}, state_path=state_path)
+        first.record_entry()
+        first.record_exit(-0.25)
+        second = ScalpSession("BTCUSDT", config={}, state_path=state_path)
+        assert second.stats["trades_today"] == 1
+        assert second.stats["daily_pnl_pct"] == pytest.approx(-0.25)
+        assert second.stats["consecutive_losses"] == 1
 
     def test_can_trade_initial(self, session):
         allowed, reason = session.can_trade()

@@ -38,6 +38,8 @@ from ..dto.models import (
     PositionsDict,
     OrdersList,
     KlinesList,
+    ExchangeCapabilities,
+    MarketType,
 )
 import logging
 
@@ -135,9 +137,19 @@ class BingXClient(ExchangeClient):
 
         self._orders_cache: Dict[str, OrdersList] = {}
         self._orders_cache_time: Dict[str, float] = {}
+        self.last_protection_confirmed = True
 
         if not self.api_key or not self.secret_key:
             warning("⚠️ BingX API keys not configured! Private endpoints will fail.")
+
+    @property
+    def capabilities(self) -> ExchangeCapabilities:
+        return ExchangeCapabilities(
+            market_type=MarketType.PERPETUAL,
+            positions=True, shorting=True, leverage=True, funding=True,
+            native_protection=True, attached_protection=True,
+            automated_strategy=True,
+        )
 
     # =========================================================================
     # ExchangeClient ABC Implementation - Market Data
@@ -732,11 +744,14 @@ class BingXClient(ExchangeClient):
         leverage: Optional[int] = None,
     ) -> Optional[str]:
         """Разместить ордер."""
+        side = side if isinstance(side, OrderSide) else OrderSide(str(side).upper())
         # Плечо должно приходить из runtime-конфига стратегии. Дефолт биржи
         # используем только для прямых/старых вызовов без явного значения.
         order_leverage = int(leverage) if leverage is not None else self._config.default_leverage
         pos_side = position_side or (PositionSide.LONG if side == OrderSide.BUY else PositionSide.SHORT)
-        self.set_leverage(symbol, order_leverage, pos_side)
+        if not self.set_leverage(symbol, order_leverage, pos_side):
+            error(f"❌ Order blocked: leverage {order_leverage}x was not confirmed for {symbol}")
+            return None
 
         formatted_symbol = self._format_symbol(symbol)
 
@@ -767,6 +782,7 @@ class BingXClient(ExchangeClient):
                 "workingType": "MARK_PRICE"
             })
 
+        self.last_protection_confirmed = not bool(sl or tp)
         response = self._make_request("post", endpoint, params)
 
         if response and response.get("code") == 0:
@@ -777,6 +793,9 @@ class BingXClient(ExchangeClient):
                 order_id = order_data["order"].get("orderId")
 
             info(f"✅ Order placed: {order_id}")
+            self.last_protection_confirmed = bool(order_id) and bool(
+                (not sl or params.get("stopLoss")) and (not tp or params.get("takeProfit"))
+            )
             self.invalidate_cache("positions")
             return order_id
         else:
@@ -825,10 +844,9 @@ class BingXClient(ExchangeClient):
         quantity: Optional[float] = None,
     ) -> bool:
         """Установить SL/TP."""
+        if isinstance(position_side, str):
+            position_side = PositionSide(position_side.upper())
         formatted_symbol = self._format_symbol(symbol)
-
-        # Cancel existing orders
-        self.cancel_all_orders(symbol)
 
         # Get position size if not provided
         size = quantity
@@ -839,26 +857,53 @@ class BingXClient(ExchangeClient):
                 size = positions[norm_symbol][0].size
 
         all_ok = True
+        try:
+            open_orders = self.get_open_orders(symbol)
+        except Exception as exc:
+            warning(f"⚠️ Не удалось получить защитные ордера {symbol}: {exc}")
+            open_orders = []
+
+        def matching_orders(order_type: str):
+            result = []
+            for order in open_orders:
+                raw = getattr(order, "raw_data", {}) or {}
+                raw_type = str(raw.get("type") or getattr(getattr(order, "order_type", None), "value", ""))
+                raw_side = raw.get("positionSide")
+                dto_side = getattr(getattr(order, "position_side", None), "value", None)
+                if raw_type == order_type and (raw_side or dto_side) in (None, position_side.value):
+                    result.append(order)
+            return result
+
+        def place_replacement(order_type: str, stop_price: float) -> bool:
+            params = {
+                "symbol": formatted_symbol,
+                "side": side,
+                "positionSide": position_side.value,
+                "type": order_type,
+                "stopPrice": stop_price,
+                "workingType": "MARK_PRICE",
+                "quantity": size,
+            }
+            response = self._make_request("post", "/openApi/swap/v2/trade/order", params)
+            if not response or response.get("code") != 0:
+                error(f"❌ {order_type} failed: {response}")
+                return False
+            # Сначала создаём новую защиту, затем удаляем только старую защиту
+            # того же типа. TP, ручные и entry-ордера остаются нетронутыми.
+            for old in matching_orders(order_type):
+                old_id = str(getattr(old, "order_id", "") or (getattr(old, "raw_data", {}) or {}).get("orderId", ""))
+                if old_id and not self.cancel_order(symbol, old_id):
+                    warning(f"⚠️ Старый {order_type} {old_id} не отменён; новая защита уже активна")
+            return True
 
         side = "SELL" if position_side == PositionSide.LONG else "BUY"
 
         if tp:
             info(f"🔄 Setting TP for {symbol} at {tp}")
             if size:
-                params = {
-                    "symbol": formatted_symbol,
-                    "side": side,
-                    "positionSide": position_side.value,
-                    "type": "TAKE_PROFIT_MARKET",
-                    "stopPrice": tp,
-                    "workingType": "MARK_PRICE",
-                    "quantity": size
-                }
-                response = self._make_request("post", "/openApi/swap/v2/trade/order", params)
-                if response and response.get("code") == 0:
+                if place_replacement("TAKE_PROFIT_MARKET", tp):
                     info("✅ TP set")
                 else:
-                    error(f"❌ TP failed: {response}")
                     all_ok = False
             else:
                 error("❌ Cannot set TP: position size unknown")
@@ -867,20 +912,9 @@ class BingXClient(ExchangeClient):
         if sl:
             info(f"🔄 Setting SL for {symbol} at {sl}")
             if size:
-                params = {
-                    "symbol": formatted_symbol,
-                    "side": side,
-                    "positionSide": position_side.value,
-                    "type": "STOP_MARKET",
-                    "stopPrice": sl,
-                    "workingType": "MARK_PRICE",
-                    "quantity": size
-                }
-                response = self._make_request("post", "/openApi/swap/v2/trade/order", params)
-                if response and response.get("code") == 0:
+                if place_replacement("STOP_MARKET", sl):
                     info("✅ SL set")
                 else:
-                    error(f"❌ SL failed: {response}")
                     all_ok = False
             else:
                 error("❌ Cannot set SL: position size unknown")
@@ -987,7 +1021,20 @@ class BingXClient(ExchangeClient):
         if not self.api_key or not self.secret_key:
             error("❌ BingX API keys are missing")
             return False
-        return True
+        try:
+            response = self._make_request("get", "/openApi/swap/v1/positionSide/dual", {})
+            if not response or response.get("code") != 0:
+                error("❌ Не удалось проверить BingX position mode")
+                return False
+            data = response.get("data", {})
+            dual = data.get("dualSidePosition") if isinstance(data, dict) else None
+            if str(dual).lower() not in {"true", "1"}:
+                error("❌ SCALP требует BingX Hedge Mode (dualSidePosition=true)")
+                return False
+            return True
+        except Exception as exc:
+            error(f"❌ Ошибка проверки BingX position mode: {exc}")
+            return False
 
     # =========================================================================
     # Cache Management
