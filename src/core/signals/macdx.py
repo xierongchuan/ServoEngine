@@ -16,6 +16,7 @@ TIMEFRAME_MINUTES = {
     "30m": 30,
     "1h": 60,
     "4h": 240,
+    "1d": 1440,
     "1D": 1440,
 }
 
@@ -34,6 +35,7 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         self.exit_rules = self.settings.get("exit_rules", {})
         self.preset = self.settings.get("preset", {})
         self._last_close_time: Optional[str] = None
+        self._last_entry_candle: Optional[str] = None
 
     def set_last_close_time(self, close_time: str):
         """Устанавливает время последнего закрытия для cooldown."""
@@ -42,8 +44,10 @@ class MacdxSignalGenerator(BaseSignalGenerator):
     def generate(self, analysis: Dict, regime: Optional[Dict] = None) -> Dict:
         # Minimal logging for backtest
         current_price = analysis.get("current_price") or 0
-        rsi = analysis.get("rsi") or 50
-        volume_ratio = analysis.get("volume_ratio") or 1.0
+        rsi = analysis.get("rsi")
+        rsi = 50 if rsi is None else rsi
+        volume_ratio = analysis.get("volume_ratio")
+        volume_ratio = 1.0 if volume_ratio is None else volume_ratio
         ema9 = analysis.get("ema9") or 0
         ema21 = analysis.get("ema21") or 0
         macd_line = analysis.get("macd_line") or 0
@@ -55,9 +59,15 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         bb_lower = analysis.get("bb_lower") or 0
         bb_middle = analysis.get("bb_middle") or 0
         atr = analysis.get("atr") or 0
-        atr_ratio = analysis.get("atr_ratio") or 1.0
-        adx = analysis.get("adx") or 25
-        chop = analysis.get("chop") or 50
+        atr_ratio = analysis.get("atr_ratio")
+        atr_ratio = 1.0 if atr_ratio is None else atr_ratio
+        atr_percent = analysis.get("atr_percent")
+        if atr_percent is None:
+            atr_percent = (atr / current_price * 100) if atr > 0 and current_price > 0 else 0.0
+        adx = analysis.get("adx")
+        adx = 25 if adx is None else adx
+        chop = analysis.get("chop")
+        chop = 50 if chop is None else chop
 
         macd_cross_weight = self.rules.get("macd_cross_weight", 2)
         rsi_weight = self.rules.get("rsi_zone_weight", 2)
@@ -69,6 +79,7 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         min_score = self.rules.get("min_score_for_signal", 4)
         min_volume = self.rules.get("min_volume_ratio", 0.5)
         min_atr_ratio = self.rules.get("min_atr_ratio", 0.3)
+        min_atr_percent = self.rules.get("min_atr_percent", 0.0)
         rsi_long_max = self.rules.get("rsi_long_max", 65)
         rsi_long_min = self.rules.get("rsi_long_min", 25)
         rsi_short_max = self.rules.get("rsi_short_max", 75)
@@ -94,20 +105,23 @@ class MacdxSignalGenerator(BaseSignalGenerator):
             + no_exhaustion_weight
             + volume_weight
         )
-        if not enable_volume_filter:
-            max_score_base -= volume_weight
         max_score = max_score_base + strengthening_weight
 
         if regime and regime.get("recommended_min_score"):
-            min_score = regime["recommended_min_score"]
+            # Режим может усилить фильтр, но не ослабить базовую защиту стратегии.
+            min_score = max(min_score, regime["recommended_min_score"])
 
-        if atr_ratio < min_atr_ratio:
-            debug(f"[MACDX] HOLD | Low volatility (ATR: {atr_ratio:.2f})")
+        if atr_ratio < min_atr_ratio or atr_percent < min_atr_percent:
+            debug(
+                f"[MACDX] HOLD | Low volatility "
+                f"(ATR {atr_percent:.3f}% / relative {atr_ratio:.2f}x)"
+            )
             return self._hold_result(
                 max_score,
-                [f"Low volatility (ATR {atr_ratio:.2f})"],
+                [f"Low volatility (ATR {atr_percent:.3f}%, relative {atr_ratio:.2f}x)"],
                 {
                     "atr_ratio": atr_ratio,
+                    "atr_percent": atr_percent,
                     "filter": "volatility",
                     "confirmations": 0,
                     "potential_score": 0,
@@ -119,7 +133,7 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         if cooldown_hours > 0 and self._last_close_time:
             try:
                 close_dt = datetime.strptime(self._last_close_time, "%Y-%m-%d %H:%M:%S")
-                hours_since = (datetime.now() - close_dt).total_seconds() / 3600
+                hours_since = (datetime.utcnow() - close_dt).total_seconds() / 3600
                 if hours_since < cooldown_hours:
                     remaining = cooldown_hours - hours_since
                     debug(f"[MACDX] HOLD | Cooldown: {remaining:.1f}h remaining")
@@ -150,8 +164,6 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         
         # Если есть strengthening trend 2+ свечи - пропускаем проверку volume
         skip_volume_check = enable_volume_filter and ignore_volume_on_strong and (has_strengthening_3 or has_strengthening_2)
-        
-        print(f"[MACDX] DEBUG volume: volume_ratio={volume_ratio:.2f}, min_volume={min_volume}, enable_vol={enable_volume_filter}, ignore={ignore_volume_on_strong}, strong_trend={has_strong_trend}, str_3={has_strengthening_3}, str_2={has_strengthening_2}, skip={skip_volume_check}")
         
         if enable_volume_filter and volume_ratio < min_volume and not skip_volume_check:
             debug(f"[MACDX] HOLD | Low volume ({volume_ratio:.2f}x)")
@@ -322,7 +334,7 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 f"[MACDX] HOLD | No MACD crossover (hist: {macd_hist:.6f}, hist_prev: {macd_hist_prev:.6f})"
             )
             is_sideways = False
-            bb_width = 0
+            bb_width = analysis.get("bb_width") or 0
             if bb_upper > 0 and bb_lower > 0 and bb_middle > 0:
                 bb_width = (bb_upper - bb_lower) / bb_middle * 100
                 if bb_width < bb_width_threshold or adx < adx_threshold:
@@ -416,6 +428,16 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 regime,
             )
 
+        # Один и тот же кроссовер не должен повторно исполняться при частом REST-опросе.
+        candle_time = str(analysis.get("candle_time") or "")
+        if candle_time and candle_time == self._last_entry_candle:
+            return self._hold_result(
+                max_score,
+                ["MACD crossover already processed on this candle"],
+                {"filter": "duplicate_candle", "candle_time": candle_time},
+                regime,
+            )
+
         # === SCORE CONFIRMATIONS ===
         long_score = 0
         short_score = 0
@@ -435,7 +457,6 @@ class MacdxSignalGenerator(BaseSignalGenerator):
 
         # Strengthening trend: 2+ candles in same direction (even without crossover)
         enable_strengthening = self.rules.get("enable_strengthening_trend_entry", False)
-        print(f"[MACDX] DEBUG: enable_str={enable_strengthening}, weight={self.rules.get('strengthening_trend_weight', 2)}, hist={analysis.get('macd_hist', 0):.4f}, hist_prev={analysis.get('macd_hist_prev', 0):.4f}")
         if enable_strengthening:
             strengthening_weight = self.rules.get("strengthening_trend_weight", 2)
             min_candles = self.rules.get("strengthening_trend_min_candles", 2)
@@ -468,20 +489,18 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         rsi_long_ok = rsi_long_min <= rsi <= rsi_long_max
         debug(f"[MACDX] RSI check: rsi={rsi}, zone=[{rsi_long_min}-{rsi_long_max}], ok={rsi_long_ok}, weight={rsi_weight}")
         rsi_short_ok = rsi_short_min <= rsi <= rsi_short_max
-        rsi_extreme_oversold = rsi < 20
-        rsi_extreme_overbought = rsi > 80
+        rsi_block_long_above = self.rules.get("rsi_block_long_above", 78)
+        rsi_block_short_below = self.rules.get("rsi_block_short_below", 22)
+        rsi_extreme_oversold = rsi <= rsi_block_short_below
+        rsi_extreme_overbought = rsi >= rsi_block_long_above
         long_blocked = False
         short_blocked = False
 
         if macd_cross_long:
-            if rsi_extreme_oversold:
-                long_reasons.append(f"RSI {rsi:.0f} EXTREME OVERSOLD - +1 за экстрим\n")
-                long_score += rsi_weight
-                long_confirmations += 1
-                debug(f"[MACDX] RSI LONG: extreme oversold boost ({rsi:.0f})")
-            elif rsi_extreme_overbought:
-                long_reasons.append(f"RSI {rsi:.0f} EXTREME OVERBOUGHT - без блокировки\n")
-                debug(f"[MACDX] RSI LONG: extreme overbought but allowed ({rsi:.0f})")
+            if rsi_extreme_overbought:
+                long_reasons.append(f"RSI {rsi:.0f} extreme overbought - LONG blocked\n")
+                long_blocked = True
+                debug(f"[MACDX] RSI blocks LONG: extreme overbought ({rsi:.0f})")
             elif rsi_long_ok:
                 long_score += rsi_weight
                 long_reasons.append(f"RSI {rsi:.0f} in zone +{rsi_weight}\n")
@@ -494,14 +513,10 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 debug(f"[MACDX] RSI rejects LONG: {rsi:.0f} outside zone")
 
         if macd_cross_short:
-            if rsi_extreme_overbought:
-                short_reasons.append(f"RSI {rsi:.0f} EXTREME OVERBOUGHT - +1 за экстрим\n")
-                short_score += rsi_weight
-                short_confirmations += 1
-                debug(f"[MACDX] RSI SHORT: extreme overbought boost ({rsi:.0f})")
-            elif rsi_extreme_oversold:
-                short_reasons.append(f"RSI {rsi:.0f} EXTREME OVERSOLD - без блокировки\n")
-                debug(f"[MACDX] RSI SHORT: extreme oversold but allowed ({rsi:.0f})")
+            if rsi_extreme_oversold:
+                short_reasons.append(f"RSI {rsi:.0f} extreme oversold - SHORT blocked\n")
+                short_blocked = True
+                debug(f"[MACDX] RSI blocks SHORT: extreme oversold ({rsi:.0f})")
             elif rsi_short_ok:
                 short_score += rsi_weight
                 short_reasons.append(f"RSI {rsi:.0f} in zone +{rsi_weight}\n")
@@ -551,13 +566,13 @@ class MacdxSignalGenerator(BaseSignalGenerator):
             debug(f"[MACDX] EMA counter-trend PENALTY for SHORT: -{ema_weight}")
 
         is_sideways = False
-        bb_width = 0
+        bb_width = analysis.get("bb_width") or 0
         sideways_block_signals = self.rules.get("sideways_block_signals", False)
         min_adx_for_trend = self.rules.get("min_adx_for_entry", 20)
 
         if bb_upper > 0 and bb_lower > 0 and bb_middle > 0:
             bb_width = (bb_upper - bb_lower) / bb_middle * 100
-            if bb_width < bb_width_threshold or adx < adx_threshold:
+            if bb_width < bb_width_threshold and adx < adx_threshold:
                 is_sideways = True
         
         if last_5_direction == "MIXED" and adx < min_adx_for_trend:
@@ -590,23 +605,6 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 debug(f"[MACDX] Not sideways confirms SHORT: +{not_sideways_weight}")
         else:
             debug(f"[MACDX] Sideways market detected")
-
-        debug(f"[MACDX] RSI check: rsi_long_min={rsi_long_min}, rsi_long_max={rsi_long_max}")
-
-        if macd_cross_long:
-            if rsi_extreme_overbought:
-                long_reasons.append(f"RSI {rsi:.0f} EXTREME OVERBOUGHT - блокируем LONG\n")
-                long_score = 0
-                long_blocked = True
-                debug(f"[MACDX] RSI blocks LONG: extreme overbought ({rsi:.0f})")
-            elif rsi_long_ok:
-                long_score += rsi_weight
-                long_reasons.append(f"RSI {rsi:.0f} in zone +{rsi_weight}\n")
-                long_confirmations += 1
-                debug(f"[MACDX] RSI confirms LONG: {rsi:.0f} in zone, +{rsi_weight}")
-            else:
-                long_reasons.append(f"RSI {rsi:.0f} outside zone (need {rsi_long_min}-{rsi_long_max})\n")
-                debug(f"[MACDX] RSI rejects LONG: {rsi:.0f} outside zone")
 
         close_prices = analysis.get("close_prices", [])
         rsi_values = analysis.get("rsi_values", [])
@@ -711,21 +709,30 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         reasons = []
         confirmations = 0
 
-        # DEBUG
-        print(f"[MACDX] DEBUG: long_score={long_score}, short_score={short_score}, min_score={min_score}")
+        # Score и число независимых подтверждений обязательны одновременно.
+        # Это не даёт одному большому весу заменить всю проверку рынка.
+        long_ready = (
+            not long_blocked
+            and long_score >= min_score
+            and long_confirmations >= min_confirmations
+        )
+        short_ready = (
+            not short_blocked
+            and short_score >= min_score
+            and short_confirmations >= min_confirmations
+        )
 
-        # Упрощённая логика: только score (веса определяют силу сигнала)
-        if long_score >= min_score and long_score > short_score:
+        if long_ready and long_score > short_score:
             signal = "BUY"
             score = long_score
             reasons = long_reasons
             confirmations = long_confirmations
-        elif short_score >= min_score and short_score > long_score:
+        elif short_ready and short_score > long_score:
             signal = "SELL"
             score = short_score
             reasons = short_reasons
             confirmations = short_confirmations
-        elif long_score >= min_score and short_score >= min_score:
+        elif long_ready and short_ready:
             # Конфликт сигналов
             signal = "HOLD"
             score = max(long_score, short_score)
@@ -733,60 +740,20 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 f"CONFLICT L:{long_score}({long_confirmations}conf) S:{short_score}({short_confirmations}conf)"
             ]
         else:
-            # Trend-follow вход: MACD тренд усиливается 2-3 свечи подряд, без проверки volume
-            macd_hist = analysis.get("macd_hist", 0)
-            macd_hist_prev = analysis.get("macd_hist_prev", 0)
-            macd_hist_2prev = analysis.get("macd_hist_2prev", 0)
-            enable_strengthening = self.rules.get("enable_strengthening_trend_entry", True)
-            strengthening_min_candles = self.rules.get("strengthening_trend_min_candles", 3)
-            
-            if enable_strengthening and strengthening_min_candles >= 3:
-                trend_strong_long = macd_hist > 0 and macd_hist > macd_hist_prev and macd_hist_prev > macd_hist_2prev
-                trend_strong_short = macd_hist < 0 and macd_hist < macd_hist_prev and macd_hist_prev < macd_hist_2prev
-            elif enable_strengthening and strengthening_min_candles >= 2:
-                trend_strong_long = macd_hist > 0 and macd_hist > macd_hist_prev
-                trend_strong_short = macd_hist < 0 and macd_hist < macd_hist_prev
-            else:
-                trend_strong_long = False
-                trend_strong_short = False
-            
-            if trend_strong_long:
-                if adx < adx_threshold:
-                    signal = "HOLD"
-                    score = max(long_score, short_score)
-                    reasons = [f"ADX={adx:.0f}<{adx_threshold} blocks trend-follow LONG\n"]
-                    confirmations = 0
-                    debug(f"[MACDX] Trend-follow LONG blocked: ADX={adx:.0f}<{adx_threshold}")
-                else:
-                    signal = "BUY"
-                    score = long_score
-                    reasons = ["MACD trend 2-3 candles +"]
-                    confirmations = 1
-                    print(f"[MACDX] DEBUG trend_follow: signal=BUY hist={macd_hist:.4f}")
-            elif trend_strong_short:
-                if adx < adx_threshold:
-                    signal = "HOLD"
-                    score = max(long_score, short_score)
-                    reasons = [f"ADX={adx:.0f}<{adx_threshold} blocks trend-follow SHORT\n"]
-                    confirmations = 0
-                    debug(f"[MACDX] Trend-follow SHORT blocked: ADX={adx:.0f}<{adx_threshold}")
-                else:
-                    signal = "SELL"
-                    score = short_score
-                    reasons = ["MACD trend 2-3 candles +"]
-                    confirmations = 1
-                    print(f"[MACDX] DEBUG trend_follow: signal=SELL hist={macd_hist:.4f}")
-            else:
-                signal = "HOLD"
-                score = max(long_score, short_score)
-                conf_str = (
-                    f"L:{long_confirmations}/{min_confirmations}"
-                    if macd_cross_long
-                    else f"S:{short_confirmations}/{min_confirmations}"
-                )
-                reasons = [
-                    f"Insufficient confirmations ({conf_str}) or score L:{long_score} S:{short_score} (need {min_score})"
-                ]
+            signal = "HOLD"
+            score = max(long_score, short_score)
+            conf_str = (
+                f"L:{long_confirmations}/{min_confirmations}"
+                if macd_cross_long
+                else f"S:{short_confirmations}/{min_confirmations}"
+            )
+            reasons = [
+                f"Insufficient confirmations ({conf_str}) or score "
+                f"L:{long_score} S:{short_score} (need {min_score})"
+            ]
+
+        if signal != "HOLD" and candle_time:
+            self._last_entry_candle = candle_time
 
         info(
             f"[MACDX] Final signal: {signal}, score={score}, confirmations={confirmations}, reasons={''.join(reasons).strip()}"
@@ -912,6 +879,7 @@ class MacdxSignalGenerator(BaseSignalGenerator):
                 pnl_pct,
                 macd_hist,
                 atr,
+                str(analysis.get("candle_time") or ""),
             )
 
         # Получаем адаптивные пороги по режиму
@@ -965,6 +933,7 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         pnl_pct: float,
         macd_hist: float,
         atr: float,
+        candle_time: str = "",
     ):
         """Обновляет exit_context при каждом основном цикле."""
         # peak_price
@@ -979,8 +948,12 @@ class MacdxSignalGenerator(BaseSignalGenerator):
         peak_pnl = ctx.get("peak_pnl", 0)
         ctx["peak_pnl"] = max(peak_pnl, pnl_pct)
 
-        # candles_in_trade
-        ctx["candles_in_trade"] = ctx.get("candles_in_trade", 0) + 1
+        # Считаем именно свечи, а не REST-опросы внутри одной свечи.
+        is_new_candle = not candle_time or candle_time != ctx.get("last_candle_time")
+        if is_new_candle:
+            ctx["candles_in_trade"] = ctx.get("candles_in_trade", 0) + 1
+            if candle_time:
+                ctx["last_candle_time"] = candle_time
 
         # last_atr (для быстрого цикла)
         if atr > 0:
@@ -994,10 +967,11 @@ class MacdxSignalGenerator(BaseSignalGenerator):
             ctx["macd_peak_candle"] = ctx.get("candles_in_trade", 1)
 
         # Weakening count (consecutive candles where hist weakens)
-        if abs(peak_hist) > 0 and abs_hist < abs(peak_hist):
-            ctx["weakening_count"] = ctx.get("weakening_count", 0) + 1
-        else:
-            ctx["weakening_count"] = 0
+        if is_new_candle:
+            if abs(peak_hist) > 0 and abs_hist < abs(peak_hist):
+                ctx["weakening_count"] = ctx.get("weakening_count", 0) + 1
+            else:
+                ctx["weakening_count"] = 0
 
     def _get_regime_params(self, regime: Dict) -> Dict:
         """Возвращает адаптивные пороги на основе рыночного режима."""

@@ -2,6 +2,7 @@
 
 import os
 import json
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.config import (
@@ -33,6 +34,39 @@ def ensure_dirs():
     os.makedirs(f"{DATA_DIR}/prices", exist_ok=True)
     os.makedirs(f"{DATA_DIR}/news", exist_ok=True)
     os.makedirs("charts", exist_ok=True)
+
+
+def _timestamp_seconds(value: Any) -> Optional[float]:
+    """Привести timestamp свечи к Unix seconds."""
+    if isinstance(value, (int, float)):
+        return float(value) / 1000 if value > 10_000_000_000 else float(value)
+    if not value:
+        return None
+    text = str(value).strip().replace("Z", "+00:00")
+    try:
+        numeric = float(text)
+        return numeric / 1000 if numeric > 10_000_000_000 else numeric
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except ValueError:
+        return None
+
+
+def keep_closed_candles(prices: List[Dict], timeframe: str, now: Optional[float] = None) -> List[Dict]:
+    """Убрать незакрытую последнюю свечу, чтобы MACD не перерисовывался внутри таймфрейма."""
+    if not prices:
+        return prices
+    start = _timestamp_seconds(prices[-1].get("snapshotTimeUTC", prices[-1].get("timestamp")))
+    if start is None:
+        return prices
+    duration = parse_interval_minutes(timeframe) * 60
+    current = datetime.now(timezone.utc).timestamp() if now is None else now
+    return prices[:-1] if start + duration > current else prices
 
 
 def fetch_prices(symbol: str, config: Optional[Dict[str, Any]] = None) -> List[Dict]:
@@ -85,6 +119,11 @@ def fetch_prices(symbol: str, config: Optional[Dict[str, Any]] = None) -> List[D
 
         if not isinstance(prices[0], dict):
             raise ValueError(f"Некорректный формат данных о ценах: {type(prices[0])}")
+
+        if strategy_style == "MACDX":
+            prices = keep_closed_candles(prices, interval)
+            if not prices:
+                raise ValueError("Нет закрытых свечей для MACDX")
 
         info(f"✅ Получено {len(prices)} свечей для {symbol}")
         return prices

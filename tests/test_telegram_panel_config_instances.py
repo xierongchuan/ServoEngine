@@ -5,7 +5,7 @@ import pytest
 from src.telegram_panel.backend.routes import config_routes
 
 
-def test_panel_strategy_instances_sync_legacy_fields(tmp_path, monkeypatch):
+def test_panel_strategy_instances_sync_derived_fields(tmp_path, monkeypatch):
     profiles_dir = tmp_path / "profiles"
     profiles_dir.mkdir()
     (profiles_dir / "default.json").write_text("{}", encoding="utf-8")
@@ -20,13 +20,13 @@ def test_panel_strategy_instances_sync_legacy_fields(tmp_path, monkeypatch):
         "disabled_symbols": [],
     }
 
-    synced = config_routes._sync_active_legacy_fields(active)
+    synced = config_routes._sync_active_derived_fields(active)
 
     assert [item["id"] for item in synced["strategy_instances"]] == ["btc_hybrid", "btc_macdx", "eth_grid"]
     assert synced["strategy_instances"][0]["symbol"] == "BTCUSDT"
     assert synced["symbols"]["bingx"] == ["BTCUSDT"]
     assert synced["strategy"] == "HYBRID"
-    assert synced["symbol_profiles"]["BTCUSDT"] == "default"
+    assert "symbol_profiles" not in synced
 
 
 def test_panel_strategy_instance_requires_existing_profile(tmp_path, monkeypatch):
@@ -65,7 +65,7 @@ def test_panel_strategy_instance_rejects_incompatible_profile(tmp_path, monkeypa
     assert "belongs to strategy 'SCALP'" in exc.value.detail
 
 
-def test_panel_strategy_instances_sync_updates_legacy_profile(tmp_path, monkeypatch):
+def test_panel_strategy_instances_sync_removes_legacy_profile_map(tmp_path, monkeypatch):
     profiles_dir = tmp_path / "profiles"
     profiles_dir.mkdir()
     (profiles_dir / "default.json").write_text("{}", encoding="utf-8")
@@ -79,9 +79,27 @@ def test_panel_strategy_instances_sync_updates_legacy_profile(tmp_path, monkeypa
         "symbol_profiles": {"BTCUSDT": "default"},
     }
 
-    synced = config_routes._sync_active_legacy_fields(active)
+    synced = config_routes._sync_active_derived_fields(active)
 
-    assert synced["symbol_profiles"]["BTCUSDT"] == "macdx_safe"
+    assert synced["strategy_instances"][0]["profile"] == "macdx_safe"
+    assert "symbol_profiles" not in synced
+
+
+def test_panel_explicit_empty_instances_do_not_restore_legacy_symbols(tmp_path, monkeypatch):
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    monkeypatch.setattr(config_routes, "PROFILES_DIR", profiles_dir)
+
+    active = {
+        "strategy_instances": [],
+        "strategy": "MACDX",
+        "symbols": {"bingx": ["BTCUSDT"]},
+        "symbol_profiles": {"BTCUSDT": "default"},
+    }
+
+    assert config_routes._get_strategy_instances(active) == []
+    synced = config_routes._sync_active_derived_fields(active)
+    assert "symbol_profiles" not in synced
 
 
 def test_panel_profiles_response_groups_compatible_profiles(tmp_path, monkeypatch):

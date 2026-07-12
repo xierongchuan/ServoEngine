@@ -71,7 +71,13 @@ class SignalGenerator:
 
         # ATR (14)
         atr = self._calculate_atr(highs, lows, closes, 14)
-        atr_ratio = atr / closes[-1] if closes[-1] > 0 else 0
+        recent_moves = [
+            abs(closes[i] - closes[i - 1])
+            for i in range(max(1, len(closes) - 20), len(closes))
+        ]
+        average_move = sum(recent_moves) / len(recent_moves) if recent_moves else atr
+        atr_ratio = atr / average_move if average_move > 0 else 1.0
+        atr_percent = atr / closes[-1] * 100 if closes[-1] > 0 else 0.0
 
         # Volume ratio
         volume_ratio = (
@@ -90,11 +96,11 @@ class SignalGenerator:
             )
             down_candles = len(last_5_closes) - 1 - up_candles
             if up_candles >= 4:
-                last_5_direction = "STRONG UP"
+                last_5_direction = "STRONG_UP"
             elif up_candles >= 3:
                 last_5_direction = "UP"
             elif down_candles >= 4:
-                last_5_direction = "STRONG DOWN"
+                last_5_direction = "STRONG_DOWN"
             elif down_candles >= 3:
                 last_5_direction = "DOWN"
             else:
@@ -116,10 +122,12 @@ class SignalGenerator:
             "adx": adx,
             "atr": atr,
             "atr_ratio": atr_ratio,
+            "atr_percent": atr_percent,
             "volume_ratio": volume_ratio,
             "close_prices": closes,
             "open_prices": opens,
             "last_5_direction": last_5_direction,
+            "candle_time": klines[index].get("snapshotTimeUTC", index),
         }
 
     def _get_signal_gen(self):
@@ -237,16 +245,31 @@ class SignalGenerator:
 
         # Рассчитать SL/TP если есть сигнал на вход
         if normalized["action"] in ("BUY", "SELL"):
-            sl_pct = self.config.get("preset", {}).get("sl_percent")
-            tp_pct = self.config.get("preset", {}).get("tp_percent")
-            if sl_pct and tp_pct:
-                current_price = klines[index]["closePrice"]
+            preset = self.config.get("preset", {})
+            sl_multiplier = preset.get("sl_multiplier")
+            tp_multiplier = preset.get("tp_multiplier")
+            current_price = klines[index]["closePrice"]
+            atr = analysis.get("atr", 0)
+            if sl_multiplier and tp_multiplier and atr > 0:
+                sl_distance = atr * float(sl_multiplier)
+                tp_distance = atr * float(tp_multiplier)
                 if normalized["action"] == "BUY":
-                    normalized["stop_loss"] = current_price * (1 - sl_pct / 100)
-                    normalized["take_profit"] = current_price * (1 + tp_pct / 100)
+                    normalized["stop_loss"] = current_price - sl_distance
+                    normalized["take_profit"] = current_price + tp_distance
                 else:
-                    normalized["stop_loss"] = current_price * (1 + sl_pct / 100)
-                    normalized["take_profit"] = current_price * (1 - tp_pct / 100)
+                    normalized["stop_loss"] = current_price + sl_distance
+                    normalized["take_profit"] = current_price - tp_distance
+            else:
+                # Совместимость со старыми процентными конфигами.
+                sl_pct = preset.get("sl_percent")
+                tp_pct = preset.get("tp_percent")
+                if sl_pct and tp_pct:
+                    if normalized["action"] == "BUY":
+                        normalized["stop_loss"] = current_price * (1 - sl_pct / 100)
+                        normalized["take_profit"] = current_price * (1 + tp_pct / 100)
+                    else:
+                        normalized["stop_loss"] = current_price * (1 + sl_pct / 100)
+                        normalized["take_profit"] = current_price * (1 - tp_pct / 100)
 
         # Если есть AI, добавить подтверждение
         if self.strategy.upper() in ["HYBRID", "HYBRID_VETO"] and normalized[

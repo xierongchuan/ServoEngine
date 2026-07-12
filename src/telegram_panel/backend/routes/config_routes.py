@@ -46,7 +46,7 @@ HOT_RELOADABLE_KEYS = {
     "DECISION_JOURNAL", "MOMENTUM_STRATEGY",
     "TECHNICAL_ANALYSIS", "SMART_SAMPLING",
     # New config system keys
-    "strategy", "disabled_symbols", "symbol_profiles",
+    "strategy", "disabled_symbols",
 }
 
 # Settings that require process restart
@@ -222,7 +222,7 @@ def _set_exchange_symbols(active: dict, exchange: str, symbols: list[str]) -> No
 def _get_strategy_instances(active: dict, exchange: str | None = None) -> list[dict]:
     """Return normalized strategy instances, with fallback from legacy active fields."""
     raw_instances = active.get("strategy_instances") or []
-    if raw_instances:
+    if "strategy_instances" in active:
         return [_validate_strategy_instance(item) for item in raw_instances]
 
     exchange = _runtime_exchange(exchange)
@@ -241,17 +241,20 @@ def _get_strategy_instances(active: dict, exchange: str | None = None) -> list[d
     ]
 
 
-def _sync_active_legacy_fields(active: dict, exchange: str | None = None) -> dict:
+def _sync_active_derived_fields(active: dict, exchange: str | None = None) -> dict:
     """
-    Keep legacy active fields in sync with strategy_instances.
+    Keep derived strategy/symbol fields in sync with strategy_instances.
 
-    Старые части панели и бота всё ещё читают active.strategy/symbols/symbol_profiles.
-    При нескольких инстансах одного символа symbol_profiles хранит только первый профиль,
-    а точная настройка остаётся в strategy_instances.
+    Profile lives only inside each strategy_instance.  The old symbol_profiles
+    map cannot represent multiple profiles for one symbol and is removed on save.
     """
     exchange = _runtime_exchange(exchange)
     instances = _get_strategy_instances(active, exchange)
+    active.pop("symbol_profiles", None)
     if not instances:
+        active["strategy_instances"] = []
+        _set_exchange_symbols(active, exchange, [])
+        active.setdefault("disabled_symbols", [])
         return active
 
     active["strategy_instances"] = instances
@@ -262,14 +265,6 @@ def _sync_active_legacy_fields(active: dict, exchange: str | None = None) -> dic
     _set_exchange_symbols(active, exchange, symbols)
     active["strategy"] = visible_instances[0]["strategy"]
 
-    symbol_profiles = dict(active.get("symbol_profiles", {}))
-    synced_symbols = set()
-    for item in visible_instances:
-        if item["symbol"] in synced_symbols:
-            continue
-        symbol_profiles[item["symbol"]] = item.get("profile", "default")
-        synced_symbols.add(item["symbol"])
-    active["symbol_profiles"] = symbol_profiles
     active.setdefault("disabled_symbols", [])
     return active
 
@@ -486,7 +481,7 @@ async def update_config(request: Request, _user: dict = Depends(get_current_user
                         _validate_strategy_instance(item)
                         for item in active_changes["STRATEGY_INSTANCES"]
                     ]
-                    active = _sync_active_legacy_fields(active)
+                    active = _sync_active_derived_fields(active)
                 _save_json(CONFIG_DIR / "active.json", active)
 
             # Update trading.json
@@ -576,7 +571,6 @@ async def get_active_config(_user: dict = Depends(get_current_user)) -> dict:
         legacy_active = {
             "strategy": legacy.get("STRATEGY_STYLE", "HYBRID"),
             "symbols": legacy.get("EXCHANGE_SYMBOLS", {}),
-            "symbol_profiles": {},
             "disabled_symbols": legacy.get("DISABLED_SYMBOLS", []),
         }
         legacy_active["strategy_instances"] = _get_strategy_instances(legacy_active)
@@ -621,7 +615,7 @@ async def update_active_config(request: Request, _user: dict = Depends(get_curre
 
     # Merge with current
     current.update(new_data)
-    current = _sync_active_legacy_fields(current)
+    current = _sync_active_derived_fields(current)
 
     try:
         _save_json(active_path, current)
@@ -755,7 +749,7 @@ async def add_active_symbol(request: Request, _user: dict = Depends(get_current_
 
     instances = _get_strategy_instances(active, exchange)
     strategy = str(data.get("strategy") or active.get("strategy") or "HYBRID").upper()
-    profile = str(data.get("profile") or active.get("symbol_profiles", {}).get(_normalize_symbol_key(symbol_upper), "default"))
+    profile = str(data.get("profile") or "default")
     new_instance = _validate_strategy_instance({
         "id": data.get("id") or _default_instance_id(symbol_upper, strategy),
         "symbol": symbol_upper,
@@ -766,7 +760,7 @@ async def add_active_symbol(request: Request, _user: dict = Depends(get_current_
     if not any(item["id"] == new_instance["id"] for item in instances):
         instances.append(new_instance)
     active["strategy_instances"] = instances
-    active = _sync_active_legacy_fields(active, exchange)
+    active = _sync_active_derived_fields(active, exchange)
 
     try:
         _save_json(active_path, active)
@@ -801,10 +795,7 @@ async def remove_active_symbol(symbol: str, exchange: str | None = None, _user: 
         if _normalize_symbol_key(item["symbol"]) != _normalize_symbol_key(symbol_upper)
     ]
     active["strategy_instances"] = instances
-    symbol_profiles = active.get("symbol_profiles", {})
-    symbol_profiles.pop(_normalize_symbol_key(symbol_upper), None)
-    active["symbol_profiles"] = symbol_profiles
-    active = _sync_active_legacy_fields(active, exchange) if instances else active
+    active = _sync_active_derived_fields(active, exchange)
 
     try:
         _save_json(active_path, active)
@@ -823,7 +814,6 @@ async def list_strategy_instances(_user: dict = Depends(get_current_user)) -> di
         active = {
             "strategy": legacy.get("STRATEGY_STYLE", "HYBRID"),
             "symbols": legacy.get("EXCHANGE_SYMBOLS", {}),
-            "symbol_profiles": {},
             "disabled_symbols": legacy.get("DISABLED_SYMBOLS", []),
         }
         instances = _get_strategy_instances(active)
@@ -859,7 +849,7 @@ async def create_strategy_instance(request: Request, _user: dict = Depends(get_c
 
     instances.append(new_instance)
     active["strategy_instances"] = instances
-    active = _sync_active_legacy_fields(active)
+    active = _sync_active_derived_fields(active)
 
     try:
         _save_json(active_path, active)
@@ -905,7 +895,7 @@ async def update_strategy_instance(instance_id: str, request: Request, _user: di
         raise HTTPException(status_code=400, detail="strategy instance ids must be unique")
 
     active["strategy_instances"] = updated_instances
-    active = _sync_active_legacy_fields(active)
+    active = _sync_active_derived_fields(active)
 
     try:
         _save_json(active_path, active)
@@ -932,10 +922,10 @@ async def delete_strategy_instance(instance_id: str, _user: dict = Depends(get_c
 
     active["strategy_instances"] = updated_instances
     if updated_instances:
-        active = _sync_active_legacy_fields(active)
+        active = _sync_active_derived_fields(active)
     else:
         _set_exchange_symbols(active, _runtime_exchange(), [])
-        active["symbol_profiles"] = {}
+        active.pop("symbol_profiles", None)
 
     try:
         _save_json(active_path, active)
@@ -1433,43 +1423,22 @@ async def auto_create_profile(
         active = _load_json(active_path)
         instances = _get_strategy_instances(active)
 
-        symbol_profiles = active.get("symbol_profiles", {})
-        symbols_to_switch = []
-        instance_ids_to_switch = []
-
-        # Find symbols using 'default'
-        for symbol, prof in symbol_profiles.items():
-            if prof == "default":
-                symbols_to_switch.append(symbol)
-
-        for instance in instances:
-            if instance.get("profile", "default") == "default":
-                instance_ids_to_switch.append(instance["id"])
-                symbols_to_switch.append(instance["symbol"])
-
-        # Also check active symbols without explicit profile (implicitly default)
-        symbols_config = active.get("symbols", {})
-        all_active_symbols = []
-        for exchange_symbols in symbols_config.values():
-            all_active_symbols.extend(exchange_symbols)
-
-        for symbol in all_active_symbols:
-            if symbol not in symbol_profiles:  # No explicit profile = default
-                symbols_to_switch.append(symbol)
-                previously_using_default = True
-
-        if symbols_to_switch:
-            switched_symbols = list(set(symbols_to_switch))
-            for symbol in switched_symbols:
-                symbol_profiles[symbol] = profile_name
-            active["symbol_profiles"] = symbol_profiles
-
-            if instance_ids_to_switch:
-                for instance in instances:
-                    if instance["id"] in instance_ids_to_switch:
-                        instance["profile"] = profile_name
-                active["strategy_instances"] = instances
-                active = _sync_active_legacy_fields(active)
+        # Меняем только default-instances этой стратегии.
+        # Иначе MACDX-профиль мог попасть в SCALP/GRID того же символа.
+        targets = [
+            item for item in instances
+            if item.get("profile", "default") == "default"
+            and item.get("strategy") == strategy
+        ]
+        if targets:
+            target_ids = {item["id"] for item in targets}
+            switched_symbols = sorted({item["symbol"] for item in targets})
+            previously_using_default = True
+            for instance in instances:
+                if instance["id"] in target_ids:
+                    instance["profile"] = profile_name
+            active["strategy_instances"] = instances
+            active = _sync_active_derived_fields(active)
 
             try:
                 _save_json(active_path, active)
@@ -1501,11 +1470,8 @@ async def get_profile_usage(
         raise HTTPException(status_code=404, detail=f"Profile not found: {name}")
 
     active = _load_json(CONFIG_DIR / "active.json")
-    symbol_profiles = active.get("symbol_profiles", {})
     instances = _get_strategy_instances(active)
 
-    # Find all symbols using this profile
-    symbols = [s for s, p in symbol_profiles.items() if p == name]
     used_instances = [
         {
             "id": item["id"],
@@ -1516,29 +1482,14 @@ async def get_profile_usage(
         for item in instances
         if item.get("profile", "default") == name
     ]
-    symbols.extend(item["symbol"] for item in used_instances)
-
-    # Also check implicit default
-    if name == "default":
-        symbols_config = active.get("symbols", {})
-        all_active_symbols = []
-        for exchange_symbols in symbols_config.values():
-            all_active_symbols.extend(exchange_symbols)
-
-        for symbol in all_active_symbols:
-            if symbol not in symbol_profiles:
-                symbols.append(symbol)
-        symbols.extend(
-            item["symbol"] for item in instances
-            if item.get("profile", "default") == "default"
-        )
+    symbols = [item["symbol"] for item in used_instances]
 
     return {
         "profile": name,
         "symbols": sorted(set(symbols)),
         "instances": used_instances,
         "isUsed": len(symbols) > 0 or len(used_instances) > 0,
-        "usageCount": len(set(symbols)) + len(used_instances)
+        "usageCount": len(used_instances)
     }
 
 
@@ -1548,16 +1499,13 @@ async def get_profile_usage(
 
 @router.get("/symbol-profiles")
 async def get_symbol_profiles(_user: dict = Depends(get_current_user)) -> dict:
-    """Get symbol to profile mapping."""
+    """Get instance-level profile assignments for the settings screen."""
     if not _use_new_config_system():
-        return {"symbol_profiles": {}, "symbols": []}
+        return {"instance_profiles": {}, "strategy_instances": [], "symbols": []}
 
     active = _load_json(CONFIG_DIR / "active.json")
     instances = _get_strategy_instances(active)
-    symbols_config = active.get("symbols", {})
     all_symbols = [item["symbol"] for item in instances]
-    for exchange_symbols in symbols_config.values():
-        all_symbols.extend(exchange_symbols)
 
     instance_profiles = {
         item["id"]: item.get("profile", "default")
@@ -1565,7 +1513,6 @@ async def get_symbol_profiles(_user: dict = Depends(get_current_user)) -> dict:
     }
 
     return {
-        "symbol_profiles": active.get("symbol_profiles", {}),
         "instance_profiles": instance_profiles,
         "strategy_instances": instances,
         "symbols": sorted(set(all_symbols)),
@@ -1609,20 +1556,24 @@ async def set_symbol_profile(symbol: str, request: Request, _user: dict = Depend
         if not updated:
             raise HTTPException(status_code=404, detail=f"Strategy instance not found: {instance_id}")
         active["strategy_instances"] = instances
-        active = _sync_active_legacy_fields(active)
+        active = _sync_active_derived_fields(active)
     else:
         symbol_key = _normalize_symbol_key(symbol)
-        for instance in instances:
-            if _normalize_symbol_key(instance["symbol"]) == symbol_key:
-                _validate_profile_strategy_compatibility(profile, instance["strategy"])
-                instance["profile"] = profile
-        if instances:
-            active["strategy_instances"] = instances
-            active = _sync_active_legacy_fields(active)
-
-    symbol_profiles = active.get("symbol_profiles", {})
-    symbol_profiles[_normalize_symbol_key(symbol)] = profile
-    active["symbol_profiles"] = symbol_profiles
+        matches = [
+            instance for instance in instances
+            if _normalize_symbol_key(instance["symbol"]) == symbol_key
+        ]
+        if not matches:
+            raise HTTPException(status_code=404, detail=f"Strategy instance not found for symbol: {symbol}")
+        if len(matches) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="instance_id is required when a symbol has multiple strategy instances",
+            )
+        _validate_profile_strategy_compatibility(profile, matches[0]["strategy"])
+        matches[0]["profile"] = profile
+        active["strategy_instances"] = instances
+        active = _sync_active_derived_fields(active)
 
     try:
         _save_json(active_path, active)

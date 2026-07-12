@@ -212,9 +212,22 @@ def resolve_symbol_config(symbol: str, strategy: Optional[str] = None, profile: 
         strategy = 'MACDX'  # fallback
     strategy_config = load_strategy_config(cast(str, strategy))
 
-    # Get profile for this symbol
-    symbol_profiles = active.get('symbol_profiles', {})
-    profile_name = profile or symbol_profiles.get(symbol, 'default')
+    # strategy_instances — единственный источник профиля в новой схеме.
+    # symbol_profiles читаем только для старых active.json без instances.
+    profile_name = profile
+    raw_instances = active.get('strategy_instances') or []
+    if profile_name is None and raw_instances:
+        symbol_key = normalize_symbol_key(symbol)
+        matching = [
+            item for item in raw_instances
+            if normalize_symbol_key(item.get('symbol', '')) == symbol_key
+            and str(item.get('strategy', '')).upper() == str(strategy).upper()
+        ]
+        if len(matching) == 1:
+            profile_name = str(matching[0].get('profile') or 'default')
+    if profile_name is None and 'strategy_instances' not in active:
+        profile_name = str(active.get('symbol_profiles', {}).get(normalize_symbol_key(symbol), 'default'))
+    profile_name = profile_name or 'default'
 
     # Load profile config (handles inheritance)
     profile_config = load_profile_config(profile_name)
@@ -269,7 +282,7 @@ def get_strategy_instances(exchange: Optional[str] = None) -> List[StrategyInsta
     disabled_symbols = {normalize_symbol_key(symbol) for symbol in active.get('disabled_symbols', [])}
     raw_instances = active.get('strategy_instances') or []
 
-    if raw_instances:
+    if 'strategy_instances' in active:
         instances = [StrategyInstance.from_dict(item) for item in raw_instances]
     else:
         symbols_config = active.get('symbols', {})

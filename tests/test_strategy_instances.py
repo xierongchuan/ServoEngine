@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-from src.config_loader import get_strategy_instances, resolve_strategy_instance_config
+from src.config_loader import get_strategy_instances, resolve_strategy_instance_config, resolve_symbol_config
 from src.core.position_ownership import PositionOwnershipStore
 
 
@@ -36,6 +36,41 @@ def test_get_strategy_instances_legacy_fallback(monkeypatch):
 
     assert [i.id for i in instances] == ["btcusdt_hybrid", "ethusdt_hybrid"]
     assert [i.strategy for i in instances] == ["HYBRID", "HYBRID"]
+
+
+def test_get_strategy_instances_explicit_empty_list_is_canonical(monkeypatch):
+    active = {
+        "strategy_instances": [],
+        "strategy": "HYBRID",
+        "symbols": {"bingx": ["BTCUSDT"]},
+        "symbol_profiles": {"BTCUSDT": "default"},
+    }
+    monkeypatch.setattr("src.config_loader.load_active_config", lambda: active)
+
+    assert get_strategy_instances("bingx") == []
+
+
+def test_resolve_symbol_config_reads_profile_from_matching_instance(monkeypatch):
+    active = {
+        "strategy_instances": [
+            {"id": "btc_macdx", "symbol": "BTC-USDT", "strategy": "MACDX", "profile": "macdx_1h"},
+            {"id": "btc_scalp", "symbol": "BTCUSDT", "strategy": "SCALP", "profile": "scalp_no_ai"},
+        ],
+        # Устаревшее поле не должно перебить instance-level profile.
+        "symbol_profiles": {"BTCUSDT": "default"},
+    }
+    monkeypatch.setattr("src.config_loader.load_base_config", lambda: {})
+    monkeypatch.setattr("src.config_loader.load_trading_config", lambda: {})
+    monkeypatch.setattr("src.config_loader.load_active_config", lambda: active)
+    monkeypatch.setattr("src.config_loader.load_strategy_config", lambda strategy: {"strategy_name": strategy})
+    monkeypatch.setattr("src.config_loader.load_profile_config", lambda name: {"profile_name": name})
+    monkeypatch.setattr("src.config_loader.validate_profile_strategy_match", lambda *args: True)
+    monkeypatch.setattr("src.config_loader._resolved_configs", {})
+
+    resolved = resolve_symbol_config("BTCUSDT", "MACDX")
+
+    assert resolved["profile_name"] == "macdx_1h"
+    assert resolved["_resolved"]["profile"] == "macdx_1h"
 
 
 def test_resolve_strategy_instance_config_uses_profile_overrides(monkeypatch):

@@ -48,12 +48,5 @@
       "ZECUSDT"
     ]
   },
-  "symbol_profiles": {
-    "BTCUSDT": "scalp_no_ai",
-    "BNBUSDT": "scalp_no_ai",
-    "LTCUSDT": "scalp_no_ai",
-    "ETHUSDT": "scalp_no_ai",
-    "ZECUSDT": "scalp_no_ai"
-  },
   "disabled_symbols": []
 }

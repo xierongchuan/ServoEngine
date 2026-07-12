@@ -15,6 +15,7 @@ from src.core.indicators import (
     calculate_rsi_series,
     calculate_seb,
     calculate_chop,
+    calculate_adx,
 )
 
 
@@ -298,6 +299,17 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         warning(f"⚠️ CHOP calculation failed: {e}")
         chop = 50.0
 
+    # ADX раньше не попадал в результат анализа, поэтому MACDX всегда видел
+    # фиктивное значение 25 и фактически не фильтровал слабый тренд.
+    try:
+        adx_result = calculate_adx(prices, period=14)
+        adx = adx_result.get("adx", 0.0)
+        plus_di = adx_result.get("plus_di", 0.0)
+        minus_di = adx_result.get("minus_di", 0.0)
+    except Exception as e:
+        warning(f"⚠️ ADX calculation failed: {e}")
+        adx, plus_di, minus_di = 0.0, 0.0, 0.0
+
     # Текущая цена
     last_close = prices[-1]["closePrice"]
     current_price = get_price_value(last_close)
@@ -315,13 +327,13 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         up_candles = sum(1 for i in range(1, len(last_5_closes)) if last_5_closes[i] > last_5_closes[i-1])
         down_candles = len(last_5_closes) - 1 - up_candles
         if up_candles >= 4:
-            last_5_direction = "STRONG UP"
+            last_5_direction = "STRONG_UP"
             direction_desc = "4+ зелёных свечей"
         elif up_candles >= 3:
             last_5_direction = "UP"
             direction_desc = "Преимущественно рост"
         elif down_candles >= 4:
-            last_5_direction = "STRONG DOWN"
+            last_5_direction = "STRONG_DOWN"
             direction_desc = "4+ красных свечей"
         elif down_candles >= 3:
             last_5_direction = "DOWN"
@@ -844,8 +856,12 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         "ema21": ema21,
         "atr": atr,
         "atr_ratio": atr_ratio,
+        "atr_percent": (atr / current_price * 100) if current_price > 0 else 0.0,
         "volume_ratio": volume_ratio,
         "chop": chop,
+        "adx": adx,
+        "plus_di": plus_di,
+        "minus_di": minus_di,
         "global_trend": global_trend,
         "local_trend": local_trend,
         "last_5_direction": last_5_direction,
@@ -855,6 +871,7 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         "macd_hist": macd_hist,
         "macd_hist_prev": macd_hist_prev,
         "macd_hist_2prev": macd_hist_2prev,
+        "candle_time": prices[-1].get("snapshotTimeUTC", "") if prices else "",
         "has_position": bool(position),
         "position": position,
         "prompt": prompt.strip(),

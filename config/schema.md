@@ -122,6 +122,7 @@ Per-instance override system with strategy binding:
 
 #### Special Profiles
 - **`default`** - Universal profile with `_strategy: null`. Works with any strategy. Use when you don't need instance-specific overrides.
+- **`macdx_5m` / `macdx_15m` / `macdx_30m` / `macdx_1h` / `macdx_1d`** - MACDX profiles with timeframe-specific history, polling, volatility, cooldown and ATR risk settings.
 - **`_templates/`** - Future: reusable profile templates for common configurations (aggressive, conservative, balanced)
 
 ### 5. Active Configuration (`config/active.json`)
@@ -161,7 +162,9 @@ Runtime rule: if multiple strategy instances trade the same symbol, only the ins
 
 `id` must be stable and unique. It is used in logs, Telegram Panel, position ownership, and runtime process names.
 
-Legacy fallback format is still supported:
+Legacy fallback format without `strategy_instances` is still read for migration.
+New saves convert it to `strategy_instances`; `symbol_profiles` is not written anymore
+because one symbol can have several strategy-specific profiles:
 ```json
 {
   "strategy": "MACDX",

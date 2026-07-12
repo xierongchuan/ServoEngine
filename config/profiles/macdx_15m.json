@@ -1,0 +1,9 @@
+{
+  "_description": "MACDX 15m: сбалансированный базовый профиль",
+  "_version": "1.0.0",
+  "_inherits": "default",
+  "_strategy": "MACDX",
+  "preset": {"timeframe": "15m", "chart_period": "1W", "plotter_period": "3D", "loop_interval": 120, "position_check_interval": 20, "sl_multiplier": 1.5, "tp_multiplier": 3.0, "leverage": 5, "cooldown_after_close_hours": 2},
+  "signal_rules": {"min_atr_percent": 0.18, "bb_width_threshold": 0.8, "require_2_candle_confirmation": false},
+  "exit_rules": {"emergency": {"max_hold_candles": 48}}
+}

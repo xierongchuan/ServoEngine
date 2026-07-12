@@ -90,7 +90,9 @@ class BacktestEngine:
     def _load_config(self) -> Dict[str, Any]:
         """Загружает конфигурацию для символа и стратегии."""
         try:
-            return resolve_symbol_config(self.symbol, self.strategy)
+            # CLI --strategy должен тестировать его базовый конфиг, а не
+            # несовместимый активный профиль другой стратегии.
+            return resolve_symbol_config(self.symbol, self.strategy, profile="default")
         except Exception as e:
             error(f"❌ Ошибка загрузки конфигурации: {e}")
             return {}

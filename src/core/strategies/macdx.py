@@ -1,6 +1,7 @@
 """MACDX pipeline — полностью детерминированный, без AI."""
 
 from typing import Any, Dict, Optional
+from datetime import datetime
 
 from src.config import POSITION_SIZE_PERCENT
 from src.core import analyzer
@@ -26,19 +27,31 @@ class MacdxPipeline(StrategyPipeline):
         self._journal = DecisionJournal()
         self._client = get_exchange_client()
         self._macdx_settings = config.get("MACDX_SETTINGS", {})
+        from src.core.signals.macdx import MacdxSignalGenerator
+        self._signal_generator = MacdxSignalGenerator(self._macdx_settings)
+        self._exit_context: Dict[str, Any] = {}
+        self._had_position = False
 
     def generate_command(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None,
                          exit_context: Optional[Dict] = None) -> Optional[TradeCommand]:
         """Генерирует TradeCommand нативно (без промежуточного dict)."""
         try:
             from src.config import STRATEGY_STYLE
-            from src.core.signals.macdx import MacdxSignalGenerator
 
             # Fetch positions
             all_positions = self._client.get_positions()
             normalized_symbol = symbol.replace("-", "")
             symbol_positions = all_positions.get(normalized_symbol, [])
             real_position = symbol_positions[0] if symbol_positions else None
+
+            # Переход «была позиция -> нет позиции» запускает cooldown
+            # и сбрасывает контекст trailing/peak предыдущей сделки.
+            if self._had_position and real_position is None:
+                self._signal_generator.set_last_close_time(
+                    datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                )
+                self._exit_context.clear()
+            self._had_position = real_position is not None
 
             # Decision context
             decision_context = self._journal.get_context(symbol, STRATEGY_STYLE)
@@ -58,7 +71,7 @@ class MacdxPipeline(StrategyPipeline):
             current_price = analysis_result.get("current_price", 0)
 
             # Generate MACDX signal
-            gen = MacdxSignalGenerator(self._macdx_settings)
+            gen = self._signal_generator
             signal_data = gen.generate(analysis_result, regime_data)
             analysis_result["signal_data"] = signal_data
             signal = signal_data.get("signal", "HOLD")
@@ -67,9 +80,10 @@ class MacdxPipeline(StrategyPipeline):
             confirmations = signal_data.get("confirmations", 0)
 
             # Check for close signal first (pass exit_context for advanced exit logic)
+            active_exit_context = exit_context if exit_context is not None else self._exit_context
             close_signal = gen.should_close(
                 analysis_result, real_position,
-                exit_context=exit_context if exit_context is not None else {}
+                exit_context=active_exit_context
             )
             analysis_result["close_signal"] = close_signal
 
@@ -170,6 +184,20 @@ class MacdxPipeline(StrategyPipeline):
             symbol, signal, current_price, analysis_result, support, resistance, regime_data, signal_quality
         )
 
+        if sl is None or tp is None:
+            warning(f"⚠️ [{symbol}] MACDX: вход отменён из-за некорректного SL/TP или R/R")
+            return TradeCommand.hold(
+                symbol=symbol,
+                current_price=current_price,
+                reason=f"[MACDX] Сигнал {signal} отклонён risk validation [{regime_label}]",
+                strategy=STRATEGY_NAME,
+                confidence=signal_confidence,
+                score=signal_data.get("score", 0),
+                max_score=signal_data.get("max_score", 0),
+                confirmations=confirmations,
+                regime=regime_label,
+            )
+
         info(f"🔧 [{symbol}] MACDX: {signal} Q:{signal_quality:.2f} conf:{confirmations} [{regime_label}] - DIRECT EXECUTION (NO AI)")
 
         return TradeCommand.entry(
@@ -200,13 +228,21 @@ class MacdxPipeline(StrategyPipeline):
         sl, tp, size_pct = None, None, None
         try:
             # Дополняем regime данными из preset
-            sl_percent = self._macdx_settings.get("preset", {}).get("sl_percent")
-            tp_percent = self._macdx_settings.get("preset", {}).get("tp_percent")
+            preset = self._macdx_settings.get("preset", {})
+            sl_multiplier = preset.get("sl_multiplier")
+            tp_multiplier = preset.get("tp_multiplier")
             regime_params = dict(regime) if regime else {}
-            if sl_percent is not None:
-                regime_params["sl_percent"] = sl_percent
-            if tp_percent is not None:
-                regime_params["tp_percent"] = tp_percent
+            if sl_multiplier is not None:
+                regime_params["sl_multiplier"] = sl_multiplier
+            if tp_multiplier is not None:
+                regime_params["tp_multiplier"] = tp_multiplier
+
+            configured_rr = float(
+                self._macdx_settings.get("signal_rules", {}).get("min_risk_reward_ratio", 1.4)
+            )
+            regime_params["min_risk_reward_ratio"] = max(
+                configured_rr, float(regime_params.get("min_risk_reward_ratio", 0))
+            )
 
             sl_tp = calculate_dynamic_sl_tp(
                 signal=signal, current_price=current_price,

@@ -1,0 +1,9 @@
+{
+  "_description": "MACDX 1h: среднесрочный трендовый профиль",
+  "_version": "1.0.0",
+  "_inherits": "default",
+  "_strategy": "MACDX",
+  "preset": {"timeframe": "1h", "chart_period": "30D", "plotter_period": "14D", "loop_interval": 600, "position_check_interval": 60, "sl_multiplier": 1.8, "tp_multiplier": 3.5, "leverage": 3, "cooldown_after_close_hours": 8},
+  "signal_rules": {"min_atr_percent": 0.35, "bb_width_threshold": 1.4, "require_2_candle_confirmation": false},
+  "exit_rules": {"emergency": {"max_hold_candles": 32}}
+}

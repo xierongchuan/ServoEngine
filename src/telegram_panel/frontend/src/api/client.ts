@@ -183,7 +183,6 @@ export interface ConfigSystemInfo {
 export interface ActiveConfig {
   strategy: string;
   symbols: Record<string, string[]>;
-  symbol_profiles: Record<string, string>;
   disabled_symbols: string[];
   strategy_instances?: StrategyInstance[];
 }
@@ -253,7 +252,6 @@ export interface StrategyInstance {
 }
 
 export interface SymbolProfilesResponse {
-  symbol_profiles: Record<string, string>;
   instance_profiles?: Record<string, string>;
   strategy_instances?: StrategyInstance[];
   symbols: string[];
