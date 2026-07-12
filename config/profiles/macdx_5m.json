@@ -6,7 +6,8 @@
   "preset": {
     "timeframe": "5m",
     "chart_period": "3D",
-    "plotter_period": "1D",
+    "plotter_period": "3D",
+    "history_candles": 864,
     "loop_interval": 60,
     "position_check_interval": 15,
     "sl_multiplier": 1.3,

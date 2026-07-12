@@ -34,6 +34,20 @@ def test_fetch_prices_uses_runtime_instance_config(monkeypatch):
     assert client.calls == [{"symbol": "BNBUSDT", "interval": "5m", "limit": 24}]
 
 
+def test_fetch_prices_prefers_explicit_history_candles(monkeypatch):
+    client = _FakeClient()
+    monkeypatch.setattr(collector, "get_exchange_client", lambda: client)
+
+    collector.fetch_prices("BTCUSDT", {
+        "STRATEGY_STYLE": "MACDX",
+        "DEFAULT_CHART_RANGE": "180D",
+        "CHART_RANGES": {"180D": {"days": 180}},
+        "STYLE_PRESETS": {"MACDX": {"timeframe": "1d", "history_candles": 180}},
+    })
+
+    assert client.calls == [{"symbol": "BTCUSDT", "interval": "1d", "limit": 180}]
+
+
 def test_process_symbol_writes_to_runtime_data_dir(monkeypatch, tmp_path):
     client = _FakeClient()
     monkeypatch.setattr(collector, "get_exchange_client", lambda: client)

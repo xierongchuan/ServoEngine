@@ -9,7 +9,7 @@ import { StatusDot } from '../components/ui/StatusDot';
 export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Record<string, unknown>) => void) => () => void }) {
   const [symbols, setSymbols] = useState<string[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState('');
-  const [selectedRange, setSelectedRange] = useState('1D');
+  const [selectedRange, setSelectedRange] = useState('AUTO');
   const [chartData, setChartData] = useState<ChartData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +45,9 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
     try {
       const data = await getChartData(selectedSymbol, selectedRange);
       setChartData(data);
+      if (selectedRange === 'AUTO' && data.range) {
+        setSelectedRange(data.range);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load chart');
     } finally {
@@ -57,6 +60,10 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    setSelectedRange('AUTO');
+  }, [selectedSymbol]);
 
   useEffect(() => {
     const unsub1 = subscribe('trade_update', () => fetchData(true));

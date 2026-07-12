@@ -158,6 +158,11 @@ def test_all_macdx_timeframe_profiles_have_enough_history():
         value = int(preset["timeframe"][:-1])
         timeframe_minutes = value * (1440 if unit == "d" else 60 if unit == "h" else 1)
         assert duration_minutes // timeframe_minutes >= 35
+        assert preset["history_candles"] == duration_minutes // timeframe_minutes
+        assert preset["plotter_period"] == preset["chart_period"]
+
+    daily = json.loads((root / "config/profiles/macdx_1d.json").read_text())
+    assert daily["preset"]["history_candles"] == 180
 
 
 def test_backtest_uses_same_atr_units_as_live_analysis():

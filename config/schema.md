@@ -125,6 +125,19 @@ Per-instance override system with strategy binding:
 - **`macdx_5m` / `macdx_15m` / `macdx_30m` / `macdx_1h` / `macdx_1d`** - MACDX profiles with timeframe-specific history, polling, volatility, cooldown and ATR risk settings.
 - **`_templates/`** - Future: reusable profile templates for common configurations (aggressive, conservative, balanced)
 
+MACDX history and default chart window:
+
+| Profile | Candles loaded | Approximate history |
+|---------|----------------|---------------------|
+| `macdx_5m` | 864 | 3 days |
+| `macdx_15m` | 672 | 1 week |
+| `macdx_30m` | 672 | 2 weeks |
+| `macdx_1h` | 720 | 30 days |
+| `macdx_1d` | 180 | 6 months |
+
+Indicators always use the full loaded history. Telegram Panel applies its selected
+range only after indicator warm-up, so zooming the chart does not reset MACD/EMA.
+
 ### 5. Active Configuration (`config/active.json`)
 Runtime selection.
 

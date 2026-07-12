@@ -114,7 +114,7 @@ export function getChartsList() {
   return fetchAPI<ChartFile[]>('/api/charts/list');
 }
 
-export function getChartData(symbol: string, range: string = '1D') {
+export function getChartData(symbol: string, range: string = 'AUTO') {
   return fetchAPI<ChartData>(
     `/api/chart-data/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}`
   );

@@ -4,8 +4,9 @@
 
   "preset": {
     "timeframe": "15m",
-    "chart_period": "1D",
-    "plotter_period": "1D",
+    "chart_period": "1W",
+    "plotter_period": "1W",
+    "history_candles": 672,
     "loop_interval": 60,
     "position_check_interval": 15,
     "sl_multiplier": 1.5,

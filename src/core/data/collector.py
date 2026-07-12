@@ -104,7 +104,13 @@ def fetch_prices(symbol: str, config: Optional[Dict[str, Any]] = None) -> List[D
 
         # 3. Calculate Limit (Duration / Interval)
         interval_minutes = parse_interval_minutes(target_interval_str)
-        required_candles = max(1, int(total_duration_minutes // interval_minutes))
+        duration_candles = max(1, int(total_duration_minutes // interval_minutes))
+        configured_history = current_preset.get("history_candles")
+        required_candles = (
+            max(1, int(configured_history))
+            if configured_history is not None
+            else duration_candles
+        )
 
         limit = required_candles
         interval = target_interval_str

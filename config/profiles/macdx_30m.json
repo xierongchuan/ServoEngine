@@ -3,7 +3,7 @@
   "_version": "1.0.0",
   "_inherits": "default",
   "_strategy": "MACDX",
-  "preset": {"timeframe": "30m", "chart_period": "14D", "plotter_period": "3D", "loop_interval": 300, "position_check_interval": 30, "sl_multiplier": 1.7, "tp_multiplier": 3.2, "leverage": 4, "cooldown_after_close_hours": 4},
+  "preset": {"timeframe": "30m", "chart_period": "14D", "plotter_period": "14D", "history_candles": 672, "loop_interval": 300, "position_check_interval": 30, "sl_multiplier": 1.7, "tp_multiplier": 3.2, "leverage": 4, "cooldown_after_close_hours": 4},
   "signal_rules": {"min_atr_percent": 0.25, "bb_width_threshold": 1.0, "require_2_candle_confirmation": false},
   "exit_rules": {"emergency": {"max_hold_candles": 40}}
 }

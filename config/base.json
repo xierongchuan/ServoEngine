@@ -129,6 +129,12 @@
       "candles": 90,
       "interval": "1d",
       "ai_context_candles": 90
+    },
+    "180D": {
+      "days": 180,
+      "candles": 180,
+      "interval": "1d",
+      "ai_context_candles": 180
     }
   },
   "technical_analysis": {

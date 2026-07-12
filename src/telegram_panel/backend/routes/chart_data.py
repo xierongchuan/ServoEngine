@@ -15,6 +15,50 @@ BASE_CONFIG_PATH = Path(os.path.join(os.path.dirname(os.path.dirname(os.path.dir
 router = APIRouter(prefix="/api/chart-data", tags=["chart-data"])
 
 
+def _range_to_seconds(value: str) -> Optional[int]:
+    """Преобразовать UI-диапазон в секунды."""
+    text = str(value or "").strip().upper()
+    if not text or text == "AUTO":
+        return None
+    multipliers = {"M": 60, "H": 3600, "D": 86400, "W": 7 * 86400, "Y": 365 * 86400}
+    unit = text[-1]
+    if unit not in multipliers:
+        return None
+    try:
+        return int(text[:-1]) * multipliers[unit]
+    except ValueError:
+        return None
+
+
+def _recommended_range(timeframe_minutes: int) -> str:
+    """Диапазон, на котором MACD и тренд читаются без перегрузки графика."""
+    if timeframe_minutes >= 1440:
+        return "180D"
+    if timeframe_minutes >= 60:
+        return "30D"
+    if timeframe_minutes >= 30:
+        return "14D"
+    if timeframe_minutes >= 15:
+        return "1W"
+    if timeframe_minutes >= 5:
+        return "3D"
+    return "6h"
+
+
+def _available_ranges(timeframe_minutes: int) -> list[str]:
+    if timeframe_minutes >= 1440:
+        return ["30D", "90D", "180D", "1Y"]
+    if timeframe_minutes >= 60:
+        return ["3D", "1W", "14D", "30D", "90D", "180D"]
+    if timeframe_minutes >= 30:
+        return ["1D", "3D", "1W", "14D", "30D"]
+    if timeframe_minutes >= 15:
+        return ["12h", "1D", "3D", "1W", "14D"]
+    if timeframe_minutes >= 5:
+        return ["6h", "12h", "1D", "3D", "1W"]
+    return ["1h", "2h", "4h", "6h", "12h", "1D", "3D"]
+
+
 def _read_json(path: Path, default=None):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -161,7 +205,7 @@ def _resample_candles(candles: list[dict], target_minutes: int) -> list[dict]:
 @router.get("/{symbol}")
 async def get_chart_data(
     symbol: str,
-    time_range: str = Query(default="1D", alias="range"),
+    time_range: str = Query(default="AUTO", alias="range"),
     _user: dict = Depends(get_current_user),
 ) -> dict:
     """OHLCV + индикаторы + позиция для интерактивного графика."""
@@ -176,19 +220,6 @@ async def get_chart_data(
     if not raw_candles:
         raise HTTPException(status_code=404, detail="Empty price data")
 
-    # time_range параметр теперь используется только для определения временного диапазона
-    range_seconds = 86400  # По умолчанию 1 день (86400 секунд)
-    if time_range:
-        range_str = time_range.upper()
-        if range_str.endswith("D"):
-            range_seconds = int(range_str[:-1]) * 86400
-        elif range_str.endswith("W"):
-            range_seconds = int(range_str[:-1]) * 7 * 86400
-        elif range_str.endswith("H"):
-            range_seconds = int(range_str[:-1]) * 3600
-        elif range_str.endswith("M"):
-            range_seconds = int(range_str[:-1]) * 60
-
     # Парсинг свечей (тот же формат что в plotter.py)
     candles = []
     for c in raw_candles:
@@ -197,7 +228,8 @@ async def get_chart_data(
             if ts_str.endswith("Z"):
                 dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             else:
-                dt = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
+                dt = datetime.fromisoformat(ts_str)
+                dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
             ts = int(dt.timestamp())
         except (ValueError, AttributeError):
             continue
@@ -260,8 +292,23 @@ async def get_chart_data(
     # Определяем фактический таймфрейм из загруженных свечей
     detected_tf_minutes = _detect_timeframe(candles)
 
+    requested_range = str(time_range or "AUTO").upper()
+    resolved_range = (
+        _recommended_range(detected_tf_minutes)
+        if requested_range == "AUTO"
+        else requested_range
+    )
+    range_seconds = _range_to_seconds(resolved_range)
+    if range_seconds is None:
+        raise HTTPException(status_code=400, detail=f"Invalid chart range: {time_range}")
+
     # Используем фактический таймфрейм свечей - никакого ресемплинга!
     # Графики показывают ровно то, что есть в данных
+
+    # Индикаторы считаем по всей загруженной истории, а диапазон UI
+    # применяем только после warm-up. Иначе MACD на коротком zoom исчезает.
+    indicator_candles = candles
+    closes = [c["close"] for c in indicator_candles]
 
     # Фильтр по временному диапазону (отталкиваемся от последней свечи)
     latest_ts = candles[-1]["time"]
@@ -269,17 +316,14 @@ async def get_chart_data(
     candles = [c for c in candles if c["time"] >= cutoff_ts]
 
     if not candles:
-        raise HTTPException(status_code=404, detail=f"No data for range {time_range}")
-
-    # Индикаторы
-    closes = [c["close"] for c in candles]
+        raise HTTPException(status_code=404, detail=f"No data for range {resolved_range}")
 
     indicators: dict = {}
 
     # EMA 12
     ema12_values = _calculate_ema(closes, 12)
     indicators["ema12"] = [
-        {"time": candles[i]["time"], "value": v}
+        {"time": indicator_candles[i]["time"], "value": v}
         for i, v in enumerate(ema12_values)
         if v is not None
     ]
@@ -287,14 +331,14 @@ async def get_chart_data(
     # SMA 26
     sma26_values = _calculate_sma(closes, 26)
     indicators["sma26"] = [
-        {"time": candles[i]["time"], "value": v}
+        {"time": indicator_candles[i]["time"], "value": v}
         for i, v in enumerate(sma26_values)
         if v is not None
     ]
 
     rsi_values = _calculate_rsi(closes, 14)
     indicators["rsi"] = [
-        {"time": candles[i]["time"], "value": v}
+        {"time": indicator_candles[i]["time"], "value": v}
         for i, v in enumerate(rsi_values)
         if v is not None
     ]
@@ -302,20 +346,26 @@ async def get_chart_data(
     # MACD (12, 26, 9)
     macd_line, signal_line, histogram = _calculate_macd(closes)
     indicators["macd"] = [
-        {"time": candles[i]["time"], "value": v}
+        {"time": indicator_candles[i]["time"], "value": v}
         for i, v in enumerate(macd_line)
         if v is not None
     ]
     indicators["macd_signal"] = [
-        {"time": candles[i]["time"], "value": v}
+        {"time": indicator_candles[i]["time"], "value": v}
         for i, v in enumerate(signal_line)
         if v is not None
     ]
     indicators["macd_histogram"] = [
-        {"time": candles[i]["time"], "value": v}
+        {"time": indicator_candles[i]["time"], "value": v}
         for i, v in enumerate(histogram)
         if v is not None
     ]
+
+    # В UI отдаём только выбранное окно, но значения уже имеют полный warm-up.
+    indicators = {
+        name: [point for point in series if point["time"] >= cutoff_ts]
+        for name, series in indicators.items()
+    }
 
     # Позиция
     active_trades = _read_json(DATA_DIR / "active_trades.json", default={})
@@ -337,9 +387,7 @@ async def get_chart_data(
             "leverage": trade.get("leverage"),
         }
 
-    # available_ranges теперь формируется на основе фактических данных
-    # Просто возвращаем стандартные периоды для UI
-    available_ranges = ["15m", "30m", "1h", "2h", "4h", "6h", "12h", "1D", "2D", "3D", "1W", "14D"]
+    available_ranges = _available_ranges(detected_tf_minutes)
 
     # interval показываем фактический (определённый из свечей)
     tf_minutes_to_str = {1: "1m", 5: "5m", 15: "15m", 30: "30m", 60: "1h", 120: "2h", 240: "4h", 360: "6h", 720: "12h", 1440: "1d"}
@@ -347,7 +395,7 @@ async def get_chart_data(
 
     return {
         "symbol": symbol,
-        "range": time_range,
+        "range": resolved_range,
         "interval": display_interval,
         "candles": candles,
         "indicators": indicators,
