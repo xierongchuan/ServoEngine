@@ -1,68 +1,26 @@
-#!/bin/bash
-# Скрипт для автоматического запуска торгового бота в контейнере
-# Автор: Claude Code
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Цвета для вывода
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+# Исходники встроены в образ; снаружи остаются только настройки и рабочие данные.
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
 
-log_message() {
-    echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] WARNING:${NC} $1"
-}
-
-# Переходим в корневую директорию проекта (на уровень выше скрипта)
-cd "$(dirname "$0")/.."
-
-# Загружаем переменные из .env файла если он существует
-if [ -f .env ]; then
-    log_message "Загрузка переменных из .env файла..."
-    source .env
+if [[ ! -f .env ]]; then
+    echo "❌ Не найден .env. Создайте его из .env.example и задайте API-ключи." >&2
+    exit 1
 fi
-
-# Создаем директории если их нет
 mkdir -p data/prices data/news data/logs charts
+IMAGE_NAME="${SERVO_IMAGE_PREFIX:-localhost/servo-engine}-bot:${SERVO_IMAGE_TAG:-dev}"
+podman build --format docker --layers -t "$IMAGE_NAME" .
 
-# Логируем начало
-log_message "Запуск торгового бота Servo Engine..."
-log_message "Биржа: $EXCHANGE"
-log_message "Режим: $MODE"
-log_message "🚀 Запуск торгового бота в контейнере..."
+run_args=(--rm --init --userns=keep-id --stop-timeout 45 --env-file .env)
+[[ ! -t 0 || ! -t 1 ]] || run_args+=(-it)
+# Переданная из shell настройка сохраняет прежний способ прямого запуска.
+[[ -z "${SERVO_RUNTIME_SUPERVISOR:-}" ]] || run_args+=(-e "SERVO_RUNTIME_SUPERVISOR=$SERVO_RUNTIME_SUPERVISOR")
+[[ "${SERVO_RUNTIME_SUPERVISOR:-1}" != 0 ]] || run_args+=(--no-healthcheck)
 
-# Собираем образ с зависимостями (пересобирается только при изменении requirements.txt)
-IMAGE_NAME="servo-engine-bot"
-log_message "Проверка/сборка образа $IMAGE_NAME..."
-podman build -q -t "$IMAGE_NAME" .
-
-# Исправляем права на data/ если файлы принадлежат root (от предыдущих запусков без --user)
-if [ -d data ] && [ "$(stat -c '%U' data 2>/dev/null)" = "root" ]; then
-    log_warning "Обнаружены файлы с правами root в data/, исправляю..."
-    sudo chown -R "$(id -u):$(id -g)" data/ charts/ 2>/dev/null || true
-fi
-
-# Запускаем бота в контейнере с --init для корректной обработки Ctrl+C
-# --userns=keep-id: маппинг UID хоста → тот же UID внутри контейнера (решает проблемы с правами)
-if podman run --rm -it --init \
-    --userns=keep-id \
-    --security-opt label=disable \
-    --env-file .env \
-    -v .:/app \
-    -w /app \
-    "$IMAGE_NAME" \
-    python3 run.py; then
-    log_message "✅ Торговый бот остановлен (штатно)"
-else
-    log_error "❌ Торговый бот упал с ошибкой"
-    log_warning "Проверьте логи: data/steps.log"
-fi
-
-log_message "Завершено. Логи сохранены в data/steps.log и data/trades.log"
+exec podman run "${run_args[@]}" \
+    -v "$PROJECT_ROOT/data:/app/data:rw,z" \
+    -v "$PROJECT_ROOT/charts:/app/charts:rw,z" \
+    -v "$PROJECT_ROOT/config:/app/config:rw,z" \
+    "$IMAGE_NAME"

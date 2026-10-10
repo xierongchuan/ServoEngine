@@ -1,0 +1,164 @@
+name: Контейнерные образы
+
+on:
+  pull_request:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  workflow_dispatch:
+
+# PR и сборки веток не получают права публикации пакетов.
+permissions:
+  contents: read
+
+jobs:
+  build-only:
+    name: Проверка / ${{ matrix.arch }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy: &native-build
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            platform: linux/amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            platform: linux/arm64
+    steps:
+      - &checkout
+        name: Получить исходники
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - &metadata
+        name: Определить имена образов
+        id: metadata
+        env:
+          ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'prefix=ghcr.io/%s\n' "${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s-%s\n' "$GITHUB_SHA" "$ARCH" >> "$GITHUB_OUTPUT"
+
+      - &build
+        name: Собрать оба образа нативно без публикации
+        env:
+          IMAGE_PREFIX: ${{ steps.metadata.outputs.prefix }}
+          IMAGE_TAG: ${{ steps.metadata.outputs.tag }}
+          PLATFORM: ${{ matrix.platform }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/build_images.sh --engine podman --platform "$PLATFORM" \
+            --image-prefix "$IMAGE_PREFIX" --tag "$IMAGE_TAG"
+
+      - &tests
+        name: Выполнить тесты в образе панели
+        env:
+          IMAGE_PREFIX: ${{ steps.metadata.outputs.prefix }}
+          IMAGE_TAG: ${{ steps.metadata.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          podman run --rm -v "$PWD/tests:/app/tests:ro,z" -v "$PWD/scripts:/app/scripts:ro,z" \
+            "${IMAGE_PREFIX}-panel:${IMAGE_TAG}" sh -c \
+            'pip install --no-cache-dir -q pytest && python -m pytest tests/ -x -q'
+
+      - &smoke
+        name: Проверить автономный запуск, health, статику и SIGTERM
+        env:
+          IMAGE_PREFIX: ${{ steps.metadata.outputs.prefix }}
+          IMAGE_TAG: ${{ steps.metadata.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Тест поступает через stdin: исходники и секреты не примонтированы.
+          for name in bot panel; do
+            timeout --signal=TERM --kill-after=5s 90s podman run --rm -i --network none \
+              --entrypoint python "${IMAGE_PREFIX}-${name}:${IMAGE_TAG}" \
+              - "$name" < tests/container_smoke.py
+          done
+
+  publish:
+    name: Публикация / ${{ matrix.arch }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy: *native-build
+    steps:
+      - *checkout
+      - *metadata
+      - *build
+      - *tests
+      - *smoke
+
+      - name: Авторизоваться в GHCR после smoke-проверок
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Опубликовать проверенные архитектурные образы
+        env:
+          IMAGE_PREFIX: ${{ steps.metadata.outputs.prefix }}
+          IMAGE_TAG: ${{ steps.metadata.outputs.tag }}
+          PLATFORM: ${{ matrix.platform }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Повторная сборка использует кеш слоёв предыдущего шага.
+          bash scripts/build_images.sh --engine podman --platform "$PLATFORM" \
+            --image-prefix "$IMAGE_PREFIX" --tag "$IMAGE_TAG" --push
+
+  merge:
+    name: Объединить архитектуры в GHCR
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Авторизоваться в GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Опубликовать manifests с SHA и релизными тегами
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tags=("$GITHUB_SHA")
+          # Ручная публикация получает только SHA; latest обновляется только релизным push.
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/tags/v* ]]; then
+            [[ "$GITHUB_REF_NAME" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]] || {
+              printf 'Ошибка: Git-тег нельзя использовать как тег образа: %s\n' "$GITHUB_REF_NAME" >&2
+              exit 1
+            }
+            tags+=("$GITHUB_REF_NAME" latest)
+          fi
+
+          for name in bot panel; do
+            manifest="${prefix}-${name}:${GITHUB_SHA}"
+            podman manifest create "$manifest"
+            for arch in amd64 arm64; do
+              podman manifest add "$manifest" "docker://${prefix}-${name}:${GITHUB_SHA}-${arch}"
+            done
+            for tag in "${tags[@]}"; do
+              podman manifest push --all "$manifest" "docker://${prefix}-${name}:${tag}"
+            done
+          done

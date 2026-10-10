@@ -15,7 +15,7 @@ echo "=== Остановка панели ==="
 
 echo "Останавливаю контейнер..."
 cd "$PROJECT_ROOT"
-podman-compose down 2>/dev/null || true
+podman compose --profile panel stop panel
 
 # Останавливаем ngrok (если был запущен)
 if [ -f "$NGROK_PID_FILE" ]; then

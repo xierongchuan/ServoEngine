@@ -100,14 +100,15 @@ start_ngrok_if_needed() {
 # Останавливаем контейнер
 echo "Останавливаю контейнер..."
 cd "$PROJECT_ROOT"
-podman-compose down 2>/dev/null || true
+podman compose --profile panel stop panel
 
 # Запускаем ngrok если нужен
 start_ngrok_if_needed
 
 # Пересобираем и запускаем контейнер
 echo "Пересобираю и запускаю контейнер..."
-podman-compose up --build -d
+mkdir -p data/prices data/news data/logs charts
+podman compose --profile panel up --build --force-recreate -d --no-deps panel
 
 echo ""
 echo "=== Панель перезапущена ==="
@@ -117,5 +118,5 @@ if [ -n "${TELEGRAM_PANEL_URL:-}" ]; then
     echo "  Панель:   $TELEGRAM_PANEL_URL"
 fi
 echo ""
-echo "Логи: podman-compose logs -f"
+echo "Логи: podman compose logs -f panel"
 echo "Стоп: ./scripts/stop_panel.sh"

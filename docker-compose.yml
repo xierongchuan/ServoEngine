@@ -1,23 +1,58 @@
 services:
-  panel:
+  bot:
+    image: ${SERVO_IMAGE_PREFIX:-localhost/servo-engine}-bot:${SERVO_IMAGE_TAG:-dev}
     build:
-      context: src/telegram_panel/
+      context: .
       dockerfile: Dockerfile
-    ports:
-      - "${PANEL_PORT:-8080}:8080"
+    init: true
+    user: "${SERVO_UID:-0}:${SERVO_GID:-0}"
     security_opt:
-      - label:disable
+      - no-new-privileges:true
     volumes:
-      - ./data:/app/data:rw
-      - ./charts:/app/charts:ro
-      - ./config:/app/config:rw
-      - ./src:/app/src:ro
-      - ./.env:/app/.env:ro
+      - ./data:/app/data:rw,z
+      - ./charts:/app/charts:rw,z
+      - ./config:/app/config:rw,z
     env_file: .env
     environment:
-      - PANEL_PORT=8080
-      - PANEL_DATA_DIR=/app/data
-      - PANEL_CHARTS_DIR=/app/charts
-      - PANEL_CONFIG_PATH=/app/config/active.json
-      - TELEGRAM_PANEL_URL=${TELEGRAM_PANEL_URL:-}
+      SERVO_DATA_DIR: /app/data
+    healthcheck:
+      test: [CMD, python, scripts/container_healthcheck.py, bot]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    stop_grace_period: 45s
+    restart: unless-stopped
+
+  panel:
+    profiles: [panel]
+    image: ${SERVO_IMAGE_PREFIX:-localhost/servo-engine}-panel:${SERVO_IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: src/telegram_panel/Dockerfile
+    init: true
+    user: "${SERVO_UID:-0}:${SERVO_GID:-0}"
+    ports:
+      - "${PANEL_BIND_ADDRESS:-127.0.0.1}:${PANEL_PORT:-8080}:8080"
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./data:/app/data:rw,z
+      - ./charts:/app/charts:rw,z
+      - ./config:/app/config:rw,z
+    env_file: .env
+    environment:
+      PANEL_PORT: "8080"
+      PANEL_DATA_DIR: /app/data
+      PANEL_CHARTS_DIR: /app/charts
+      PANEL_CONFIG_PATH: /app/config/active.json
+      SERVO_DATA_DIR: /app/data
+      TELEGRAM_PANEL_URL: ${TELEGRAM_PANEL_URL:-}
+    healthcheck:
+      test: [CMD, python, scripts/container_healthcheck.py, panel]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    stop_grace_period: 15s
     restart: unless-stopped
