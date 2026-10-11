@@ -6,7 +6,10 @@ import { Spinner } from '../components/Spinner';
 import { Tabs } from '../components/ui/Tabs';
 import { StatusDot } from '../components/ui/StatusDot';
 
-export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Record<string, unknown>) => void) => () => void }) {
+export function Charts({ subscribe, active = true }: {
+  subscribe: (type: string, cb: (data: Record<string, unknown>) => void) => () => void;
+  active?: boolean;
+}) {
   const [symbols, setSymbols] = useState<string[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState('');
   const [selectedRange, setSelectedRange] = useState('AUTO');
@@ -15,6 +18,8 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [waitingForData, setWaitingForData] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const lastSnapshotRef = useRef<{ request: string; data: ChartSnapshot } | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const fsContainerRef = useRef<HTMLDivElement>(null);
   const [symbolsWithPositions, setSymbolsWithPositions] = useState<Set<string>>(new Set());
@@ -35,7 +40,10 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
   }, []);
 
   useEffect(() => {
-    if (!selectedSymbol) return;
+    if (!selectedSymbol || !active) {
+      setRefreshing(false);
+      return;
+    }
     let disposed = false;
     let inFlight = false;
     let pending = false;
@@ -44,20 +52,23 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let queued: ReturnType<typeof setTimeout> | undefined;
     let lastStarted = 0;
-    let sources: ChartStream[] | null = null;
-    setLoading(true);
-    setChartData(null);
+    const request = `${selectedSymbol}:${selectedRange}:${selectedSource}`;
+    const previous = lastSnapshotRef.current?.request === request ? lastSnapshotRef.current.data : null;
+    let sources: ChartStream[] | null = previous?.available_sources || null;
+    setLoading(!previous);
+    setChartData(previous);
     setError(null);
     setWaitingForData(false);
 
     const refresh = async () => {
-      if (disposed || authFailed) return;
+      if (disposed || authFailed || document.hidden) return;
       if (inFlight) { pending = true; return; }
       if (Date.now() - lastStarted < 1000) {
         if (!queued) queued = setTimeout(() => { queued = undefined; void refresh(); }, 1000);
         return;
       }
       inFlight = true;
+      setRefreshing(true);
       lastStarted = Date.now();
       controller = new AbortController();
       timeout = setTimeout(() => controller?.abort(), 10000);
@@ -66,6 +77,7 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
         const stream = sources.find(source => chartStreamKey(source) === selectedSource) || sources[0];
         const data = await getChartData(selectedSymbol, selectedRange, controller.signal, stream);
         if (!disposed) {
+          lastSnapshotRef.current = { request, data };
           setChartData(data);
           setError(null);
           setWaitingForData(false);
@@ -78,19 +90,24 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
       } catch (err) {
         if (!disposed) {
           authFailed = err instanceof AuthenticationError;
+          if (authFailed) {
+            lastSnapshotRef.current = null;
+            setChartData(null);
+          }
           const unavailable = err instanceof APIError && err.status === 404;
           setWaitingForData(unavailable);
           // После запуска runtime могут появиться новые источники; пустой каталог нельзя кэшировать навсегда.
           if (unavailable) sources = null;
           setError(unavailable
             ? 'Данные графика ещё не появились. Проверьте запуск общего runtime в Настройках и дождитесь загрузки свечей. Обновление выполняется автоматически; read_only тоже собирает данные.'
-            : err instanceof Error && err.name !== 'AbortError' ? err.message : 'Обновление графика не завершено. Повторим автоматически.');
+            : err instanceof Error && err.name !== 'AbortError' ? err.message : 'Загрузка графика заняла больше 10 секунд. Проверьте соединение; повторим автоматически.');
         }
       } finally {
         clearTimeout(timeout);
         inFlight = false;
         if (!disposed) {
           setLoading(false);
+          setRefreshing(false);
           if (pending) { pending = false; void refresh(); }
         }
       }
@@ -117,7 +134,7 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
       unsubTrade();
       unsubData();
     };
-  }, [selectedSymbol, selectedRange, selectedSource, subscribe]);
+  }, [selectedSymbol, selectedRange, selectedSource, subscribe, active]);
 
   // Слушаем выход из fullscreen через браузерное событие (Escape / жест)
   useEffect(() => {
@@ -135,6 +152,7 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
   return (
     <div
       ref={fsContainerRef}
+      aria-busy={loading || refreshing}
       className={`flex flex-col gap-3 ${
         fullscreen
           ? 'fixed inset-0 z-40 bg-tg-bg p-3 pb-20 md:pb-3 md:pl-[5.5rem] w-full h-[100dvh]'
@@ -181,6 +199,10 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
           <Spinner size={32} />
         </div>
       )}
+
+      {refreshing && !loading && chartData && <div role="status" className="text-xs text-tg-hint">
+        Обновляем график; показан последний загруженный снимок.
+      </div>}
 
       {error && !loading && (
         <div role={waitingForData ? 'status' : 'alert'} className={`text-center py-3 text-sm leading-relaxed ${waitingForData ? 'text-tg-hint' : 'text-red-400'}`}>{error}{chartData && ' Показан последний успешно загруженный снимок.'}</div>

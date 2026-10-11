@@ -210,6 +210,32 @@ def test_exception_diagnostics_include_route_and_location_without_secrets(monkey
         assert secret not in combined
 
 
+def test_chart_response_gzip_preserves_history_and_auth(tmp_path, monkeypatch):
+    from src.telegram_panel.backend.routes import chart_data
+    from src.telegram_panel.backend.services.auth import get_current_user
+    from test_telegram_panel_chart_data import _write_daily_candles
+    module = importlib.import_module("src.telegram_panel.backend.app")
+    prices = tmp_path / "prices"
+    prices.mkdir()
+    _write_daily_candles(prices / "BTCUSDT.json", count=180)
+    monkeypatch.setattr(chart_data, "DATA_DIR", tmp_path)
+    client = TestClient(module.app)
+    assert client.get("/api/chart-data/BTCUSDT").status_code in {401, 403}
+    def test_user():
+        return {}
+    monkeypatch.setattr(module.app, "dependency_overrides", {get_current_user: test_user})
+    compressed = client.get("/api/chart-data/BTCUSDT", headers={"Accept-Encoding": "gzip"})
+    plain = client.get("/api/chart-data/BTCUSDT", headers={"Accept-Encoding": "identity"})
+    assert compressed.status_code == plain.status_code == 200
+    assert compressed.headers["Content-Encoding"] == "gzip"
+    assert "accept-encoding" in compressed.headers["Vary"].lower()
+    assert "Content-Encoding" not in plain.headers
+    assert compressed.json() == plain.json()
+    assert len(compressed.json()["candles"]) == 180
+    assert int(compressed.headers["Content-Length"]) < len(plain.content) / 2
+    assert "no-store" in compressed.headers["Cache-Control"]
+
+
 def test_request_response_logging_uses_matched_route_template(monkeypatch):
     module = importlib.import_module("src.telegram_panel.backend.app")
     from starlette.responses import Response

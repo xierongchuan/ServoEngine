@@ -42,6 +42,7 @@ export async function fetchAPI<T>(path: string, options?: RequestInit): Promise<
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      'Accept': 'application/json',
       ...(useToken
         ? { 'X-Web-Token': token || '' }
         : { 'X-Telegram-Init-Data': initData }
@@ -72,9 +73,18 @@ export async function fetchAPI<T>(path: string, options?: RequestInit): Promise<
     }
     throw new APIError(res.status, `API error: ${res.status}${detail}`);
   }
+  const contentType = res.headers?.get('Content-Type') || '';
+  if (contentType.includes('text/html')) {
+    throw new APIError(502, 'Вместо данных API получена HTML-страница. Проверьте доступность туннеля панели.');
+  }
   try {
     return await res.json();
-  } catch {
+  } catch (error) {
+    // Abort во время чтения тела — отмена/таймаут, а не некорректный JSON сервера.
+    if (options?.signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
+    if (error instanceof Error && error.name === 'TypeError') {
+      throw new APIError(502, 'Не удалось полностью загрузить ответ сервера. Проверьте соединение и повторите запрос.');
+    }
     throw new APIError(502, 'Некорректный ответ сервера. Повторите запрос.');
   }
 }

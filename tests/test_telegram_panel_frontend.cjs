@@ -74,6 +74,32 @@ test('Общий fetchAPI экспортирован; ошибки сохран�
     && error.status === 502 && !error.message.includes('raw-secret'));
 });
 
+test('Отмена чтения HTTP 200 тела сохраняет AbortError, а не выдаёт ошибку JSON', async () => {
+  const controller = new AbortController();
+  const aborted = Object.assign(new Error('Синтетическая отмена'), { name: 'AbortError' });
+  const client = load('api/client.ts', {}, { Error,
+    window: { location: { origin: 'https://panel.example', hash: '', search: '' } },
+    fetch: async () => ({ ok: true, json: async () => { controller.abort(); throw aborted; } }),
+  });
+  await assert.rejects(client.getChartData('BTCUSDT', 'AUTO', controller.signal), error => error === aborted);
+  await assert.rejects(client.getChartData('BTCUSDT'), error => error === aborted);
+});
+
+test('Обрыв HTTP 200 тела и HTML туннеля отличаются от невалидного JSON и не раскрывают raw body', async () => {
+  const window = { location: { origin: 'https://panel.example', hash: '', search: '' } };
+  const broken = load('api/client.ts', {}, { Error, window,
+    fetch: async () => ({ ok: true, json: async () => { throw new TypeError('raw-private-network-error'); } }),
+  });
+  await assert.rejects(broken.getChartData('BTCUSDT'), error => error instanceof broken.APIError
+    && error.message.includes('полностью загрузить') && !error.message.includes('raw-private'));
+  const html = load('api/client.ts', {}, { window,
+    fetch: async () => ({ ok: true, headers: { get: () => 'text/html; charset=utf-8' },
+      json: () => assert.fail('HTML не должен парситься как JSON') }),
+  });
+  await assert.rejects(html.getChartData('BTCUSDT'), error => error instanceof html.APIError
+    && error.message.includes('HTML-страница'));
+});
+
 test('WS cleanup отменяет билет, удаляет таймеры и не создаёт соединение после unmount', async () => {
   let effect;
   let resolveTicket;

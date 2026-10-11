@@ -179,29 +179,68 @@ for (const status of [stopped('stopped'), stopped('crashed'), running]) {
   });
 }
 
-function chartsHarness(error) {
+test('App сохраняет страницу Charts между вкладками и передаёт active=false скрытой странице', async () => {
+  const h = hooksHarness();
+  const subscribe = () => () => {};
+  const modules = { react: h.react, 'react/jsx-runtime': { jsx, jsxs: jsx },
+    './api/client': { getDashboard: async () => ({}) },
+    './hooks/useWebSocket': { useWebSocket: () => ({ subscribe, isConnected: true }) },
+    './hooks/useTelegram': { useTelegram() {} },
+  };
+  for (const name of ['Dashboard', 'Charts', 'Trades', 'Logs', 'Settings', 'Journal']) modules[`./pages/${name}`] = { [name]: name };
+  for (const name of ['TabBar', 'Spinner']) modules[`./components/${name}`] = { [name]: name };
+  const component = load('App.tsx', modules, { window: { location: { hash: '', search: '' } }, URLSearchParams });
+  h.mount(() => component.App()); await flush(h);
+  const change = tab => { h.nodes().find(node => node.type === 'TabBar').props.onTabChange(tab); h.render(); };
+  assert.ok(!h.nodes().some(node => node.type === 'Charts'));
+  change('charts');
+  assert.equal(h.nodes().filter(node => node.type === 'Charts').length, 1);
+  assert.equal(h.nodes().find(node => node.type === 'Charts').props.active, true);
+  change('logs');
+  assert.equal(h.nodes().find(node => node.type === 'Charts').props.active, false);
+  assert.ok(h.nodes().some(node => node.type === 'div' && node.props.hidden === true));
+  change('charts');
+  assert.equal(h.nodes().filter(node => node.type === 'Charts').length, 1);
+  assert.equal(h.nodes().find(node => node.type === 'Charts').props.active, true);
+  h.stop();
+});
+
+function chartsHarness(error, initiallyAvailable = false) {
   const h = hooksHarness(), calls = [];
   class APIError extends Error { constructor(status, message) { super(message); this.status = status; } }
   class AuthenticationError extends APIError {}
-  let available = false;
+  let available = initiallyAvailable, active = true, hold = false, failure = null;
+  const pending = [];
+  const events = new Map();
   const stream = { exchange: 'bingx', market_type: 'perpetual', symbol: 'BTCUSDT', interval: '5m' };
   const snapshot = { symbol: 'BTCUSDT', available_sources: [stream], candles: [], source: { stream }, range: 'DAY', interval: '5m' };
   const modules = { react: h.react, 'react/jsx-runtime': { jsx, jsxs: jsx },
     '../api/client': { APIError, AuthenticationError,
       getDashboard: async () => ({ symbols: ['BTCUSDT'], active_trades: [] }),
       getChartSources: async () => { calls.push('sources'); return available ? [stream] : []; },
-      getChartData: async (_, __, ___, source) => { calls.push('data'); if (!available) throw error === 'auth'
-        ? new AuthenticationError(401, 'Сессия истекла') : new APIError(error, 'API error');
-        assert.equal(source, stream); return snapshot; },
+      getChartData: async (_, __, signal, source) => {
+        calls.push('data');
+        if (hold) return new Promise((resolve, reject) => pending.push({ resolve, reject, signal }));
+        if (failure) throw failure;
+        if (!available) throw error === 'auth'
+          ? new AuthenticationError(401, 'Сессия истекла') : new APIError(error, 'API error');
+        assert.equal(source, stream); return snapshot;
+      },
     }, '../api/chartTypes': { chartStreamKey: source => JSON.stringify(source) } };
   for (const name of ['InteractiveChart', 'Spinner', 'ui/Tabs', 'ui/StatusDot']) modules[`../components/${name}`] = {};
   let now = 10000;
   const component = load('pages/Charts.tsx', modules, { ...h.timers,
     Date: class extends Date { static now() { return now; } },
     document: { hidden: false, addEventListener() {}, removeEventListener() {} } });
-  const subscribe = () => () => {};
-  h.mount(() => component.Charts({ subscribe }));
-  return { ...h, calls, ready: () => { available = true; now += 16000; for (const poll of h.intervals) poll(); } };
+  const subscribe = (kind, callback) => { events.set(kind, callback); return () => events.delete(kind); };
+  h.mount(() => component.Charts({ subscribe, active }));
+  const poll = () => { now += 16000; for (const callback of h.intervals) callback(); };
+  return { ...h, calls, events, pending, snapshot, poll,
+    ready: () => { available = true; poll(); },
+    show: visible => { active = visible; now += 16000; h.render(); },
+    holdNext: () => { hold = true; },
+    rejectAuth: () => { failure = new AuthenticationError(401, 'Сессия истекла'); poll(); },
+  };
 }
 
 test('404 графика — доступное ожидание данных; polling обнаруживает новый source и снимает статус', async () => {
@@ -214,6 +253,62 @@ test('404 графика — доступное ожидание данных; p
   h.ready(); await flush(h);
   assert.deepEqual(h.calls, ['sources', 'data', 'sources', 'data']);
   assert.ok(!h.text().includes('Данные графика ещё не появились'));
+  h.stop();
+});
+
+test('Возвращение во вкладку показывает прежний снимок сразу и обновляет в фоне без повторного sources', async () => {
+  const h = chartsHarness(404, true);
+  await flush(h); await flush(h);
+  assert.ok(h.nodes().some(node => node.props?.data === h.snapshot));
+  h.show(false);
+  assert.equal(h.intervals.size, 0);
+  assert.equal(h.events.size, 0);
+  const before = h.calls.length;
+  h.poll(); await flush(h);
+  assert.equal(h.calls.length, before);
+  h.holdNext();
+  h.show(true); await flush(h);
+  assert.ok(h.nodes().some(node => node.props?.data === h.snapshot));
+  assert.match(h.text(), /Обновляем график/);
+  assert.ok(!h.nodes().some(node => node.props?.['aria-label'] === 'Загрузка графика'));
+  assert.deepEqual(h.calls, ['sources', 'data', 'data']);
+  h.pending[0].resolve(h.snapshot); await flush(h);
+  assert.ok(!h.text().includes('Обновляем график'));
+  h.stop();
+});
+
+test('Уход со вкладки отменяет загрузку; поздний ответ не заменяет сохранённый снимок', async () => {
+  const h = chartsHarness(404, true);
+  await flush(h); await flush(h);
+  h.holdNext(); h.poll(); await flush(h);
+  h.show(false);
+  assert.equal(h.pending[0].signal.aborted, true);
+  h.pending[0].resolve({ ...h.snapshot, symbol: 'LATE' }); await flush(h);
+  assert.ok(h.nodes().some(node => node.props?.data === h.snapshot));
+  assert.ok(!h.nodes().some(node => node.props?.data?.symbol === 'LATE'));
+  h.stop();
+});
+
+test('Истечение авторизации удаляет предыдущий снимок и прекращает polling запросов', async () => {
+  const h = chartsHarness(404, true);
+  await flush(h); await flush(h);
+  h.rejectAuth(); await flush(h);
+  assert.ok(!h.nodes().some(node => node.props?.data === h.snapshot));
+  assert.match(h.text(), /Сессия истекла/);
+  const before = h.calls.length;
+  h.poll(); await flush(h);
+  assert.equal(h.calls.length, before);
+  h.stop();
+});
+
+test('Таймаут графика получает адресное сообщение и сохраняет предыдущий снимок', async () => {
+  const h = chartsHarness(404, true);
+  await flush(h); await flush(h);
+  h.holdNext(); h.poll(); await flush(h);
+  h.pending[0].reject(Object.assign(new Error('cancelled'), { name: 'AbortError' })); await flush(h);
+  assert.match(h.text(), /больше 10 секунд/);
+  assert.ok(!h.text().includes('Некорректный ответ сервера'));
+  assert.ok(h.nodes().some(node => node.props?.data === h.snapshot));
   h.stop();
 });
 

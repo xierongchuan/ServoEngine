@@ -26,6 +26,7 @@ function isWebTokenMode(): boolean {
 
 export function App() {
   const [activeTab, setActiveTab] = useState<TabId>('dashboard');
+  const [chartsVisited, setChartsVisited] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const { subscribe, isConnected } = useWebSocket();
@@ -69,6 +70,7 @@ export function App() {
   }, []);
 
   const handleTabChange = useCallback((tab: TabId) => {
+    if (tab === 'charts') setChartsVisited(true);
     setActiveTab(tab);
   }, []);
 
@@ -110,7 +112,7 @@ export function App() {
       case 'dashboard':
         return <Dashboard subscribe={subscribe} />;
       case 'charts':
-        return <Charts subscribe={subscribe} />;
+        return null;
       case 'trades':
         return <Trades subscribe={subscribe} />;
       case 'logs':
@@ -134,6 +136,10 @@ export function App() {
       {/* Page content */}
       <div className="flex-1 overflow-y-auto pb-16 w-full max-w-4xl mx-auto md:pb-0 md:pl-20">
         {renderPage()}
+        {/* Сохраняем выбранный источник и снимок между вкладками; скрытая страница не делает запросов. */}
+        {chartsVisited && <div hidden={activeTab !== 'charts'}>
+          <Charts subscribe={subscribe} active={activeTab === 'charts'} />
+        </div>}
       </div>
 
       <TabBar activeTab={activeTab} onTabChange={handleTabChange} />
