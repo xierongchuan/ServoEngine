@@ -36,7 +36,7 @@ async def get_chart(
         raise HTTPException(status_code=400, detail="Invalid filename")
 
     path = CHARTS_DIR / filename
-    if not path.is_file() or path.suffix.lower() != ".png":
+    if path.is_symlink() or not path.is_file() or path.suffix.lower() != ".png":
         raise HTTPException(status_code=404, detail="Chart not found")
 
-    return FileResponse(path, media_type="image/png")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})

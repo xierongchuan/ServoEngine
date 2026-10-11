@@ -2,7 +2,7 @@
   "_description": "Infrastructure and rarely-changed settings",
   "_version": "1.0.0",
   "exchange": {
-    "default": "bingx",
+
     "fees": {
       "bingx": {
         "maker": 0.02,
@@ -22,8 +22,24 @@
   },
   "ai": {
     "provider": "openrouter",
-    "model": "google/gemini-3.1-flash-lite-preview",
-    "base_url": "https://openrouter.ai/api/v1/chat/completions",
+    "providers": {
+      "openrouter": {
+        "base_url": "https://openrouter.ai/api/v1",
+        "model": "google/gemini-3.1-flash-lite-preview"
+      },
+      "deepseek": {
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-flash",
+        "thinking": {
+          "enabled": false,
+          "effort": "high"
+        }
+      },
+      "lmstudio": {
+        "base_url": "http://host.containers.internal:1234/v1",
+        "model": ""
+      }
+    },
     "temperature": 0.3,
     "max_tokens": 4096,
     "reasoning": {
@@ -40,11 +56,13 @@
     "fallback_models": [],
     "overrides": {
       "veto": {
+        "provider": null,
         "model": null,
         "temperature": 0.1,
         "max_tokens": 100
       },
       "regime": {
+        "provider": null,
         "model": null,
         "temperature": 0.2,
         "max_tokens": 150

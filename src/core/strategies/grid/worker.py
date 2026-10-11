@@ -1,310 +1,212 @@
-"""Grid Trading Worker — специализированный воркер для Grid стратегии."""
+"""GRID-worker: public reference в read_only, private вызовы только для исполнения."""
 
+import math
 import time
-import os
 import traceback
-from typing import Tuple, Dict
 
-from src.utils.logger import info, error, warning
-from src.exchanges.exchange_factory import get_exchange_client
-from src.config import ERROR_HANDLING
-from src.core.position_ownership import get_position_ownership_store
-from src.runtime import normalize_symbol_key
-from .executor import GridExecutor
+from src.core.grid_executor import GridExecutor, get_grid_client
+from src.exchanges.market_data import (
+    StreamKey, candle_gaps, canonical_symbol, closed_candles, interval_start, next_start, normalize_candle,
+)
+from src.exchanges.public_market_rest import PublicRESTFetcher, exchange_symbol
+from src.exchanges.ws_provider_factory import get_market_snapshot, set_shared_cache
+from src.trading_settings import get_trading_settings, validate_trading_settings
+from src.utils.log_context import set_log_context
+from src.utils.logger import error, info, warning
 from .adx import calculate_adx
 
 
-def run_grid_worker(symbol: str, config: dict, runtime_config: dict = None):
-    """
-    Запускает Grid Trading для одного символа.
+def _extract_ticker_prices(ticker):
+    def number(*names):
+        for name in names:
+            value = ticker.get(name) if isinstance(ticker, dict) else getattr(ticker, name, None)
+            if value is not None:
+                return float(value or 0)
+        return 0.0
+    return number("bid_price", "bid"), number("ask_price", "ask"), number("last_price", "last")
 
-    Args:
-        symbol: Торговый символ (например, "BTCUSDT")
-        config: Конфигурация GRID_SETTINGS из bot_config.json
-    """
+
+def _market_candles(symbol, settings, *, interval="5m", limit=50):
+    key = StreamKey(settings["exchange"], settings["market_type"], symbol, interval)
+    snapshot = get_market_snapshot(key, max_age_seconds=settings["market_data"]["max_age_seconds"])
+    if snapshot is not None:
+        rows = closed_candles(snapshot["candles"], interval)
+        if len(rows) >= limit:
+            return rows[-limit:]
+    # Fallback использует только public REST, без private-клиента и старого symbol cache.
+    now = time.time()
+    rows = PublicRESTFetcher(settings=settings["market_data"])(key, limit=limit + 1)
+    rows = closed_candles([normalize_candle(row, key, source="rest", now=now) for row in rows], interval, now=now)[-limit:]
+    if (len(rows) < limit or candle_gaps(rows, interval)
+            or next_start(rows[-1]["timestamp"], interval) != interval_start(int(now * 1000), interval)):
+        raise ValueError("GRID: public REST не содержит свежую непрерывную историю")
+    return rows
+
+
+def _analyze_volatility(symbol, client, config, settings=None):
+    settings = settings or get_trading_settings()
     try:
-        # 1. Настройка логгера
-        from src.utils.logger import setup_symbol_logger
-        setup_symbol_logger(symbol)
-        info(f"[GRID] Starting Grid Worker for {symbol} (PID: {os.getpid()})")
-
-        # 2. Инициализация
-        client = get_exchange_client()
-        grid = GridExecutor(symbol, config)
-        runtime_config = runtime_config or {}
-        instance_id = runtime_config.get("STRATEGY_INSTANCE_ID", f"{normalize_symbol_key(symbol)}_grid".lower())
-        strategy_id = runtime_config.get("STRATEGY_STYLE", "GRID")
-        ownership = get_position_ownership_store()
-
-        # Параметры цикла
-        check_interval = config.get("check_interval", 5)
-        ai_rebalance_interval = config.get("ai_rebalance_interval", 300)  # 5 min
-        last_ai_check = 0
-        cycle_count = 0
-
-        info(f"[GRID] Config: check_interval={check_interval}s, ai_rebalance={ai_rebalance_interval}s")
-        info(f"[GRID] Grid levels={config.get('grid_levels', 5)}, spacing={config.get('grid_spacing_pct', 0.3)}%")
-
-        # 3. Главный цикл
-        while True:
-            try:
-                cycle_start = time.time()
-                cycle_count += 1
-
-                # 3.1 Получаем текущую цену
-                ticker = client.get_ticker(symbol)
-                bid, ask, _last = _extract_ticker_prices(ticker)
-
-                if bid <= 0 or ask <= 0:
-                    warning(f"[GRID] Invalid ticker data: bid={bid}, ask={ask}. Skipping cycle.")
-                    time.sleep(check_interval)
-                    continue
-
-                mid_price = (bid + ask) / 2
-
-                positions = client.get_positions()
-                ownership.sync_with_positions(positions)
-                owner = ownership.get_owner(symbol)
-                if owner and owner.owner_id != instance_id:
-                    info(
-                        f"⏸️ [GRID] {symbol}: символ занят стратегией {owner.owner_id} "
-                        f"({owner.strategy}); {instance_id} ждёт освобождения"
-                    )
-                    time.sleep(check_interval)
-                    continue
-
-                acquired, owner = ownership.try_acquire(symbol, instance_id, strategy_id)
-                if not acquired:
-                    info(f"⏸️ [GRID] {symbol}: вход заблокирован владельцем {owner.owner_id if owner else 'unknown'}")
-                    time.sleep(check_interval)
-                    continue
-
-                _attach_position_id_if_present(ownership, symbol, instance_id, positions)
-
-                # 3.2 Обновляем inventory
-                inventory = grid.update_inventory()
-
-                # 3.3 Проверяем emergency условия
-                if grid.check_emergency_conditions(mid_price):
-                    if grid.emergency_close():
-                        ownership.release_if_owner(symbol, instance_id)
-                    warning("[GRID] Emergency close triggered. Pausing for 60s...")
-                    time.sleep(60)
-                    continue
-
-                # 3.4 Рассчитываем смещение центра на основе inventory
-                inventory_offset = grid.calculate_inventory_offset()
-
-                # 3.5 Периодически вызываем AI для корректировки spacing и проверки ADX
-                spacing_mult = 1.0
-                should_pause = False
-                adx_info = {"adx": 0, "trend": "UNKNOWN"}
-                current_time = time.time()
-
-                if current_time - last_ai_check > ai_rebalance_interval:
-                    spacing_mult, should_pause, adx_info = _analyze_volatility(symbol, client, config)
-                    last_ai_check = current_time
-                    info(f"[GRID] Analysis: ADX={adx_info['adx']:.1f} ({adx_info['trend']}), spacing_mult={spacing_mult:.2f}")
-
-                # 3.5.1 Если ADX показывает сильный тренд - ставим сетку на паузу
-                if should_pause:
-                    warning(f"[GRID] Strong trend detected (ADX={adx_info['adx']:.1f}) - pausing grid for 60s")
-                    grid.cancel_managed_orders()
-                    time.sleep(60)
-                    continue
-
-                # 3.6 Обновляем центр сетки
-                grid.state.center_price = mid_price
-
-                # 3.7 Рассчитываем целевые уровни сетки
-                target_prices = grid.calculate_grid_prices(
-                    center_price=mid_price,
-                    spacing_mult=spacing_mult,
-                    inventory_offset=inventory_offset
-                )
-
-                # 3.8 Синхронизируем ордера
-                grid.sync_orders(target_prices, mid_price)
-
-                # 3.8.1 Проверяем исполненные ордера
-                filled_orders = grid.check_filled_orders()
-                if filled_orders:
-                    positions = client.get_positions()
-                    ownership.sync_with_positions(positions)
-                    _attach_position_id_if_present(ownership, symbol, instance_id, positions)
-                    info(f"[GRID] {len(filled_orders)} order(s) filled this cycle")
-
-                # 3.9 Логирование
-                elapsed = time.time() - cycle_start
-                stats = grid.get_stats()
-
-                if cycle_count % 12 == 0:  # Каждую минуту (при 5s интервале)
-                    info(f"[GRID] {symbol}: mid={mid_price:.4f}, spread={(ask-bid):.6f}, "
-                         f"inv={inventory:.4f} ({stats['inventory_pct']:.1f}%), "
-                         f"ADX={adx_info['adx']:.1f} ({adx_info['trend']}), "
-                         f"orders={stats['active_orders']}, "
-                         f"fills={stats['total_filled_buy']}B/{stats['total_filled_sell']}S, "
-                         f"net_pnl=${stats['net_pnl']:.2f}, cycle={elapsed:.2f}s")
-
-            except KeyboardInterrupt:
-                info(f"[GRID] {symbol} stopped by user (KeyboardInterrupt)")
-                _graceful_shutdown(grid)
-                _release_grid_owner_if_flat(ownership, client, symbol, instance_id)
-                return
-
-            except Exception as e:
-                error(f"[GRID] Error in cycle: {e}")
-                error(traceback.format_exc())
-                sleep_time = ERROR_HANDLING.get("cycle_error_fallback_sleep", 5)
-                time.sleep(sleep_time)
-                continue
-
-            # Пауза между циклами
-            time.sleep(check_interval)
-
-    except KeyboardInterrupt:
-        print(f"[GRID] {symbol} terminated.")
-    except Exception as e:
-        print(f"[GRID] CRITICAL INIT ERROR {symbol}: {e}")
-        traceback.print_exc()
-
-
-def _analyze_volatility(symbol: str, client, config: dict) -> Tuple[float, bool, Dict]:
-    """
-    Анализирует волатильность и силу тренда для рекомендации spacing.
-
-    Returns:
-        tuple: (spacing_mult: float, should_pause: bool, adx_info: dict)
-    """
-    try:
-        # 1. Получаем последние свечи (нужно больше для ADX)
-        klines = client.get_kline_data(symbol, interval="5m", limit=50)
-
-        if not klines or len(klines) < 20:
-            return 1.0, False, {"adx": 0, "trend": "UNKNOWN"}
-
-        # 2. Рассчитываем ATR
-        atr_values = []
-        for i in range(1, min(15, len(klines))):
-            high = klines[i]["highPrice"]
-            low = klines[i]["lowPrice"]
-            prev_close = klines[i - 1]["closePrice"]
-
-            tr = max(
-                high - low,
-                abs(high - prev_close),
-                abs(low - prev_close)
-            )
-            atr_values.append(tr)
-
-        current_atr = sum(atr_values) / len(atr_values) if atr_values else 0
-        current_price = klines[-1]["closePrice"]
-        atr_pct = (current_atr / current_price) * 100 if current_price > 0 else 0
-
-        # 3. Рассчитываем ADX
+        rows = _market_candles(symbol, settings)
+        if len(rows) < 30:
+            return 1.0, True, {"adx": 0, "trend": "UNKNOWN"}
+        klines = [{"highPrice": float(r["highPrice"] if "highPrice" in r else r["high"]),
+                   "lowPrice": float(r["lowPrice"] if "lowPrice" in r else r["low"]),
+                   "closePrice": float(r["closePrice"] if "closePrice" in r else r["close"])} for r in rows]
+        ranges = [max(k["highPrice"] - k["lowPrice"], abs(k["highPrice"] - prev["closePrice"]),
+                      abs(k["lowPrice"] - prev["closePrice"])) for prev, k in zip(klines[-15:-1], klines[-14:])]
+        atr_pct = sum(ranges) / len(ranges) / klines[-1]["closePrice"] * 100
+        multiplier = 0.7 if atr_pct < 0.25 else 0.9 if atr_pct < 0.5 else 1.5 if atr_pct > 1 else 1.2 if atr_pct > 0.75 else 1.0
         adx_info = calculate_adx(klines, period=14)
         adx = adx_info["adx"]
-        trend = adx_info["trend"]
-
-        # 4. Определяем spacing_mult на основе ATR
-        base_atr_pct = 0.5
-
-        if atr_pct < base_atr_pct * 0.5:
-            spacing_mult = 0.7
-        elif atr_pct < base_atr_pct:
-            spacing_mult = 0.9
-        elif atr_pct > base_atr_pct * 2:
-            spacing_mult = 1.5
-        elif atr_pct > base_atr_pct * 1.5:
-            spacing_mult = 1.2
-        else:
-            spacing_mult = 1.0
-
-        # 5. Корректируем на основе ADX
-        should_pause = False
-
-        if adx >= 40:
-            # Очень сильный тренд - ПАУЗА
-            should_pause = True
-            info(f"[GRID] ADX={adx:.1f} ({trend}) - PAUSE recommended (strong trend)")
-
-        elif adx >= 30:
-            # Сильный тренд - расширяем spacing на 50%
-            spacing_mult *= 1.5
-            info(f"[GRID] ADX={adx:.1f} ({trend}) - widening spacing x1.5")
-
-        elif adx >= 25:
-            # Умеренный тренд - расширяем spacing на 20%
-            spacing_mult *= 1.2
-            info(f"[GRID] ADX={adx:.1f} ({trend}) - widening spacing x1.2")
-
-        elif adx < 20:
-            # Боковик - идеально для Grid, можно сузить spacing
-            spacing_mult *= 0.9
-            info(f"[GRID] ADX={adx:.1f} ({trend}) - ranging market, good for grid")
-
-        # Ограничиваем диапазон
-        spacing_mult = max(0.5, min(2.5, spacing_mult))
-
-        return spacing_mult, should_pause, adx_info
-
-    except Exception as e:
-        warning(f"[GRID] Volatility analysis failed: {e}")
-        return 1.0, False, {"adx": 0, "trend": "UNKNOWN"}
+        multiplier *= 1.5 if adx >= 30 else 1.2 if adx >= 25 else 0.9 if adx < 20 else 1.0
+        return max(0.5, min(2.5, multiplier)), adx >= 40, adx_info
+    except Exception as exc:
+        warning(f"⚠️ [GRID] Нет достоверных данных волатильности: {exc}")
+        return 1.0, True, {"adx": 0, "trend": "UNKNOWN"}
 
 
-def _extract_ticker_prices(ticker) -> Tuple[float, float, float]:
-    """Возвращает bid/ask/last из DTO Ticker или legacy dict."""
-    if hasattr(ticker, "bid_price"):
-        return (
-            float(getattr(ticker, "bid_price", 0) or 0),
-            float(getattr(ticker, "ask_price", 0) or 0),
-            float(getattr(ticker, "last_price", 0) or 0),
-        )
+def _reference_price(grid, ticker, last):
+    if grid.settings["market_type"] == "spot" or grid.settings["protection"]["trigger_price"] == "last":
+        return last if math.isfinite(last) and last > 0 else 0.0
+    value = ticker.get("mark_price", 0) if isinstance(ticker, dict) else getattr(ticker, "mark_price", 0)
+    mark = float(value or 0)
+    if math.isfinite(mark) and mark > 0:
+        return mark
+    # BingX Ticker DTO не содержит markPrice; используем отдельный PUBLIC endpoint.
+    key = StreamKey(grid.settings["exchange"], grid.settings["market_type"], grid.symbol, "1m")
+    fetcher = PublicRESTFetcher(settings=grid.settings["market_data"])
+    if key.exchange == "bingx":
+        payload = fetcher._get(key, "https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex",
+                               {"symbol": exchange_symbol(key)})
+        if not isinstance(payload, dict) or payload.get("code") != 0:
+            raise ValueError("GRID: public premiumIndex не подтверждён")
+        raw = payload.get("data")
+        field = "markPrice"
+    else:
+        payload = fetcher._get(key, "https://contract.mexc.com/api/v1/contract/ticker",
+                               {"symbol": exchange_symbol(key)})
+        if not isinstance(payload, dict) or payload.get("success") is not True or payload.get("code") != 0:
+            raise ValueError("GRID: public MEXC ticker не подтверждён")
+        raw = payload.get("data")
+        field = "fairPrice"
+    if not isinstance(raw, dict) or canonical_symbol(raw.get("symbol", "")) != key.symbol:
+        raise ValueError("GRID: источник public mark reference не совпадает")
+    mark = float(raw.get(field, 0))
+    if not math.isfinite(mark) or mark <= 0:
+        raise ValueError("GRID: некорректная mark reference")
+    return mark
 
-    return (
-        float(ticker.get("bid", 0) or ticker.get("bid_price", 0) or 0),
-        float(ticker.get("ask", 0) or ticker.get("ask_price", 0) or 0),
-        float(ticker.get("last", 0) or ticker.get("last_price", 0) or 0),
-    )
 
-
-def _attach_position_id_if_present(ownership, symbol: str, owner_id: str, positions: Dict) -> None:
-    """Сохраняет position_id владельца, если позиция уже появилась на бирже."""
-    position = _first_symbol_position(symbol, positions)
-    if not position:
-        return
-
-    position_id = getattr(position, "position_id", None)
-    if position_id is None and isinstance(position, dict):
-        position_id = position.get("position_id") or position.get("dealId") or position.get("positionId")
-    if position_id:
-        ownership.update_position_id(symbol, owner_id, str(position_id))
-
-
-def _release_grid_owner_if_flat(ownership, client, symbol: str, owner_id: str) -> None:
-    """Освобождает GRID ownership после остановки, если позиции уже нет."""
+def run_grid_cycle(grid, *, spacing_mult=1.0, should_pause=False):
+    """Один цикл выделен для проверки отсутствия private вызовов в read_only."""
+    ticker = grid.client.get_ticker(grid.symbol)
+    bid, ask, last = _extract_ticker_prices(ticker)
+    mid = (bid + ask) / 2 if 0 < bid <= ask else last
+    if not math.isfinite(mid) or mid <= 0:
+        raise ValueError("GRID: нет достоверной публичной цены")
+    ticker_symbol = ticker.get("symbol") if isinstance(ticker, dict) else getattr(ticker, "symbol", None)
+    if ticker_symbol and canonical_symbol(ticker_symbol) != canonical_symbol(grid.symbol):
+        raise ValueError("GRID: тикер относится к другому символу")
+    grid.state.center_price = mid
+    grid.state.reference_source = grid.settings["protection"]["trigger_price"]
     try:
-        positions = client.get_positions()
-        if not _first_symbol_position(symbol, positions):
-            ownership.release_if_owner(symbol, owner_id)
-    except Exception as e:
-        warning(f"[GRID] Failed to release owner on shutdown: {e}")
+        reference = _reference_price(grid, ticker, last)
+    except Exception as exc:
+        warning(f"⚠️ [GRID] Public reference недоступна: {exc}")
+        reference = 0.0
+    grid.state.reference_price = reference
+    if getattr(grid, "native_market", False) and not grid.read_only:
+        grid.native_cycle(mid, reference, spacing_mult=spacing_mult, should_pause=should_pause)
+        return {"mid_price": mid, "reference_price": reference, "target_prices": grid.state.native_levels,
+                "paused": should_pause or bool(grid.paused_reason),
+                "entries_blocked_reason": grid.entries_blocked_reason}
+    if not grid.read_only:
+        if grid.paused_reason:
+            grid.reconcile()
+            return {"mid_price": mid, "target_prices": grid.calculate_grid_prices(mid), "paused": True}
+        grid.check_filled_orders()
+        if grid.paused_reason:
+            return {"mid_price": mid, "paused": True}
+        grid.update_inventory()
+        if not math.isfinite(reference) or reference <= 0:
+            grid._pause("Нет достоверной public reference; исполнение GRID остановлено")
+            return {"mid_price": mid, "reference_price": reference, "paused": True}
+        if grid.check_emergency_conditions(reference):
+            closed = grid.emergency_close()
+            grid._pause("Emergency завершён; требуется решение оператора" if closed else "Emergency требует сверки")
+            return {"mid_price": mid, "paused": True}
+    targets = grid.calculate_grid_prices(mid, spacing_mult, grid.calculate_inventory_offset())
+    if should_pause:
+        if not grid.read_only:
+            grid.cancel_managed_orders()
+    else:
+        grid.sync_orders(targets, mid)
+    return {"mid_price": mid, "reference_price": reference, "target_prices": targets,
+            "paused": should_pause or bool(grid.paused_reason),
+            "entries_blocked_reason": grid.entries_blocked_reason}
 
 
-def _first_symbol_position(symbol: str, positions: Dict):
-    target_symbol = normalize_symbol_key(symbol)
-    for position_symbol, symbol_positions in positions.items():
-        if normalize_symbol_key(position_symbol) == target_symbol and symbol_positions:
-            return symbol_positions[0]
-    return None
-
-
-def _graceful_shutdown(grid: GridExecutor):
-    """Graceful shutdown - отменяем ордера при остановке."""
+def run_grid_worker(symbol, config, runtime_config=None, *, ws_cache=None, ws_ready=None):
+    runtime = runtime_config
+    if runtime is None:
+        from src.config import BOT_CONFIG
+        runtime = BOT_CONFIG
+    settings = validate_trading_settings(runtime.get("execution") or get_trading_settings())
+    instance_id = runtime.get("STRATEGY_INSTANCE_ID", f"{StreamKey(settings['exchange'], settings['market_type'], symbol, '1m').symbol.lower()}_grid")
+    # Контекст должен существовать до factory: coordinator привязывает ownership к instance.
+    set_log_context(service="bot", exchange=settings["exchange"], market_type=settings["market_type"],
+                    symbol=symbol, instance_id=instance_id, strategy="GRID", category="strategy")
+    from src.utils.logger import setup_symbol_logger
+    setup_symbol_logger(symbol)
+    if ws_cache is not None:
+        set_shared_cache(ws_cache, ws_ready)
+    grid = None
     try:
-        info("[GRID] Graceful shutdown - cancelling managed orders...")
+        client = get_grid_client(settings, runtime, instance_id)
+        grid_config = dict(config)
+        if settings["exchange"] == "bingx" and settings["market_type"] == "perpetual":
+            # Рабочая модель perpetual GRID: local touch, MARKET с native SL/TP, не local SL.
+            grid_config.setdefault("entry_execution", "native_market")
+        grid = GridExecutor(symbol, grid_config, {**runtime, "STRATEGY_INSTANCE_ID": instance_id}, client=client)
+        interval = max(1, float(config.get("check_interval", 5)))
+        analysis_interval = max(interval, float(config.get("ai_rebalance_interval", 120)))
+        last_analysis = 0
+        spacing_mult, should_pause, adx_info = 1.0, False, {"adx": 0, "trend": "UNKNOWN"}
+        cycle = 0
+        info(f"[GRID] Запущен worker {symbol}, instance={instance_id}, режим={settings['execution_mode']}")
+        while True:
+            try:
+                if time.monotonic() - last_analysis >= analysis_interval:
+                    spacing_mult, should_pause, adx_info = _analyze_volatility(symbol, client, config, settings)
+                    last_analysis = time.monotonic()
+                result = run_grid_cycle(grid, spacing_mult=spacing_mult, should_pause=should_pause)
+                cycle += 1
+                if cycle % 12 == 0:
+                    stats = grid.get_stats()
+                    info(f"[GRID] {symbol}: цена={result['mid_price']:.4f}, net={stats['inventory']:.4f}, "
+                         f"gross={stats['gross_inventory']:.4f}, заявок={stats['active_orders']}, "
+                         f"ADX={adx_info['adx']:.1f}, пауза={result['paused']}, "
+                         f"запрет входов={stats['entries_blocked_reason'] or 'нет'}")
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                error(f"❌ [GRID] Ошибка цикла: {exc}")
+                error(traceback.format_exc())
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        info(f"[GRID] Worker {symbol} остановлен пользователем")
+    except Exception as exc:
+        error(f"❌ [GRID] Ошибка инициализации {symbol}: {exc}")
+        raise
+    finally:
+        if grid is not None:
+            try:
+                _graceful_shutdown(grid)
+            finally:
+                grid.close()
+
+
+def _graceful_shutdown(grid):
+    if not grid.read_only:
         grid.cancel_managed_orders()
-        info("[GRID] Shutdown complete.")
-    except Exception as e:
-        error(f"[GRID] Error during shutdown: {e}")
+    info(f"[GRID] Worker {grid.symbol} завершён; durable-состояние сохранено")

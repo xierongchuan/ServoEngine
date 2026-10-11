@@ -1,181 +1,118 @@
-"""Публичный MEXC Futures WebSocket-кэш свечей с REST backfill."""
+"""Публичный MEXC Futures WS с несколькими TF и фоновым range reconciliation."""
 
 import gzip
 import json
-import threading
-import time
-from multiprocessing import Manager
-from typing import List, Optional
 
-import websocket
-
-from src.utils.logger import error, info, warning
+from src.exchanges.market_data import StreamKey, canonical_symbol
+from src.exchanges.public_market_rest import MEXC_INTERVALS, exchange_symbol
+from src.exchanges.ws.runtime import ManagedMarketDataProvider
 
 
-class MEXCFuturesWebSocketDataProvider:
+class MEXCFuturesWebSocketDataProvider(ManagedMarketDataProvider):
+    EXCHANGE = "mexc"
     WS_URL = "wss://contract.mexc.com/edge"
-    CACHE_SIZE = 600
-
-    def __init__(self):
-        self._cache = None
-        self._ready = None
-        self._symbols: List[str] = []
-        self._interval = "5m"
-        self._running = False
-        self._ws: Optional[websocket.WebSocketApp] = None
-        self._thread = None
-        self._ping_thread = None
+    INTERVALS = MEXC_INTERVALS
 
     @staticmethod
-    def _canonical(symbol: str) -> str:
-        return str(symbol).upper().replace("-", "").replace("_", "").replace("/", "")
+    def _canonical(symbol):
+        return canonical_symbol(symbol)
 
     @staticmethod
-    def _exchange_symbol(symbol: str) -> str:
-        canonical = MEXCFuturesWebSocketDataProvider._canonical(symbol)
-        return f"{canonical[:-4]}_USDT" if canonical.endswith("USDT") else canonical
+    def _exchange_symbol(symbol):
+        return exchange_symbol(StreamKey("mexc", "perpetual", symbol, "1m"))
 
-    def start(self, symbols, interval, cache, ready):
-        self._symbols = list(symbols)
-        self._interval = interval
-        self._cache, self._ready = cache, ready
-        self._running = True
-        self._backfill()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+    def start(self, symbols=None, interval="5m", cache=None, ready=None, *, streams=None):
+        # Старый прямой start(symbols, interval, cache, ready) остаётся допустимым.
+        if cache is not None:
+            self.store.cache = cache
+        if ready is not None:
+            self.store.ready = ready
+        super().start(symbols, interval, streams=streams)
 
-    def stop(self):
-        self._running = False
-        if self._ws:
-            self._ws.close()
+    def sync_subscriptions(self, streams):
+        desired = [StreamKey.from_value(key) for key in streams]
+        if len({key.interval for key in desired}) > 1:
+            raise ValueError("MEXC несколько TF требуют WS-shards через ws_provider_factory.sync_subscriptions")
+        super().sync_subscriptions(desired)
 
-    def _backfill(self):
-        from src.exchanges.exchange_factory import get_market_data_client
-        client = get_market_data_client("mexc", "perpetual")
-        for symbol in self._symbols:
-            try:
-                data = client.get_kline_data(symbol, self._interval, self.CACHE_SIZE)
-                key = self._canonical(symbol)
-                self._cache[key] = data
-                self._ready[key] = len(data) >= 100
-            except Exception as exc:
-                warning(f"⚠️ MEXC WS backfill {symbol} failed: {exc}")
+    def send_subscription(self, ws, key, request_id, subscribe):
+        ws.send(json.dumps({
+            "method": "sub.kline" if subscribe else "unsub.kline",
+            "param": ({"symbol": exchange_symbol(key), "interval": self.INTERVALS[key.interval]}
+                      if subscribe else {"symbol": exchange_symbol(key)}),
+            "gzip": False,
+        }))
 
-    def _run(self):
-        delay = 1
-        while self._running:
-            try:
-                self._ws = websocket.WebSocketApp(
-                    self.WS_URL, on_open=self._on_open, on_message=self._on_message,
-                    on_error=lambda _ws, exc: warning(f"⚠️ MEXC WS error: {exc}"),
-                )
-                self._ws.run_forever()
-            except Exception as exc:
-                if self._running:
-                    warning(f"⚠️ MEXC WS reconnect in {delay}s: {exc}")
-            if self._running:
-                time.sleep(delay)
-                delay = min(delay * 2, 60)
+    def send_ping(self, ws):
+        ws.send(json.dumps({"method": "ping"}))
 
-    def _on_open(self, ws):
-        interval_map = {
-            "1m": "Min1", "5m": "Min5", "15m": "Min15", "30m": "Min30",
-            "1h": "Min60", "4h": "Hour4", "8h": "Hour8", "1d": "Day1",
-            "1w": "Week1", "1M": "Month1",
-        }
-        exchange_interval = interval_map.get(self._interval)
-        if not exchange_interval:
-            raise ValueError(f"MEXC WS interval not supported: {self._interval}")
-        for symbol in self._symbols:
-            ws.send(json.dumps({
-                "method": "sub.kline",
-                "param": {"symbol": self._exchange_symbol(symbol), "interval": exchange_interval},
-                "gzip": False,
-            }))
-        self._ping_thread = threading.Thread(target=self._ping_loop, daemon=True)
-        self._ping_thread.start()
-        info(f"✅ MEXC Futures WS subscribed: {len(self._symbols)} symbols")
-
-    def _ping_loop(self):
-        while self._running and self._ws:
-            try:
-                self._ws.send(json.dumps({"method": "ping"}))
-            except Exception:
-                return
-            time.sleep(15)
-
-    def _on_message(self, _ws, message):
-        try:
-            if isinstance(message, bytes):
-                try:
-                    message = gzip.decompress(message).decode()
-                except OSError:
-                    message = message.decode()
-            payload = json.loads(message)
-            if payload.get("channel") != "push.kline":
-                return
-            data = payload.get("data") or {}
-            symbol = self._canonical(data.get("symbol") or payload.get("symbol", ""))
-            timestamp = int(data.get("t", 0))
-            if timestamp > 10_000_000_000:
-                timestamp //= 1000
-            candle = {
-                "snapshotTimeUTC": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(timestamp)),
-                "timestamp": timestamp * 1000,
-                "openPrice": float(data.get("o", 0)),
-                "highPrice": float(data.get("h", 0)),
-                "lowPrice": float(data.get("l", 0)),
-                "closePrice": float(data.get("c", 0)),
-                "volume": float(data.get("v", data.get("q", 0))),
-            }
-            cached = list(self._cache.get(symbol, []))
-            if cached and cached[-1].get("timestamp") == candle["timestamp"]:
-                cached[-1] = candle
-            else:
-                cached.append(candle)
-            self._cache[symbol] = cached[-self.CACHE_SIZE:]
-            self._ready[symbol] = len(cached) >= 100
-        except Exception as exc:
-            error(f"❌ MEXC WS message error: {exc}")
+    def handle_message(self, ws, message):
+        if isinstance(message, bytes):
+            message = gzip.decompress(message).decode() if message[:2] == b"\x1f\x8b" else message.decode()
+        payload = json.loads(message)
+        channel = payload.get("channel", "")
+        if channel in {"pong", "rs.ping"} or payload.get("method") == "pong":
+            self.received_pong()
+            return
+        if channel == "rs.error":
+            raise ValueError(f"MEXC отклонил публичную подписку: {payload.get('data')}")
+        if channel == "rs.sub.kline":
+            data = payload.get("data")
+            if isinstance(data, dict) and data.get("symbol") and data.get("interval"):
+                key = StreamKey("mexc", "perpetual", data["symbol"], data["interval"])
+                with self._lock:
+                    if key not in self._streams or ws is not self._ws:
+                        return
+                    if data.get("success") is False:
+                        self.store.mark(key, status="error", error=str(data))
+                        self._emit(key)
+                    else:
+                        self.acknowledge(key)
+            # Ответ без идентификатора не подтверждает произвольный поток.
+            # Его подписку подтвердит первый валидный kline или watchdog timeout.
+            return
+        if channel != "push.kline":
+            return
+        row = dict(payload.get("data") or {})
+        symbol = canonical_symbol(row.get("symbol") or payload.get("symbol", ""))
+        interval = row.get("interval") or payload.get("interval")
+        if interval:
+            key = StreamKey("mexc", "perpetual", symbol, interval)
+        else:
+            matches = [key for key in self.streams if key.symbol == symbol]
+            if len(matches) != 1:
+                raise ValueError("MEXC сообщение без interval неоднозначно при нескольких подписках")
+            key = matches[0]
+        if payload.get("ts") is not None:
+            row["event_time_ms"] = payload["ts"]
+        self.accept_candle(ws, key, row)
 
 
-_provider = None
-_manager = None
-_shared_cache = None
-_shared_ready = None
-
-
-def start_ws_provider(symbols, interval="5m"):
-    global _provider, _manager, _shared_cache, _shared_ready
-    _manager = Manager()
-    _shared_cache = _manager.dict()
-    _shared_ready = _manager.dict()
-    _provider = MEXCFuturesWebSocketDataProvider()
-    _provider.start(symbols, interval, _shared_cache, _shared_ready)
-    return _shared_cache, _shared_ready
+def start_ws_provider(symbols=None, interval="5m", **kwargs):
+    from src.exchanges import ws_provider_factory as factory
+    return factory.start_ws_provider(symbols, interval, exchange="mexc", market_type="perpetual", **kwargs)
 
 
 def stop_ws_provider():
-    global _provider
-    if _provider:
-        _provider.stop()
-        _provider = None
+    from src.exchanges import ws_provider_factory as factory
+    factory.stop_ws_provider(exchange="mexc", market_type="perpetual")
 
 
 def set_shared_cache(cache, ready):
-    global _shared_cache, _shared_ready
-    _shared_cache, _shared_ready = cache, ready
+    from src.exchanges import ws_provider_factory as factory
+    factory.set_shared_cache(cache, ready)
 
 
-def get_klines_from_shared_cache(symbol, limit=288):
-    if _shared_cache is None:
-        return []
-    key = MEXCFuturesWebSocketDataProvider._canonical(symbol)
-    data = list(_shared_cache.get(key, []))
-    return data[-limit:]
+def get_klines_from_shared_cache(symbol, limit=288, interval=None, **kwargs):
+    from src.exchanges import ws_provider_factory as factory
+    return factory.get_klines_from_shared_cache(symbol, limit, interval, exchange="mexc", market_type="perpetual", **kwargs)
 
 
-def is_cache_ready(symbol):
-    if _shared_ready is None:
-        return False
-    return bool(_shared_ready.get(MEXCFuturesWebSocketDataProvider._canonical(symbol), False))
+def get_ws_provider(interval=None):
+    from src.exchanges import ws_provider_factory as factory
+    return factory.get_ws_provider("mexc", "perpetual", interval=interval)
+
+
+def is_cache_ready(symbol, interval=None, **kwargs):
+    from src.exchanges import ws_provider_factory as factory
+    return factory.is_cache_ready(symbol, interval, exchange="mexc", market_type="perpetual", **kwargs)

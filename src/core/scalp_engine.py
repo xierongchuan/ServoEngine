@@ -11,8 +11,10 @@ Key classes:
   ScalpSession — risk limits, cooldowns, daily/hourly loss tracking
 """
 
+import copy
 import json
 import os
+import uuid
 import time
 import threading
 import traceback
@@ -20,10 +22,12 @@ from typing import Any, Dict, Optional
 
 from src.config import SCALP_SETTINGS, ERROR_HANDLING, DATA_DIR
 from src.config import should_reload_config, reload_bot_config
-from src.config import AI_VETO_OVERRIDE, AI_REGIME_OVERRIDE, AI_MODEL
+from src import config as runtime_config
 from src.utils.logger import info, error, warning
 from src.utils.helpers import get_filename
 from src.core.signals.utils import PositionAdapter, calculate_pnl_pct
+from src.core.execution_coordinator import attach_execution_safety
+from src.exchanges.errors import ExchangeError, ExchangeStateUnavailableError
 
 
 class TrailingStopManager:
@@ -446,6 +450,8 @@ class ScalpEngine:
 
         cfg = SCALP_SETTINGS
         self._settings = cfg
+        from src import config as runtime_config
+        self._owner_id = runtime_config.BOT_CONFIG.get("STRATEGY_INSTANCE_ID", f"scalp_{get_filename(symbol)}")
         loop_cfg = cfg.get("loops", {})
         self._fast_interval = loop_cfg.get("fast_interval", 1.5)
         self._slow_interval = loop_cfg.get("slow_interval", 45)
@@ -457,14 +463,9 @@ class ScalpEngine:
         ai_cfg = cfg.get("ai_integration", {})
         self._regime_ai_enabled = ai_cfg.get("regime_enabled", True)
         self._regime_interval_sec = ai_cfg.get("regime_interval_seconds", 300)
-        # AI model overrides from AI_SETTINGS.overrides
-        self._regime_model = AI_REGIME_OVERRIDE.get("model", None) or AI_MODEL
-        self._regime_temperature = AI_REGIME_OVERRIDE.get("temperature", 0.2)
-        self._regime_max_tokens = AI_REGIME_OVERRIDE.get("max_tokens", 150)
+
         self._veto_enabled = ai_cfg.get("veto_enabled", True)
-        self._veto_model = AI_VETO_OVERRIDE.get("model", None) or AI_MODEL
-        self._veto_temperature = AI_VETO_OVERRIDE.get("temperature", 0.1)
-        self._veto_max_tokens = AI_VETO_OVERRIDE.get("max_tokens", 100)
+
         self._veto_staleness_sec = ai_cfg.get("veto_staleness_seconds", 10)
         self._veto_max_cycles = ai_cfg.get("veto_max_stale_cycles", 2)
         self._borderline_quality = ai_cfg.get("borderline_quality_threshold", 0.3)
@@ -483,7 +484,9 @@ class ScalpEngine:
 
         # Components
         self._trailing = TrailingStopManager(cfg.get("sl_tp", {}))
-        self._session_state_path = os.path.join(DATA_DIR, f"scalp_session_{get_filename(symbol)}.json")
+        from src.exchanges.market_data_storage import instance_prices_path
+        instance_root = instance_prices_path(DATA_DIR, self._owner_id, symbol).parent.parent
+        self._session_state_path = str(instance_root / f"scalp_session_{get_filename(symbol)}.json")
         self._session = ScalpSession(
             symbol, cfg.get("risk_limits", {}), cfg.get("session_awareness", {}),
             state_path=None,
@@ -592,8 +595,7 @@ class ScalpEngine:
         self._veto_staleness_sec = ai_cfg.get("veto_staleness_seconds", 10)
         self._veto_max_cycles = ai_cfg.get("veto_max_stale_cycles", 2)
         self._borderline_quality = ai_cfg.get("borderline_quality_threshold", 0.3)
-        self._regime_model = runtime_config.AI_REGIME_OVERRIDE.get("model") or runtime_config.AI_MODEL
-        self._veto_model = runtime_config.AI_VETO_OVERRIDE.get("model") or runtime_config.AI_MODEL
+
         self._spread_max_bps = cfg.get("signal_rules", {}).get("spread_max_bps", 5.0)
         self._session.update_config(cfg.get("risk_limits", {}), cfg.get("session_awareness", {}))
         self._trailing.update_config(
@@ -621,7 +623,7 @@ class ScalpEngine:
 
         self._analyzer = LightweightAnalyzer(self.symbol, config=self._settings.get("signal_rules", {}))
         self._signal_gen = ScalpSignalGenerator(config=self._settings)
-        self._client = get_exchange_client()
+        self._client = attach_execution_safety(get_exchange_client(), owner_id=self._owner_id)
         self._tracker = TradeTracker()
         self._perf_tracker = ScalpPerformanceTracker()
         self._calibrator = ScalpCalibrator(self._perf_tracker)
@@ -678,7 +680,11 @@ class ScalpEngine:
                     time.sleep(self._fast_interval)
                     continue
 
-                self._last_market_price = float(indicators["current_price"])
+                live = self._get_candles(1, closed_only=False)
+                if not live:
+                    time.sleep(self._fast_interval)
+                    continue
+                self._last_market_price = float(live[-1]["closePrice"])
 
                 with self._lock:
                     position = self._position
@@ -687,7 +693,7 @@ class ScalpEngine:
 
                 # 3. Position management (if in position)
                 if position:
-                    self._manage_position(indicators, position)
+                    self._manage_position({**indicators, "current_price": self._last_market_price}, position)
                 elif position_state_available:
                     # 4. Signal detection (if no position)
                     self._check_entry(indicators, regime)
@@ -709,6 +715,9 @@ class ScalpEngine:
                 info(f"[SCALP] {self.symbol}: Fast loop stopped (KeyboardInterrupt)")
                 self._running = False
                 return
+            except ExchangeError as exc:
+                error(f"[SCALP] {self.symbol}: исполнение приостановлено, журнал сохраняется: {exc}")
+                raise
             except Exception as e:
                 error(f"[SCALP] {self.symbol}: Fast loop error: {e}")
                 error(traceback.format_exc())
@@ -807,16 +816,19 @@ class ScalpEngine:
         if self._partial_tp_enabled and not self._partial_tp_done and self._entry_atr > 0:
             tp1_dist = self._entry_atr * self._partial_tp_atr_mult
             if pos_type == "BUY" and current_price >= entry_price + tp1_dist:
-                self._partial_close(position, self._partial_tp_pct, f"TP1 at {self._partial_tp_atr_mult}x ATR")
-                self._partial_tp_done = True
+                self._partial_tp_done = self._partial_close(position, self._partial_tp_pct, f"TP1 at {self._partial_tp_atr_mult}x ATR") is True
             elif pos_type == "SELL" and current_price <= entry_price - tp1_dist:
-                self._partial_close(position, self._partial_tp_pct, f"TP1 at {self._partial_tp_atr_mult}x ATR")
-                self._partial_tp_done = True
+                self._partial_tp_done = self._partial_close(position, self._partial_tp_pct, f"TP1 at {self._partial_tp_atr_mult}x ATR") is True
 
         # 3. Trailing stop update
+        previous_trailing = copy.deepcopy(self._trailing.__dict__)
         new_sl = self._trailing.update(current_price, atr)
         if new_sl is not None:
-            self._update_sl_on_exchange(position, new_sl)
+            try:
+                self._update_sl_on_exchange(position, new_sl)
+            except ExchangeError:
+                self._trailing.__dict__.update(previous_trailing)
+                raise
 
         # 4. Trailing stop hit check (client-side)
         trail_hit = False
@@ -840,6 +852,9 @@ class ScalpEngine:
 
     def _check_entry(self, indicators: Dict, regime: Optional[Dict]):
         """Fast-loop entry check: generate signal, possibly execute or queue."""
+        if self._client.is_symbol_blocked(self.symbol):
+            self._track_rejection("execution_journal_blocked")
+            return
         if self._ownership and self._ownership.is_owned_by_other(self.symbol, self._owner_id):
             self._track_rejection("owned_by_other_strategy")
             return
@@ -915,8 +930,10 @@ class ScalpEngine:
     def _execute_entry(self, signal: Dict, indicators: Dict, ai_veto_used: bool = False):
         """Place a trade based on signal."""
         direction = signal["signal"]
-        current_price = indicators["current_price"]
+        current_price = self._last_market_price or indicators["current_price"]
         atr = indicators.get("atr", 0)
+        if self._client.is_symbol_blocked(self.symbol):
+            raise ExchangeStateUnavailableError("SCALP: символ заблокирован журналом")
 
         if atr <= 0:
             warning(f"[SCALP] {self.symbol}: Cannot execute, ATR is 0")
@@ -982,6 +999,8 @@ class ScalpEngine:
             confidence=signal.get("confidence", 0.7),
             size_pct=size_pct,
             order_type=entry_type,
+            command_id=signal.setdefault("execution_command_id", uuid.uuid4().hex),
+            owner_id=self._owner_id,
         )
 
         if order_id:
@@ -991,7 +1010,7 @@ class ScalpEngine:
                 if not filled:
                     info(f"[SCALP] {self.symbol}: Limit order not filled in {self._limit_timeout_sec}s, cancelled")
                     self._trailing.reset()
-                    if acquired and self._ownership:
+                    if acquired and self._ownership and not self._client.is_symbol_blocked(self.symbol):
                         self._ownership.release_if_owner(self.symbol, self._owner_id)
                     return
 
@@ -1035,7 +1054,7 @@ class ScalpEngine:
         else:
             error(f"[SCALP] {self.symbol}: Entry FAILED for {direction}")
             self._trailing.reset()
-            if acquired and self._ownership:
+            if acquired and self._ownership and not self._client.is_symbol_blocked(self.symbol):
                 self._ownership.release_if_owner(self.symbol, self._owner_id)
 
     def _close_position(self, position: Any, reason: str):
@@ -1049,8 +1068,9 @@ class ScalpEngine:
             return
 
         try:
-            result = self._client.close_position(self.symbol, deal_id, percentage=1.0)
-            if result:
+            result = self._client.close_position(self.symbol, deal_id, percentage=1.0,
+                            command_id=self._client.position_command_id(self.symbol, deal_id, "scalp:full-close"))
+            if result is True:
                 if not self._confirm_position_closed(deal_id):
                     warning(f"[SCALP] {self.symbol}: close order принят, но закрытие позиции ещё не подтверждено")
                     return
@@ -1072,22 +1092,11 @@ class ScalpEngine:
             else:
                 error(f"[SCALP] {self.symbol}: Failed to close position {deal_id}")
         except Exception as e:
-            error(f"[SCALP] {self.symbol}: Close error: {e}")
+            error(f"[SCALP] {self.symbol}: ошибка close; владение сохраняется: {e}")
+            raise
 
     def _confirm_position_closed(self, position_id: str, timeout: float = 4.0) -> bool:
-        deadline = time.time() + timeout
-        normalized = self.symbol.upper().replace("-", "").replace("/", "").replace("_", "")
-        while time.time() <= deadline:
-            try:
-                self._client.invalidate_cache("positions")
-                positions = self._client.get_positions()
-                candidates = positions.get(normalized, []) if isinstance(positions, dict) else []
-                if not any(PositionAdapter(item).position_id == str(position_id) for item in candidates):
-                    return True
-            except Exception as exc:
-                warning(f"[SCALP] {self.symbol}: проверка закрытия не удалась: {exc}")
-            time.sleep(0.2)
-        return False
+        return self._client.closure_confirmed(self.symbol, position_id)
 
     def _record_closed_trade(self, position: Any, reason: str, exit_price: float) -> float:
         """Записать чистый результат сделки как долю equity, а не движение цены."""
@@ -1118,20 +1127,8 @@ class ScalpEngine:
 
         Returns True if filled, False if cancelled due to timeout.
         """
-        start = time.time()
-        while time.time() - start < self._limit_timeout_sec:
-            time.sleep(0.5)
-            self._sync_position()
-            with self._lock:
-                if self._position:
-                    return True  # Position appeared → order filled
-
-        # Timeout — отменяем только созданный этим engine ордер.
-        try:
-            self._client.cancel_order(self.symbol, order_id)
-        except Exception as e:
-            warning(f"[SCALP] {self.symbol}: Failed to cancel limit order: {e}")
-        return False
+        # Проверяется конкретный order/client ID; появление любой позиции не считается fill.
+        return self._client.wait_for_entry(self.symbol, order_id, timeout=self._limit_timeout_sec)
 
     def _partial_close(self, position: Any, pct: float, reason: str):
         """Close a percentage of the current position."""
@@ -1140,13 +1137,15 @@ class ScalpEngine:
             warning(f"[SCALP] {self.symbol}: Partial close заблокирован — отсутствует position_id")
             return
         try:
-            result = self._client.close_position(self.symbol, deal_id, percentage=pct)
-            if result:
-                info(f"[SCALP] {self.symbol}: Partial close {pct*100:.0f}% ({reason})")
-            else:
-                warning(f"[SCALP] {self.symbol}: Partial close failed")
+            result = self._client.close_position(self.symbol, deal_id, percentage=pct,
+                            command_id=self._client.position_command_id(self.symbol, deal_id, "scalp:tp1"))
+            if result is True:
+                info(f"[SCALP] {self.symbol}: подтверждён partial close {pct*100:.0f}% ({reason})")
+                return True
+            return False
         except Exception as e:
-            warning(f"[SCALP] {self.symbol}: Partial close error: {e}")
+            warning(f"[SCALP] {self.symbol}: partial close не подтверждён: {e}")
+            raise
 
     def _update_sl_on_exchange(self, position: Any, new_sl: float):
         """Update stop loss on exchange (throttled)."""
@@ -1155,14 +1154,17 @@ class ScalpEngine:
 
         try:
             if hasattr(self._client, "set_sl_tp"):
-                updated = self._client.set_sl_tp(self.symbol, pos_side, sl=new_sl)
-                if updated:
+                pid = PositionAdapter(position).position_id
+                updated = self._client.set_sl_tp(self.symbol, pos_side, sl=new_sl, position_id=pid,
+                    command_id=self._client.position_command_id(self.symbol, pid, f"scalp:sl:{new_sl}"))
+                if updated is True:
                     info(f"[SCALP] {self.symbol}: SL updated to {new_sl:.2f} "
                          f"(trailing={'YES' if self._trailing.is_trailing else 'NO'})")
                 else:
-                    warning(f"[SCALP] {self.symbol}: биржа отклонила обновление SL {new_sl:.2f}")
+                    raise ExchangeStateUnavailableError(f"SCALP: обновление SL {new_sl:.2f} не подтверждено")
         except Exception as e:
-            warning(f"[SCALP] {self.symbol}: SL update failed: {e}")
+            warning(f"[SCALP] {self.symbol}: обновление SL не подтверждено: {e}")
+            raise
 
     def _update_order_book(self):
         """Update cached order book imbalance and spread (slow loop)."""
@@ -1185,69 +1187,68 @@ class ScalpEngine:
             warning(f"[SCALP] {self.symbol}: OB update error: {e}")
 
     def _sync_position(self):
-        """Sync position state from exchange."""
+        """Синхронизировать только доказанную собственную позицию, без ручного adoption."""
+        from src.core.execution_journal import canonical_symbol
         try:
-            positions = self._client.get_positions()
-            if not isinstance(positions, dict):
-                raise TypeError(f"get_positions вернул {type(positions).__name__}, ожидался dict")
-            normalized_symbol = self.symbol.upper().replace("-", "").replace("/", "").replace("_", "")
-            symbol_positions = next((
-                value for key, value in positions.items()
-                if str(key).upper().replace("-", "").replace("/", "").replace("_", "") == normalized_symbol
-            ), [])
-            real_position = symbol_positions[0] if symbol_positions else None
-            if self._ownership:
-                self._ownership.sync_with_positions(positions)
-                owner = self._ownership.get_owner(self.symbol)
-                if real_position is not None and owner and owner.owner_id != self._owner_id:
-                    real_position = None
-                    if self._fast_cycle % 60 == 0:
-                        info(f"[SCALP] {self.symbol}: позиция управляется {owner.owner_id}, SCALP ожидает")
-            adapter = PositionAdapter(real_position) if real_position is not None else None
-
-            externally_closed = None
+            if hasattr(self._client, "reconcile_if_due"):
+                self._client.reconcile_if_due(self.symbol)
+            if self._client.is_symbol_blocked(self.symbol):
+                raise ExchangeStateUnavailableError("SCALP: неразрешённое исполнение/защита")
+            positions = self._client.get_owned_positions(self.symbol)
+            rows = positions.get(canonical_symbol(self.symbol), [])
+            if len(rows) > 1:
+                raise ExchangeStateUnavailableError("SCALP: несколько собственных Hedge-позиций")
+            real_position = rows[0] if rows else None
+            restored = None
+            if real_position is not None:
+                adapter = PositionAdapter(real_position)
+                restored = self._client.get_position_execution_snapshot(self.symbol, adapter.position_id)
+                if not self._trailing._pos_side:
+                    prices = {}
+                    for row in restored["protections"]:
+                        if row["position_id"] != adapter.position_id:
+                            continue
+                        params = row["snapshot"].get("request_params")
+                        if params:
+                            prices["sl" if params.get("type") == "STOP_MARKET" else "tp"] = float(params["stopPrice"])
+                        else:
+                            for key, field in (("sl", "stopLossPrice"), ("tp", "takeProfitPrice")):
+                                if float(row["snapshot"].get(field) or 0) > 0:
+                                    prices[key] = float(row["snapshot"][field])
+                    if "sl" not in prices or "tp" not in prices:
+                        raise ExchangeStateUnavailableError("SCALP: нельзя восстановить управление без доказанных SL/TP")
+                    self._trailing._pos_side = adapter.direction
+                    self._trailing._entry_price = adapter.entry_price
+                    self._trailing._best_price = adapter.entry_price
+                    self._trailing._initial_sl = self._trailing._current_sl = prices["sl"]
+                    self._trailing._initial_tp = prices["tp"]
+                token = self._client.position_command_id(self.symbol, adapter.position_id, "scalp:tp1")
+                partial = self._client.journal.get(self._client.account_id, token)
+                self._partial_tp_done = bool(partial and partial["state"] == "FILLED" and partial["result"].get("close_confirmed") is True)
             with self._lock:
                 old_pos = self._position
-                self._position = real_position
-                self._position_state_available = True
-
-                # Detect position closed externally
-                if old_pos and not real_position:
-                    info(f"[SCALP] {self.symbol}: Position closed externally")
-                    externally_closed = old_pos
-                    self._trailing.reset()
-                    self._position_open_time = 0.0
-
-                # Detect new position (opened externally or sync after entry)
-                if not old_pos and real_position:
-                    self._position_open_time = self._position_open_time or time.time()
-                    # Initialize trailing if not already done
-                    if not self._trailing._pos_side:
-                        entry = adapter.entry_price
-                        atr = self._analyzer.get_snapshot().get("atr", 0) if self._analyzer else 0
-                        if entry > 0 and atr > 0:
-                            side = adapter.direction
-                            self._trailing.init_position(side, entry, atr)
-
-            if externally_closed is not None:
-                exit_price = self._last_market_price or PositionAdapter(externally_closed).mark_price
-                self._record_closed_trade(externally_closed, "Exchange protective order", exit_price)
+            if old_pos is not None and real_position is None:
+                if not self._client.closure_confirmed(self.symbol, PositionAdapter(old_pos).position_id):
+                    raise ExchangeStateUnavailableError("SCALP: исчезновение позиции не доказывает закрытие")
+                self._trailing.reset()
                 if self._ownership:
                     self._ownership.release_if_owner(self.symbol, self._owner_id)
-
+            with self._lock:
+                self._position = real_position
+                self._position_state_available = True
+                if real_position is not None:
+                    self._position_open_time = self._position_open_time or (restored["snapshot"].get("opened_at") if restored else None) or time.time()
+                elif old_pos is not None:
+                    self._position_open_time = 0
             if real_position is not None and self._ownership:
-                self._ownership.update_position_id(
-                    self.symbol, self._owner_id, PositionAdapter(real_position).position_id
-                )
-
-            # Sync with trade tracker
+                self._ownership.update_position_id(self.symbol, self._owner_id, PositionAdapter(real_position).position_id)
             if self._tracker:
                 self._tracker.sync_position(self.symbol, real_position, exchange_client=self._client)
-
-        except Exception as e:
+        except Exception as exc:
             with self._lock:
                 self._position_state_available = False
-            warning(f"[SCALP] {self.symbol}: Position sync error: {e}")
+            warning(f"[SCALP] {self.symbol}: собственная позиция не подтверждена: {exc}")
+            raise
 
     def _update_regime_deterministic(self):
         """Run deterministic regime detection from current indicators (every slow loop cycle)."""
@@ -1322,9 +1323,8 @@ class ScalpEngine:
             prompt = ScalpRegimeStrategy().get_strategy_section(regime_ctx)
             raw_response = get_prediction(
                 prompt,
-                model=self._regime_model,
-                max_tokens=self._regime_max_tokens,
-                temperature=self._regime_temperature,
+                role="regime",
+                config=runtime_config.BOT_CONFIG,
             )
 
             # Parse AI regime response
@@ -1494,9 +1494,8 @@ class ScalpEngine:
             prompt = ScalpVetoStrategy().get_strategy_section(veto_ctx)
             raw_response = get_prediction(
                 prompt,
-                model=self._veto_model,
-                max_tokens=self._veto_max_tokens,
-                temperature=self._veto_temperature,
+                role="veto",
+                config=runtime_config.BOT_CONFIG,
             )
             ai_result = parse_response(raw_response)
 
@@ -1520,44 +1519,34 @@ class ScalpEngine:
             candles = self._get_candles(600)
             if not candles:
                 return
-            prices_dir = os.path.join(DATA_DIR, "prices")
-            os.makedirs(prices_dir, exist_ok=True)
-            prices_file = os.path.join(prices_dir, f"{get_filename(self.symbol)}.json")
-            with open(prices_file, "w") as f:
-                json.dump(candles, f)
+            # Collector публикует атомарный instance-specific .meta envelope.
+            # SCALP не перезаписывает общий prices/<symbol>.json своей минутной историей.
+            return
         except Exception as e:
             warning(f"[SCALP] {self.symbol}: Price dump failed: {e}")
 
-    def _get_candles(self, limit: int = 5) -> list:
-        """Get candles from WS cache, fallback to REST."""
-        from src.exchanges.ws_provider_factory import get_klines_from_shared_cache, is_cache_ready
-
-        if is_cache_ready(self.symbol):
-            candles = get_klines_from_shared_cache(self.symbol, limit)
-            if candles:
-                # DEBUG: Log cache read every 60 cycles (~90 seconds)
-                if self._fast_cycle % 60 == 0:
-                    last_price = candles[-1].get('closePrice', 0) if candles else 0
-                    info(f"[SCALP-CACHE] {self.symbol}: Got {len(candles)} candles from cache, last_price={last_price}")
-                return candles
-
-        now = time.time()
-        if self._rest_candle_cache and now - self._rest_candle_cache_time < self._rest_candle_cache_ttl:
-            if len(self._rest_candle_cache) >= limit:
-                return self._rest_candle_cache[-limit:]
-
-        # REST fallback (slower, should be rare)
-        try:
-            candles = self._client.get_kline_data(self.symbol, interval="1m", limit=limit)
-            if candles:
-                self._rest_candle_cache = list(candles)
-                self._rest_candle_cache_time = now
-            if candles and self._fast_cycle % 60 == 0:
-                info(f"[SCALP-CACHE] {self.symbol}: REST fallback, got {len(candles)} candles")
-            return list(candles)[-limit:] if candles else []
-        except Exception as e:
-            warning(f"[SCALP] {self.symbol}: Candle fetch failed: {e}")
+    def _get_candles(self, limit: int = 5, *, closed_only=True) -> list:
+        """Стратегия — closed-only instance envelope; мониторинг — свежий точный live stream."""
+        from src.exchanges.market_data import StreamKey, closed_candles, candle_gaps, interval_start
+        from src.exchanges.market_data_storage import read_strategy_snapshot, read_market_snapshot
+        from src.exchanges.ws_provider_factory import get_market_snapshot
+        from src.trading_settings import get_trading_settings
+        settings = getattr(getattr(self, "_client", None), "settings", None) or get_trading_settings()
+        key = StreamKey(settings["exchange"], settings["market_type"], self.symbol, "1m")
+        age = settings["market_data"]["max_age_seconds"]
+        if closed_only:
+            view = read_strategy_snapshot(DATA_DIR, self._owner_id, self.symbol, stream_key=key,
+                                          limit=limit, max_age_seconds=age)
+            return view["candles"] if view is not None else []
+        snapshot = get_market_snapshot(key, max_age_seconds=age) or read_market_snapshot(DATA_DIR, key, max_age_seconds=age)
+        if snapshot is None:
             return []
+        rows = closed_candles(snapshot["candles"], key.interval) if closed_only else snapshot["candles"]
+        if len(rows) < limit or candle_gaps(rows[-limit:], key.interval):
+            return []
+        if not closed_only and rows[-1]["timestamp"] != interval_start(int(time.time() * 1000), key.interval):
+            return []
+        return rows[-limit:]
 
     # =========================================================================
     # Logging Methods (Tasks 1, 3, 4)

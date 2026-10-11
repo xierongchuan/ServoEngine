@@ -206,8 +206,37 @@ class TradeTracker:
         Handles detecting new trades and closed trades (including manual closures).
         """
         # Normalize symbol: use format without hyphen to match exchange format (BTCUSDT not BTC-USDT)
-        normalized_symbol = symbol.replace("-", "")
+        normalized_symbol = symbol.replace("-", "").replace("/", "").replace("_", "")
         stored_trade = self.active_trades.get(normalized_symbol)
+        from src.core.execution_coordinator import attach_execution_safety
+        from src.core.signals.utils import PositionAdapter
+        from src.exchanges.errors import ExchangeStateUnavailableError
+        if exchange_client is None:
+            from src.exchanges.exchange_factory import get_exchange_client
+            exchange_client = get_exchange_client()
+        client = attach_execution_safety(exchange_client)
+        try:
+            if client.is_symbol_blocked(symbol):
+                raise ExchangeStateUnavailableError("Символ заблокирован durable журналом")
+            owned = client.get_owned_positions(symbol).get(normalized_symbol, [])
+            if len(owned) > 1:
+                raise ExchangeStateUnavailableError("Tracker требует точный position ID при Hedge")
+            real_position = owned[0] if owned else None
+            if stored_trade:
+                prior_id = str(stored_trade.get("dealId", ""))
+                current_id = PositionAdapter(real_position).position_id if real_position is not None else None
+                if current_id != prior_id:
+                    if not client.closure_confirmed(symbol, prior_id):
+                        raise ExchangeStateUnavailableError("Исчезновение/смена ID не доказывает закрытие")
+                    if real_position is not None:
+                        self._handle_closed_trade(normalized_symbol, stored_trade, exchange_client=client)
+                        stored_trade = None
+        except Exception:
+            if stored_trade:
+                stored_trade["execution_status"] = "PAUSED"
+                self._mark_dirty()
+            raise
+        exchange_client = client
 
         # Scenario 1: New Position detected (Real exists, Stored does not)
         if real_position and not stored_trade:
@@ -441,6 +470,9 @@ class TradeTracker:
             side = real_position.get("type", "").upper()
             position_id = real_position.get("dealId", real_position.get("positionId", ""))
 
+        from src.core.signals.utils import PositionAdapter
+        stored_trade["amount"] = PositionAdapter(real_position).size
+        stored_trade["execution_status"] = "VERIFIED"
         stored_trade["last_pnl"] = current_pnl
         stored_trade["current_price"] = current_mark
 
@@ -498,50 +530,17 @@ class TradeTracker:
             self._dirty = False
             self._last_save_time = time.monotonic()
 
-    def force_sync_all(self, real_positions_dict: dict):
-        """
-        Force sync all trades with actual exchange positions.
-        real_positions_dict: {symbol: position_data} from exchange
-
-        Removes stale trades that don't exist on exchange.
-        Adds trades that exist on exchange but not in tracker.
-        """
-        # Normalize exchange symbols to match internal format (without hyphen)
-        normalized_exchange_symbols = {s.replace("-", "") for s in real_positions_dict.keys()}
-
-        # 1. Remove stale trades (in tracker but not on exchange)
-        stale_symbols = []
-        for symbol in list(self.active_trades.keys()):
-            # Normalize tracker symbol for comparison
-            normalized_symbol = symbol.replace("-", "")
-            if normalized_symbol not in normalized_exchange_symbols:
-                stale_symbols.append(symbol)
-
-        for symbol in stale_symbols:
-            stored = self.active_trades[symbol]
-            log_trade(f"🧹 [TradeTracker] Removing STALE trade {symbol} (not on exchange)")
-            # Move to history as closed
-            stored["status"] = "CLOSED_SYNC"
-            stored["close_time"] = datetime.now().isoformat()
-            stored["reason"] = "STALE_SYNC_CLEANUP"
-            # Check for duplicate before adding to history
-            if self._check_trade_exists(stored):
-                deal_id = stored.get('dealId', 'N/A')
-                info(f"⚠️ [TradeTracker] Сделка {deal_id} уже в истории (stale sync), пропускаем")
-            else:
-                self._append_history(stored)
-            del self.active_trades[symbol]
-
-        # 2. Add missing trades (on exchange but not in tracker)
-        for symbol, real_pos in real_positions_dict.items():
-            # Normalize symbol for comparison
-            normalized_symbol = symbol.replace("-", "")
-            if normalized_symbol not in self.active_trades and real_pos:
-                self._handle_new_trade(normalized_symbol, real_pos)
-
-        self._save_active_trades()
-
-        if stale_symbols:
-            info(f"🧹 [TradeTracker] Cleaned {len(stale_symbols)} stale trades: {stale_symbols}")
-
-        return len(stale_symbols)
+    def force_sync_all(self, real_positions_dict: dict, exchange_client=None):
+        """Обычный account snapshot не является основанием для adoption или CLOSED_SYNC."""
+        from src.core.execution_coordinator import attach_execution_safety
+        if exchange_client is None:
+            from src.exchanges.exchange_factory import get_exchange_client
+            exchange_client = get_exchange_client()
+        client = attach_execution_safety(exchange_client)
+        own = client.get_owned_positions()
+        symbols = set(self.active_trades) | set(own)
+        count = len(self.active_trades)
+        for symbol in symbols:
+            self.sync_position(symbol, own.get(symbol), exchange_client=client)
+        self.flush()
+        return max(0, count - len(self.active_trades))

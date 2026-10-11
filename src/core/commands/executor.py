@@ -48,27 +48,28 @@ class CommandExecutor(BaseCommandExecutor):
         from src.core import executor as legacy_executor
         from src.utils.logger import info, error
 
-        if command.action.is_hold:
-            info(f"[{command.symbol}] HOLD — no action needed")
-            return TradeResult(
-                success=True,
-                command=command,
-                message="HOLD — no execution needed",
-            )
+        if command.action.is_hold and command.stop_loss is None and command.take_profit is None:
+            info(f"[{command.symbol}] HOLD — нет команды на изменение защиты")
+            return TradeResult(success=True, command=command, message="Нет торговой мутации")
 
         # Конвертируем TradeCommand → prediction dict (обратная совместимость)
         prediction = command.to_dict()
 
         try:
-            legacy_executor.execute_prediction(prediction)
+            from src.core.execution_helpers import prediction_command_id
+            owner_id = command.metadata.get("strategy_instance_id")
+            prediction["command_id"] = prediction_command_id(prediction, owner_id or command.strategy)
+            actual = legacy_executor.execute_prediction(prediction, owner_id=owner_id)
             return TradeResult(
-                success=True,
+                success=actual is True,
                 command=command,
-                executed_price=command.current_price,
-                message=f"Executed {command.action.value} via legacy executor",
+                message="Исполнение подтверждено" if actual is True else "Команда не исполнена",
             )
         except Exception as e:
-            error(f"[{command.symbol}] Command execution failed: {e}")
+            from src.exchanges.errors import UnknownOrderStateError, ExchangeStateUnavailableError
+            error(f"[{command.symbol}] Исполнение команды не подтверждено: {e}")
+            if isinstance(e, (UnknownOrderStateError, ExchangeStateUnavailableError)):
+                raise
             return TradeResult(
                 success=False,
                 command=command,

@@ -3,7 +3,14 @@ from datetime import datetime
 from src.config import *
 from . import executor
 from src.utils.logger import info, error, warning, log_trade
-from src.exchanges.exchange_factory import get_exchange_client
+from src.exchanges.exchange_factory import get_exchange_client as _get_exchange_client
+from src.core.execution_coordinator import attach_execution_safety
+from src.core.execution_journal import canonical_symbol
+from src.exchanges.errors import ExchangeError, UnknownOrderStateError
+
+
+def get_exchange_client():
+    return attach_execution_safety(_get_exchange_client())
 from src.core.signals.utils import PositionAdapter
 
 
@@ -28,11 +35,12 @@ def close_position(symbol, deal_id, working_order_id=None):
     client = get_exchange_client()
 
     try:
-        result = client.close_position(symbol, deal_id)
+        result = client.close_position(symbol, deal_id,
+                    command_id=client.position_command_id(symbol, deal_id, "monitor:full-close"))
 
-        if result:
-
-
+        if result is True:
+            if not client.closure_confirmed(symbol, deal_id):
+                raise UnknownOrderStateError("Полное закрытие не подтверждено durable ownership")
             # Логируем закрытие в trades.log
             log_trade(f"✅ Позиция {deal_id} ({symbol}) закрыта")
             info(f"✅ Позиция {deal_id} ({symbol}) закрыта")
@@ -45,19 +53,19 @@ def close_position(symbol, deal_id, working_order_id=None):
         # Логируем ошибку в trades.log
         log_trade(f"❌ Ошибка закрытия позиции {symbol}: {str(e)}", level='ERROR')
         error(f"❌ Ошибка закрытия позиции {symbol}: {str(e)}")
-        return False
+        raise
 
 def monitor_symbol(symbol, all_positions=None):
     """Мониторит позиции только для одного символа"""
 
     try:
         if all_positions is None:
-            all_positions = executor.get_open_positions()
+            all_positions = get_exchange_client().get_owned_positions(symbol)
         if not all_positions:
             # No positions at all
             return
 
-        position_list = all_positions.get(symbol, [])
+        position_list = [p for key, rows in all_positions.items() if canonical_symbol(key) == canonical_symbol(symbol) for p in rows]
 
         if not position_list:
             # No position for this symbol
@@ -88,8 +96,11 @@ def monitor_symbol(symbol, all_positions=None):
             except Exception as e:
                 warning(f"⚠️ {symbol}: ошибка мониторинга: {str(e)}")
 
+    except ExchangeError:
+        error(f"❌ {symbol}: состояние исполнения/защиты не подтверждено")
+        raise
     except Exception as e:
-         error(f"❌ Ошибка мониторинга {symbol}: {e}")
+        error(f"❌ Ошибка мониторинга {symbol}: {e}")
 
 def main():
     """Основная функция мониторинга"""
@@ -99,7 +110,7 @@ def main():
     if not client.check_prerequisites():
         return
 
-    all_positions = executor.get_open_positions()
+    all_positions = client.get_owned_positions()
 
     if not all_positions:
         info("📭 Нет открытых позиций для мониторинга")

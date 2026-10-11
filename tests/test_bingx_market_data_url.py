@@ -1,3 +1,5 @@
+import pytest
+from src.exchanges.errors import ExchangeAPIError
 from src.exchanges.config.bingx_config import BingXConfig
 from src.exchanges.dto.models import OrderSide, OrderType, PositionSide
 from src.exchanges.impl.bingx_client import BingXClient
@@ -28,7 +30,8 @@ def test_market_data_uses_public_market_url_in_demo(monkeypatch):
     calls = []
     monkeypatch.setenv("BINGX_MARKET_API_URL", "https://market.example.test")
 
-    def fake_get(url, params=None, timeout=6):
+    def fake_get(url, params=None, timeout=6, allow_redirects=None):
+        assert allow_redirects is False
         calls.append({"url": url, "params": params, "timeout": timeout})
         return _FakeResponse()
 
@@ -47,7 +50,8 @@ def test_market_data_keeps_rest_intervals_compact(monkeypatch):
     calls = []
     monkeypatch.setenv("BINGX_MARKET_API_URL", "https://market.example.test")
 
-    def fake_get(url, params=None, timeout=6):
+    def fake_get(url, params=None, timeout=6, allow_redirects=None):
+        assert allow_redirects is False
         calls.append({"url": url, "params": params, "timeout": timeout})
         return _FakeResponse()
 
@@ -64,7 +68,8 @@ def test_market_data_maps_verbose_intervals_to_compact(monkeypatch):
     calls = []
     monkeypatch.setenv("BINGX_MARKET_API_URL", "https://market.example.test")
 
-    def fake_get(url, params=None, timeout=6):
+    def fake_get(url, params=None, timeout=6, allow_redirects=None):
+        assert allow_redirects is False
         calls.append({"url": url, "params": params, "timeout": timeout})
         return _FakeResponse()
 
@@ -97,11 +102,9 @@ def test_place_order_uses_explicit_runtime_leverage(monkeypatch):
         return True
 
     monkeypatch.setattr(client, "set_leverage", fake_set_leverage)
-    monkeypatch.setattr(
-        client,
-        "_make_request",
-        lambda method, endpoint, params: {"code": 0, "data": {"orderId": "order-1"}},
-    )
+    from test_bingx_safety_regressions import FakeExchange
+    exchange = FakeExchange()
+    exchange.install(monkeypatch)
 
     order_id = client.place_order(
         symbol="BTCUSDT",
@@ -111,7 +114,7 @@ def test_place_order_uses_explicit_runtime_leverage(monkeypatch):
         leverage=5,
     )
 
-    assert order_id == "order-1"
+    assert order_id == "1"
     assert leverage_calls == [("BTCUSDT", 5, PositionSide.LONG)]
 
 
@@ -127,18 +130,20 @@ def test_market_data_logs_bingx_api_error(monkeypatch, caplog):
         def json(self):
             return {"code": 109400, "msg": "interval: invalid", "data": {}}
 
+    def fake_get(url, params=None, timeout=6, allow_redirects=None):
+        assert allow_redirects is False
+        return ErrorResponse()
+
     monkeypatch.setenv("BINGX_MARKET_API_URL", "https://market.example.test")
     monkeypatch.setattr(
         "src.exchanges.impl.bingx_client.requests.get",
-        lambda url, params=None, timeout=6: ErrorResponse(),
+        fake_get,
     )
 
     client = BingXClient(BingXConfig(is_demo=True))
 
     with caplog.at_level("WARNING", logger="src.exchanges.impl.bingx_client"):
-        result = client.get_kline_data("BTCUSDT", interval="5m", limit=1)
-
-    assert result == []
-    assert "BingX klines API error" in caplog.text
+        with pytest.raises(ExchangeAPIError) as caught:
+            client.get_kline_data("BTCUSDT", interval="5m", limit=1)
+    assert caught.value.code == 109400
     assert "code=109400" in caplog.text
-    assert "symbol=BTC-USDT" in caplog.text

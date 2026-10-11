@@ -382,23 +382,13 @@ async def cmd_weblink(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     try:
-        # Import token store - need to handle import properly
-        import sys
-
-        # Add src to path for imports
-        project_root = PROJECT_ROOT
-        src_path = project_root / "src"
-        if str(src_path) not in sys.path:
-            sys.path.insert(0, str(src_path))
-
-        # Import the token store service
-        from telegram_panel.backend.services.token_store import get_token_store
+        from .backend.services.token_store import get_token_store
 
         token_store = get_token_store()
         token = token_store.generate_token(user_id)
 
         # Build the URL
-        web_url = f"{panel_url.rstrip('/')}?token={token}"
+        web_url = f"{panel_url.rstrip('/')}#token={token}"
 
         keyboard = [
             [InlineKeyboardButton("🔗 Open Panel in Browser", url=web_url)]
@@ -418,7 +408,7 @@ async def cmd_weblink(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         # Max tokens reached
         await update.message.reply_text(f"⚠️ {str(e)}")
     except Exception as e:
-        logger.error("Error generating weblink: %s", e)
+        logger.error("❌ Ошибка генерации ссылки: %s", type(e).__name__)
         await update.message.reply_text(
             "❌ Ошибка генерации ссылки. Попробуйте позже."
         )
@@ -433,14 +423,7 @@ async def cmd_revoketoken(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = update.effective_user.id
 
     try:
-        import sys
-
-        project_root = PROJECT_ROOT
-        src_path = project_root / "src"
-        if str(src_path) not in sys.path:
-            sys.path.insert(0, str(src_path))
-
-        from telegram_panel.backend.services.token_store import get_token_store
+        from .backend.services.token_store import get_token_store
 
         token_store = get_token_store()
         count = token_store.revoke_all_user_tokens(user_id)
@@ -457,7 +440,7 @@ async def cmd_revoketoken(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
 
     except Exception as e:
-        logger.error("Error revoking tokens: %s", e)
+        logger.error("❌ Ошибка отзыва токенов: %s", type(e).__name__)
         await update.message.reply_text(
             "❌ Ошибка отзыва токенов. Попробуйте позже."
         )

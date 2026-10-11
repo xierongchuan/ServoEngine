@@ -1,7 +1,11 @@
-import json
 from src.config import DATA_DIR, AI_THRESHOLDS, SYMBOLS, ENABLE_NEWS, TECHNICAL_ANALYSIS
 from src.utils.logger import info, error, warning
 from src.utils.helpers import get_filename
+from src.core.data.reader import (
+    runtime_data_config, read_strategy_data, market_data_context, is_read_only, MarketDataUnavailable,
+        trading_settings_for_config,
+)
+from src.exchanges.market_data_storage import AtomicJsonStore
 
 # Индикаторы импортируются из нового пакета indicators
 from src.core.indicators import (
@@ -19,7 +23,7 @@ from src.core.indicators import (
 )
 
 
-def calculate_indicators(prices):
+def calculate_indicators(prices, thresholds=None):
     """Рассчитывает ключевые индикаторы.
 
     Теперь использует унифицированный метод расчета RSI (Wilder's smoothing)
@@ -41,8 +45,9 @@ def calculate_indicators(prices):
     except (KeyError, TypeError, ValueError) as e:
         raise ValueError(f"Некорректная структура данных о ценах: {str(e)}")
 
-    sma_period = AI_THRESHOLDS["SMA_PERIOD"]
-    rsi_period = AI_THRESHOLDS["RSI_PERIOD"]
+    thresholds = thresholds or AI_THRESHOLDS
+    sma_period = thresholds["SMA_PERIOD"]
+    rsi_period = thresholds["RSI_PERIOD"]
 
     # SMA (конфигурируемый период)
     if len(closes) >= sma_period:
@@ -65,7 +70,7 @@ def calculate_indicators(prices):
 from src.exchanges.exchange_factory import get_exchange_client
 
 
-def analyze_htf(symbol):
+def analyze_htf(symbol, config=None):
     """
     Analyzes higher-timeframe (1H) data for AISCALP multi-timeframe context.
 
@@ -73,15 +78,15 @@ def analyze_htf(symbol):
         dict with htf_trend, htf_ema_fast, htf_ema_slow, htf_rsi, daily_bias, daily_change_pct
         or None if HTF data is unavailable
     """
-    from src.config import BOT_CONFIG
-
-    mtf_cfg = BOT_CONFIG.get("AISCALP_SETTINGS", {}).get("multi_timeframe", {})
+    config = runtime_data_config(config)
+    mtf_cfg = config.get("AISCALP_SETTINGS", {}).get("multi_timeframe", {})
     if not mtf_cfg.get("enabled", True):
         return None
 
     try:
-        from src.core.collector import fetch_htf_prices
-        htf_prices = fetch_htf_prices(symbol)
+        htf_snapshot = read_strategy_data(symbol, config, interval=mtf_cfg.get("htf_timeframe", "1h"),
+                                          limit=max(1, int(mtf_cfg.get("htf_candles", 48))))
+        htf_prices = htf_snapshot["candles"]
         if not htf_prices:
             warning(f"⚠️ [AISCALP] HTF data unavailable for {symbol}")
             return None
@@ -139,6 +144,7 @@ def analyze_htf(symbol):
             "htf_rsi": round(htf_rsi, 2),
             "daily_bias": daily_bias,
             "daily_change_pct": round(daily_change_pct, 2),
+            "market_data": market_data_context(htf_snapshot),
         }
 
         info(f"🌐 [AISCALP] HTF: trend={htf_trend}, RSI={htf_rsi:.1f}, bias={daily_bias} ({daily_change_pct:+.2f}%)")
@@ -149,23 +155,27 @@ def analyze_htf(symbol):
         return None
 
 
-def analyze_symbol_with_position(symbol, decision_context=""):
+def analyze_symbol_with_position(symbol, decision_context="", config=None):
     """
     Анализирует один символ, самостоятельно получая информацию о текущей позиции.
     Используется в режиме multiprocessing.
     """
+    config = runtime_data_config(config)
+    if is_read_only(config):
+        return analyze_symbol(symbol, position=None, decision_context=decision_context, config=config)
     try:
-        client = get_exchange_client()
+        client = get_exchange_client(settings=trading_settings_for_config(config))
         positions = client.get_positions()
-        symbol_positions = positions.get(symbol, [])
+        from src.exchanges.market_data import canonical_symbol
+        symbol_positions = positions.get(canonical_symbol(symbol), [])
         current_position = symbol_positions[0] if symbol_positions else None
 
-        return analyze_symbol(symbol, position=current_position, decision_context=decision_context)
+        return analyze_symbol(symbol, position=current_position, decision_context=decision_context, config=config)
     except Exception as e:
         error(f"❌ Ошибка получения позиции для {symbol}: {e}")
-        return analyze_symbol(symbol, position=None, decision_context=decision_context)
+        return analyze_symbol(symbol, position=None, decision_context=decision_context, config=config)
 
-def analyze_symbol(symbol, position=None, decision_context=""):
+def analyze_symbol(symbol, position=None, decision_context="", config=None):
     """
     Анализирует один символ и готовит оптимизированный промпт для AI.
     Стратегия: Momentum Breakout с трендовым фильтром
@@ -174,22 +184,17 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     # Debug: log data loading
     from src.utils.logger import debug, warning
 
-    # Загружаем данные
-    price_file = f"{DATA_DIR}/prices/{get_filename(symbol)}.json"
-    try:
-        with open(price_file) as f:
-            prices = json.load(f)
-    except FileNotFoundError:
-        # Если файл ещё не создан, получаем свежие данные и сохраняем их
-        info(f"🔄 Данные для {symbol} ещё не кешированы, загружаем свежие...")
-        from src.core import collector
-        prices = collector.fetch_prices(symbol)
-        # Сохраняем в файл для будующего использования
-        try:
-            with open(price_file, 'w') as f:
-                json.dump(prices, f)
-        except Exception as e:
-            warning(f"⚠️ Не удалось сохранить кеш цен для {symbol}: {str(e)}")
+    import src.config as config_module
+    config = runtime_data_config(config)
+    AI_THRESHOLDS = config.get("AI_THRESHOLDS", config_module.AI_THRESHOLDS)
+    TECHNICAL_ANALYSIS = config.get("TECHNICAL_ANALYSIS", config_module.TECHNICAL_ANALYSIS)
+    ENABLE_NEWS = config.get("ENABLE_NEWS", config_module.ENABLE_NEWS)
+    snapshot = read_strategy_data(symbol, config)
+    prices = snapshot["candles"]
+    provenance = market_data_context(snapshot)
+    data_dir = config.get("DATA_DIR", DATA_DIR)
+    if is_read_only(config):
+        position = None
 
     debug(f"[Analyzer] Loaded {len(prices)} candles for {symbol}")
 
@@ -198,23 +203,10 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         last_candle = prices[-1]
         debug(f"[Analyzer] Last candle: close={last_candle.get('closePrice')}, volume={last_candle.get('volume')}")
 
-    try:
-        with open(f"{DATA_DIR}/news/{get_filename(symbol)}.json") as f:
-            news = json.load(f)
-    except FileNotFoundError:
-        # Если файл новостей ещё не создан, получаем свежие новости и сохраняем их
-        info(f"🔄 Новости для {symbol} ещё не кешированы, загружаем свежие...")
-        from src.core import collector
-        news = collector.fetch_news(symbol)
-        # Сохраняем в файл для будующего использования
-        try:
-            with open(f"{DATA_DIR}/news/{get_filename(symbol)}.json", 'w') as f:
-                json.dump(news, f)
-        except Exception as e:
-            warning(f"⚠️ Не удалось сохранить кеш новостей для {symbol}: {str(e)}")
+    news = AtomicJsonStore(f"{data_dir}/news/{get_filename(symbol)}.json").read(default=[]) if ENABLE_NEWS else []
 
     # === РАСЧЁТ ИНДИКАТОРОВ ===
-    sma, rsi = calculate_indicators(prices)
+    sma, rsi = calculate_indicators(prices, AI_THRESHOLDS)
 
     # Извлекаем числовые цены для расчётов
     close_prices = [get_price_value(p.get("closePrice", 0)) for p in prices]
@@ -487,7 +479,8 @@ def analyze_symbol(symbol, position=None, decision_context=""):
 > Рекомендация: HOLD для роста или CLOSE если тренд сломан."""
 
     # === КОНФИГУРАЦИЯ СТРАТЕГИИ ===
-    from src.config import AGGRESSIVE_MODE, AGGRESSIVE_SETTINGS
+    AGGRESSIVE_MODE = config.get("AGGRESSIVE_MODE", config_module.AGGRESSIVE_MODE)
+    AGGRESSIVE_SETTINGS = config.get("AGGRESSIVE_SETTINGS", config_module.AGGRESSIVE_SETTINGS)
 
     if AGGRESSIVE_MODE:
         AGGRESSIVE_SETTINGS.get("RSI_BUY_COND", 65)
@@ -507,9 +500,14 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     # === MOMENTUM STRATEGY SETTINGS ===
     from src.config import CHART_RANGES, DEFAULT_CHART_RANGE, SMART_SAMPLING, MOMENTUM_STRATEGY, STRATEGY_STYLE, STYLE_PRESETS
 
-    # Get current style settings
-    current_style = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS["AISCALP"])
-    current_interval = current_style.get("timeframe", "5m")
+    STRATEGY_STYLE = config.get("STRATEGY_STYLE", STRATEGY_STYLE)
+    STYLE_PRESETS = config.get("STYLE_PRESETS", STYLE_PRESETS)
+    CHART_RANGES = config.get("CHART_RANGES", CHART_RANGES)
+    DEFAULT_CHART_RANGE = config.get("DEFAULT_CHART_RANGE", DEFAULT_CHART_RANGE)
+    SMART_SAMPLING = config.get("SMART_SAMPLING", SMART_SAMPLING)
+    MOMENTUM_STRATEGY = config.get("MOMENTUM_STRATEGY", MOMENTUM_STRATEGY)
+    current_style = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS.get("AISCALP", {}))
+    current_interval = snapshot["stream"]["interval"]
 
     # Используем настройки из конфига (с приоритетом MOMENTUM_STRATEGY если задано вручную)
     atr_sl_mult = MOMENTUM_STRATEGY.get("atr_sl_multiplier", current_style.get("atr_sl_mult", 2.0))
@@ -647,14 +645,15 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         is_momentum_market = True
 
     # === HYBRID MODE: Deterministic Signal Generation ===
-    from src.config import STRATEGY_STYLE
+    STRATEGY_STYLE = config.get("STRATEGY_STYLE", config_module.STRATEGY_STYLE)
 
     signal_data = None
     close_signal = None
     regime_data = None
 
     if STRATEGY_STYLE == "HYBRID":
-        from src.core.signal_generator import generate_signal, should_close
+        from src.core.signals.hybrid import HybridSignalGenerator
+        hybrid_generator = HybridSignalGenerator(config.get("HYBRID_SETTINGS", config_module.BOT_CONFIG.get("HYBRID_SETTINGS", {})))
 
         # Подготавливаем данные для генератора сигналов
         signal_input = {
@@ -695,12 +694,12 @@ def analyze_symbol(symbol, position=None, decision_context=""):
             regime_data = None
 
         # Генерируем детерминированный сигнал (с учётом режима)
-        signal_data = generate_signal(signal_input, regime=regime_data)
+        signal_data = hybrid_generator.generate(signal_input, regime=regime_data)
         info(f"🔧 [HYBRID] Generated signal: {signal_data['signal']} (score: {signal_data['score']}, quality: {signal_data.get('quality', 0):.2f})")
 
         # Проверяем условия закрытия позиции
         if position:
-            close_signal = should_close(signal_input, position)
+            close_signal = hybrid_generator.should_close(signal_input, position)
             if close_signal.get("should_close"):
                 info(f"🔧 [HYBRID] Close signal: {close_signal['reason']}")
 
@@ -709,11 +708,14 @@ def analyze_symbol(symbol, position=None, decision_context=""):
     session_data = None
 
     if STRATEGY_STYLE == "AISCALP":
-        from src.core.aiscalp_signal import generate_aiscalp_signal, aiscalp_should_close, aiscalp_pre_filter
+        from src.core.signals.aiscalp import AiscalpSignalGenerator
+        aiscalp_generator = AiscalpSignalGenerator(config.get("AISCALP_SETTINGS", config_module.BOT_CONFIG.get("AISCALP_SETTINGS", {})))
         from src.core.session import get_session_info
 
         # 1. HTF analysis
-        htf_data = analyze_htf(symbol)
+        htf_data = analyze_htf(symbol, config=config)
+        if config.get("AISCALP_SETTINGS", {}).get("multi_timeframe", {}).get("enabled", True) and htf_data is None:
+            raise MarketDataUnavailable(f"Нет пригодного HTF snapshot для {symbol}")
 
         # 2. Session awareness
         session_data = get_session_info()
@@ -748,7 +750,7 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         }
 
         # 4. Pre-filter
-        should_proceed, filter_reason = aiscalp_pre_filter(signal_input, htf_data, session_data)
+        should_proceed, filter_reason = aiscalp_generator.pre_filter(signal_input, htf_data, session_data)
         if not should_proceed:
             info(f"🔧 [AISCALP] Pre-filter skip: {filter_reason}")
             signal_data = {
@@ -769,12 +771,12 @@ def analyze_symbol(symbol, position=None, decision_context=""):
                 regime_data = None
 
             # 6. Generate AISCALP signal
-            signal_data = generate_aiscalp_signal(signal_input, htf_data, session_data, regime=regime_data)
+            signal_data = aiscalp_generator.generate(signal_input, htf_data, session_data, regime=regime_data)
             info(f"🔧 [AISCALP] Signal: {signal_data['signal']} (score: {signal_data['score']}, Q: {signal_data.get('quality', 0):.2f})")
 
         # 7. Close signal check
         if position:
-            close_signal = aiscalp_should_close(signal_input, position, htf_data)
+            close_signal = aiscalp_generator.should_close(signal_input, position, htf_data)
             if close_signal.get("should_close"):
                 info(f"🔧 [AISCALP] Close signal: {close_signal['reason']}")
 
@@ -872,6 +874,8 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         "macd_hist_prev": macd_hist_prev,
         "macd_hist_2prev": macd_hist_2prev,
         "candle_time": prices[-1].get("snapshotTimeUTC", "") if prices else "",
+        "market_data": provenance,
+        "strategy_instance_id": config.get("STRATEGY_INSTANCE_ID"),
         "has_position": bool(position),
         "position": position,
         "prompt": prompt.strip(),
@@ -885,31 +889,27 @@ def analyze_symbol(symbol, position=None, decision_context=""):
         "session_data": session_data,
     }
 
-def main():
-    """Основная функция анализа"""
+def main(config=None):
+    """Основная функция анализа без private reads в read_only."""
+    config = runtime_data_config(config)
     results = []
 
     # Получаем открытые позиции
     try:
-        client = get_exchange_client()
-        positions = client.get_positions()
+        positions = {} if is_read_only(config) else get_exchange_client(settings=trading_settings_for_config(config)).get_positions()
         info(f"📊 Получено {sum(len(p) for p in positions.values())} открытых позиций")
     except Exception as e:
         error(f"❌ Ошибка получения позиций: {str(e)}")
         positions = {}
 
-    for symbol in SYMBOLS:
+    for symbol in config.get("SYMBOLS", SYMBOLS):
         try:
-            # Ищем позицию для символа
-            # BingX symbols might need mapping if they differ from config SYMBOLS
-            # But client should handle normalization or we check carefully
-            # For now assume exact match or simple mapping
-
-            symbol_positions = positions.get(symbol, [])
-            # Take the first position if multiple (simplified)
+            # Ключ позиции нормализуется одинаково для всех бирж и alias символа.
+            from src.exchanges.market_data import canonical_symbol
+            symbol_positions = positions.get(canonical_symbol(symbol), [])
             current_position = symbol_positions[0] if symbol_positions else None
 
-            results.append(analyze_symbol(symbol, position=current_position))
+            results.append(analyze_symbol(symbol, position=current_position, config=config))
             info(f"🔍 Анализ {symbol} завершен")
         except Exception as e:
             error(f"❌ Ошибка анализа {symbol}: {str(e)}")

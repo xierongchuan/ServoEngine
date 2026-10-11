@@ -1,4 +1,12 @@
 import json
+import math
+import os
+import re
+from collections import Counter
+
+from src.utils.helpers import get_filename
+from src.exchanges.market_data_storage import list_market_snapshots
+from src.exchanges.market_data import canonical_symbol, StreamKey
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -8,9 +16,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from ..config import DATA_DIR
 from ..services.auth import get_current_user
 
-# Путь к base.json для получения plotter_ranges
-import os
-BASE_CONFIG_PATH = Path(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 'config', 'base.json'))
 
 router = APIRouter(prefix="/api/chart-data", tags=["chart-data"])
 
@@ -25,7 +30,8 @@ def _range_to_seconds(value: str) -> Optional[int]:
     if unit not in multipliers:
         return None
     try:
-        return int(text[:-1]) * multipliers[unit]
+        seconds = int(text[:-1]) * multipliers[unit]
+        return seconds if seconds > 0 else None
     except ValueError:
         return None
 
@@ -63,7 +69,7 @@ def _read_json(path: Path, default=None):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError):
         return default
 
 
@@ -202,27 +208,70 @@ def _resample_candles(candles: list[dict], target_minutes: int) -> list[dict]:
     return resampled
 
 
+@router.get("/sources/{symbol}")
+async def get_chart_sources(symbol: str, _user: dict = Depends(get_current_user)) -> list[dict]:
+    try:
+        normalized = canonical_symbol(symbol)
+    except ValueError:
+        raise HTTPException(400, "Некорректный символ")
+    return sorted([value["stream"] for value in list_market_snapshots(DATA_DIR)
+                   if value["stream"]["symbol"] == normalized],
+                  key=lambda stream: (stream["exchange"], stream["market_type"], stream["interval"]))
+
+
 @router.get("/{symbol}")
 async def get_chart_data(
     symbol: str,
     time_range: str = Query(default="AUTO", alias="range"),
     _user: dict = Depends(get_current_user),
+    exchange: Optional[str] = None,
+    market_type: Optional[str] = None,
+    interval: Optional[str] = None,
 ) -> dict:
     """OHLCV + индикаторы + позиция для интерактивного графика."""
 
-    safe_symbol = symbol.replace("/", "_")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_/-]{0,63}", symbol) or ".." in symbol:
+        raise HTTPException(status_code=400, detail="Некорректный символ")
+    safe_symbol = get_filename(symbol)
     price_file = DATA_DIR / "prices" / f"{safe_symbol}.json"
 
-    if not price_file.is_file():
-        raise HTTPException(status_code=404, detail=f"No price data for {symbol}")
-
-    raw_candles = _read_json(price_file, default=[])
-    if not raw_candles:
+    try:
+        normalized = canonical_symbol(symbol)
+        snapshots = [snapshot for snapshot in list_market_snapshots(DATA_DIR)
+                     if snapshot["stream"]["symbol"] == normalized]
+        requested = None
+        if any((exchange, market_type, interval)):
+            if exchange is None or market_type is None or interval is None:
+                raise HTTPException(400, "Укажите exchange, market_type и interval вместе")
+            requested = StreamKey(exchange, market_type, symbol, interval).to_dict()
+    except ValueError:
+        raise HTTPException(400, "Некорректный источник графика")
+    snapshot = next((value for value in snapshots if value["stream"] == requested), None) if requested else snapshots[0] if len(snapshots) == 1 else None
+    if requested and snapshot is None:
+        raise HTTPException(404, "Снимок выбранного потока пока недоступен")
+    if snapshot:
+        raw_candles = snapshot["candles"]
+        snapshot_updated_at = snapshot.get("last_valid_update")
+    else:
+        if price_file.is_symlink() or not price_file.is_file():
+            if snapshots:
+                raise HTTPException(409, "Доступно несколько потоков. Укажите источник и интервал явно.")
+            raise HTTPException(404, "Данные графика пока недоступны")
+        # Метаданные и свечи читаются из одного inode, даже при atomic replace publisher.
+        try:
+            with price_file.open(encoding="utf-8") as stream:
+                snapshot_updated_at = os.fstat(stream.fileno()).st_mtime
+                raw_candles = json.load(stream)
+        except (OSError, ValueError):
+            raise HTTPException(503, "Снимок графика обновляется. Повторите запрос.")
+    if not isinstance(raw_candles, list) or not raw_candles:
         raise HTTPException(status_code=404, detail="Empty price data")
 
-    # Парсинг свечей (тот же формат что в plotter.py)
-    candles = []
+    # Повторный timestamp заменяется последней валидной свечой из снимка.
+    by_time = {}
     for c in raw_candles:
+        if not isinstance(c, dict):
+            continue
         ts_str = c.get("snapshotTimeUTC", "")
         try:
             if ts_str.endswith("Z"):
@@ -234,63 +283,36 @@ async def get_chart_data(
         except (ValueError, AttributeError):
             continue
 
-        # Поддержка обоих форматов цен (dict и float)
-        if isinstance(c.get("closePrice"), dict):
-            candles.append({
-                "time": ts,
-                "open": float(c["openPrice"]["bid"]),
-                "high": float(c["highPrice"]["bid"]),
-                "low": float(c["lowPrice"]["bid"]),
-                "close": float(c["closePrice"]["bid"]),
-                "volume": float(c.get("lastTradedVolume", 0)),
-            })
-        else:
-            candles.append({
-                "time": ts,
-                "open": float(c.get("openPrice", 0)),
-                "high": float(c.get("highPrice", 0)),
-                "low": float(c.get("lowPrice", 0)),
-                "close": float(c.get("closePrice", 0)),
-                "volume": float(c.get("volume", 0)),
-            })
+        try:
+            candle: dict[str, float | int] = {"time": ts}
+            for field in ("open", "high", "low", "close"):
+                value = c[field + "Price"]
+                candle[field] = float(value["bid"] if isinstance(value, dict) else value)
+            candle["volume"] = float(c.get("volume", c.get("lastTradedVolume", 0)))
+            if ts <= 0 or not all(math.isfinite(value) for value in candle.values()):
+                continue
+            if min(candle[field] for field in ("open", "high", "low", "close")) <= 0 or candle["volume"] < 0:
+                continue
+            if candle["high"] < max(candle["open"], candle["close"], candle["low"]) or candle["low"] > min(candle["open"], candle["close"]):
+                continue
+            by_time[ts] = candle
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
 
+    candles = sorted(by_time.values(), key=lambda candle: candle["time"])
     if not candles:
         raise HTTPException(status_code=404, detail="No parseable candle data")
 
-    candles.sort(key=lambda x: x["time"])
-
-    # === Определение фактического таймфрейма из свечей ===
-    def _detect_timeframe(candles_list: list[dict]) -> int:
-        """Определяет таймфрейм в минутах на основе разницы между свечами."""
-        if len(candles_list) < 2:
-            return 1  # По умолчанию 1 минута
-
-        # Вычисляем разницы между соседними свечами
-        diffs = []
-        for i in range(1, min(len(candles_list), 20)):  # Берем первые 20 для стабильности
-            diff = candles_list[i]["time"] - candles_list[i-1]["time"]
-            diffs.append(diff)
-
-        if not diffs:
-            return 1
-
-        # Медианная разница
-        diffs.sort()
-        median_diff = diffs[len(diffs) // 2]
-
-        # Конвертируем в минуты
-        minutes = median_diff // 60
-
-        # Округляем до ближайшего стандартного таймфрейма
-        standard_timeframes = [1, 5, 15, 30, 60, 120, 240, 360, 720, 1440]
-        for tf in standard_timeframes:
-            if tf * 60 >= median_diff:
-                return tf
-
-        return minutes if minutes > 0 else 1
-
-    # Определяем фактический таймфрейм из загруженных свечей
-    detected_tf_minutes = _detect_timeframe(candles)
+    # Без metadata нельзя выдавать вычисленный интервал за контракт провайдера.
+    diffs = Counter(b["time"] - a["time"] for a, b in zip(candles, candles[1:]))
+    interval_seconds = min(diffs, key=lambda value: (-diffs[value], value)) if diffs else None
+    if snapshot:
+        explicit_interval = snapshot["stream"]["interval"]
+        unit_seconds = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+        interval_seconds = (int(explicit_interval[:-1]) * unit_seconds[explicit_interval[-1]]
+                            if explicit_interval[-1] in unit_seconds else None)
+    detected_tf_minutes = (43200 if snapshot and snapshot["stream"]["interval"] == "1M"
+                           else max(1, (interval_seconds or 60) // 60))
 
     requested_range = str(time_range or "AUTO").upper()
     resolved_range = (
@@ -370,35 +392,51 @@ async def get_chart_data(
     # Позиция
     active_trades = _read_json(DATA_DIR / "active_trades.json", default={})
     position = None
-    # Handle both dict and list formats for active_trades
+    # Совместимость словаря и списка, с нормализацией обозначения символа.
     trade = None
     if isinstance(active_trades, dict):
-        trade = active_trades.get(symbol)
+        trade = next((value for key, value in active_trades.items()
+                      if re.sub(r"[-_/]", "", str(key)).upper() == normalized), None)
     elif isinstance(active_trades, list):
-        # Find trade by symbol in list format
-        trade = next((t for t in active_trades if isinstance(t, dict) and t.get("symbol") == symbol), None)
-    if trade and trade.get("status") == "OPEN":
-        position = {
-            "side": trade.get("side", "UNKNOWN"),
-            "entry_price": float(trade.get("entry_price", 0)),
-            "sl": float(trade.get("sl", 0) or 0),
-            "tp": float(trade.get("tp", 0) or 0),
-            "pnl": float(trade.get("last_pnl", 0) or 0),
-            "leverage": trade.get("leverage"),
-        }
+        trade = next((t for t in active_trades if isinstance(t, dict)
+                      and re.sub(r"[-_/]", "", str(t.get("symbol", ""))).upper() == normalized), None)
+    if isinstance(trade, dict) and str(trade.get("status", "")).upper() == "OPEN":
+        try:
+            values = {name: float(trade.get(field, 0) or 0) for name, field in
+                      (("entry_price", "entry_price"), ("sl", "sl"), ("tp", "tp"), ("pnl", "last_pnl"))}
+            if all(math.isfinite(value) for value in values.values()):
+                position = {"side": trade.get("side", "UNKNOWN"), **values, "leverage": trade.get("leverage")}
+        except (TypeError, ValueError, OverflowError):
+            pass
 
     available_ranges = _available_ranges(detected_tf_minutes)
 
     # interval показываем фактический (определённый из свечей)
     tf_minutes_to_str = {1: "1m", 5: "5m", 15: "15m", 30: "30m", 60: "1h", 120: "2h", 240: "4h", 360: "6h", 720: "12h", 1440: "1d"}
-    display_interval = tf_minutes_to_str.get(detected_tf_minutes, f"{detected_tf_minutes}m")
+    display_interval = (tf_minutes_to_str.get(detected_tf_minutes, f"{detected_tf_minutes}m")
+                        if interval_seconds and interval_seconds % 60 == 0
+                        else f"{interval_seconds}s" if interval_seconds else "unknown")
 
     return {
         "symbol": symbol,
         "range": resolved_range,
-        "interval": display_interval,
+        "interval": snapshot["stream"]["interval"] if snapshot else display_interval,
         "candles": candles,
         "indicators": indicators,
         "position": position,
         "available_ranges": available_ranges,
+        "available_sources": [value["stream"] for value in snapshots],
+        "source": {
+            "kind": "market_snapshot" if snapshot else "legacy_file",
+            "stream": snapshot["stream"] if snapshot else None,
+            "interval_inferred": snapshot is None,
+            "interval_seconds": interval_seconds,
+            "snapshot_updated_at": snapshot_updated_at,
+            "last_candle_at": latest_ts,
+            "status": snapshot.get("status") if snapshot else None,
+            "stale": snapshot.get("stale") if snapshot else None,
+            "ready": snapshot.get("ready") if snapshot else None,
+            "age_seconds": snapshot.get("age_seconds") if snapshot else None,
+            "version": snapshot.get("version") if snapshot else None,
+        },
     }

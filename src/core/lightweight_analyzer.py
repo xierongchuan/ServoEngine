@@ -32,6 +32,13 @@ class LightweightAnalyzer:
     def __init__(self, symbol: str, config: Optional[Dict] = None):
         self.symbol = symbol
         cfg = config or SCALP_SETTINGS.get("signal_rules", {})
+        if "SCALP_SETTINGS" in cfg:
+            cfg = cfg["SCALP_SETTINGS"].get("signal_rules", {})
+        self._indicator_config = dict(cfg)
+        self._market_config = None
+        self._market_context = None
+        self._market_rows = []
+        self._market_data_ready = False
 
         # Indicator periods
         self._ema_fast_period = cfg.get("ema_periods", [5, 13])[0]
@@ -113,6 +120,45 @@ class LightweightAnalyzer:
         self._current_price: float = 0.0
         self._candle_count: int = 0
         self._last_timestamp: int = 0
+
+    def sync_market_data(self, config=None):
+        """Instance-aware ingestion: только closed индикаторы, live цена отдельно; REST не вызывается."""
+        from src.core.data.reader import (
+            runtime_data_config, read_strategy_data, read_live_data, market_data_context, MarketDataUnavailable,
+        )
+        config = runtime_data_config(config if config is not None else self._market_config)
+        try:
+            closed = read_strategy_data(self.symbol, config)
+            live = read_live_data(self.symbol, config)
+        except MarketDataUnavailable:
+            self._market_config = config
+            self._market_data_ready = False
+            result = self.get_snapshot()
+            result["current_price"] = 0.0
+            result["market_data_ready"] = False
+            return result
+        rows = closed["candles"]
+        def fingerprint(row):
+            return tuple(row[name] for name in ("timestamp", "openPrice", "highPrice", "lowPrice", "closePrice", "volume"))
+        indexed = {row["timestamp"]: fingerprint(row) for row in rows}
+        changed_source = self._market_context and self._market_context["stream"] != closed["stream"]
+        corrected = any(row["timestamp"] in indexed and fingerprint(row) != indexed[row["timestamp"]] for row in self._market_rows)
+        disconnected_history = self._market_rows and self._market_rows[-1]["timestamp"] not in indexed
+        if changed_source or corrected or disconnected_history:
+            self.__init__(self.symbol, self._indicator_config)
+        if not self._bootstrapped:
+            ready = self.bootstrap(rows)
+        else:
+            for row in rows:
+                if row["timestamp"] > self._last_timestamp:
+                    self.update(row)
+            ready = True
+        self._market_rows = rows
+        self._market_config = config
+        self._market_context = market_data_context(closed)
+        self._market_data_ready = ready
+        self._current_price = live["candles"][-1]["closePrice"] if ready else 0.0
+        return self.get_snapshot()
 
     def bootstrap(self, candles: List[Dict]) -> bool:
         """
@@ -392,7 +438,7 @@ class LightweightAnalyzer:
         else:
             cvd_trend = "FLAT"
 
-        return {
+        result = {
             "ema_fast": self._ema_fast,
             "ema_med": self._ema_med,
             "ema_macro": self._ema_macro,
@@ -421,6 +467,15 @@ class LightweightAnalyzer:
             "candle_count": self._candle_count,
             "bootstrapped": self._bootstrapped,
         }
+        if self._market_config is not None:
+            from src.core.data.reader import validate_analysis_market_data
+            valid = self._market_data_ready and validate_analysis_market_data(
+                {"symbol": self.symbol, "market_data": self._market_context}, self._market_config)
+            result["market_data_ready"] = bool(valid)
+            result["market_data"] = self._market_context
+            if not valid:
+                result["current_price"] = 0.0
+        return result
 
     # --- Private incremental methods ---
 

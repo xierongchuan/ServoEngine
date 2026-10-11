@@ -53,9 +53,40 @@ class ExchangeConfig(ABC):
     Каждая биржа должна реализовать этот интерфейс.
     """
 
-    def __init__(self, is_demo: bool = False):
-        self._is_demo = is_demo
+    def __init__(self, is_demo: bool = False, settings: Optional[Dict[str, Any]] = None):
+        if not hasattr(self, "_settings"):
+            from src.trading_settings import get_trading_settings, validate_trading_settings
+            selected = dict(settings if settings is not None else get_trading_settings())
+            if settings is None:
+                if selected["exchange"] != self.name:
+                    selected["exchange"] = self.name
+                    selected["market_type"] = "perpetual"
+                    selected["execution_mode"] = "read_only"
+                if is_demo:
+                    selected["execution_mode"] = "demo"
+            self._settings = validate_trading_settings(selected)
+        self._is_demo = self._settings["execution_mode"] == "demo"
         self._load_from_env()
+
+    @property
+    def execution_mode(self) -> str:
+        return self._settings["execution_mode"]
+
+    @property
+    def live_trading_enabled(self) -> bool:
+        return self.execution_mode == "live"
+
+    @property
+    def margin_mode(self) -> str:
+        return self._settings["margin_mode"]
+
+    @property
+    def position_mode(self) -> str:
+        return self._settings["position_mode"]
+
+    @property
+    def settle_asset(self) -> str:
+        return self._settings["settle_asset"]
 
     @property
     @abstractmethod
@@ -157,6 +188,7 @@ class ExchangeConfig(ABC):
         return {
             "name": self.name,
             "is_demo": self.is_demo,
+            "execution_mode": self.execution_mode,
             "base_url": self.base_url,
             "ws_url": self.ws_url,
             "has_api_key": bool(self.api_key),
@@ -206,6 +238,7 @@ class ConfigFactory:
         exchange_name: str,
         is_demo: bool = False,
         market_type: Optional[str] = None,
+        settings: Optional[Dict[str, Any]] = None,
     ) -> ExchangeConfig:
         """
         Создать конфигурацию биржи.
@@ -221,8 +254,17 @@ class ConfigFactory:
             ValueError: Если биржа не зарегистрирована
         """
         name = exchange_name.lower()
+        if settings is not None:
+            from src.trading_settings import validate_trading_settings
+            settings = validate_trading_settings(settings)
+            if settings["exchange"] != name or (market_type and market_type != settings["market_type"]):
+                raise ValueError("Параметры фабрики не совпадают с execution")
+            market_type = settings["market_type"]
+            is_demo = settings["execution_mode"] == "demo"
         market = (market_type or ("perpetual" if name == "mexc" else "")).lower()
-        key = f"{name}:{market}" if market else name
+        if name == "bingx" and market not in {"", "perpetual"}:
+            raise ValueError("BingX поддерживает только perpetual")
+        key = f"{name}:{market}" if name != "bingx" and market else name
 
         # Инициализация стандартных бирж при первом вызове
         if not cls._initialized:
@@ -234,6 +276,8 @@ class ConfigFactory:
                 f"Available: {list(cls._configs.keys())}"
             )
 
+        if settings is not None:
+            return cls._configs[key](is_demo=is_demo, settings=settings)
         return cls._configs[key](is_demo=is_demo)
 
     @classmethod
@@ -274,6 +318,7 @@ def create_config(
     exchange_name: str,
     is_demo: bool = False,
     market_type: Optional[str] = None,
+    settings: Optional[Dict[str, Any]] = None,
 ) -> ExchangeConfig:
     """
     Удобная функция для создания конфигурации.
@@ -285,4 +330,4 @@ def create_config(
     Returns:
         Конфигурация биржи
     """
-    return ConfigFactory.create(exchange_name, is_demo, market_type)
+    return ConfigFactory.create(exchange_name, is_demo, market_type, settings=settings)

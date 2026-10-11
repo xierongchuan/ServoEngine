@@ -18,6 +18,9 @@ from copy import deepcopy
 from typing import cast, Dict, Any, Optional, List, Union
 
 from src.runtime import StrategyInstance, build_legacy_instances, normalize_symbol_key
+from src.ai_settings import migrate_ai_settings, normalize_ai_settings
+from src.ai.settings_store import read_config_document
+from src.utils.logger import warning
 
 
 # --- Paths ---
@@ -57,7 +60,7 @@ def _load_json_file(path: str) -> Dict[str, Any]:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
     except Exception as e:
-        print(f"⚠️ Error loading config {path}: {e}")
+        warning(f"⚠️ Не удалось загрузить конфигурацию: тип={type(e).__name__}", category="config")
     return {}
 
 
@@ -79,7 +82,18 @@ def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]
         if key.startswith('_'):
             # Skip meta fields like _description, _version, _inherits
             continue
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+        if key in {'ai', 'AI_SETTINGS'}:
+            # Каждый legacy-слой мигрирует до merge, иначе defaults затрут override.
+            from src.ai_settings import merge_ai_settings
+            previous = result.get(key, {})
+            inherited = migrate_ai_settings(previous)
+            if isinstance(value, dict) and 'provider' not in previous and 'provider' not in value:
+                # Частичные профили ещё не знают provider своего base/strategy.
+                migrate_ai_settings(value)
+                result[key] = merge_ai_settings(previous, value)
+            else:
+                result[key] = merge_ai_settings(inherited, migrate_ai_settings(value, inherited.get('provider', 'openrouter')))
+        elif key in result and isinstance(result[key], dict) and isinstance(value, dict):
             result[key] = deep_merge(result[key], value)
         else:
             result[key] = deepcopy(value)
@@ -94,7 +108,11 @@ def _use_new_config_system() -> bool:
 def load_base_config() -> Dict[str, Any]:
     """Load base infrastructure configuration."""
     path = _get_config_path('base')
-    return _load_json_file(path)
+    # Standalone legacy-конвертер допускает каталог только с trading.json.
+    # В активной модульной системе исчезнувший base — ошибка, а не defaults.
+    if not os.path.exists(path) and not _use_new_config_system():
+        return {}
+    return read_config_document(path)
 
 
 def load_trading_config() -> Dict[str, Any]:
@@ -240,6 +258,9 @@ def resolve_symbol_config(symbol: str, strategy: Optional[str] = None, profile: 
     config = deep_merge(base, trading)
     config = deep_merge(config, strategy_config)
     config = deep_merge(config, profile_config)
+    # Исполнение общее для runtime: стратегия/профиль и hot-reload его не меняют.
+    from src.trading_settings import get_trading_settings
+    config['execution'] = get_trading_settings()
 
     # Add resolved metadata
     config['_resolved'] = {
@@ -254,9 +275,9 @@ def resolve_symbol_config(symbol: str, strategy: Optional[str] = None, profile: 
 
 
 def _current_exchange_market(exchange: Optional[str] = None) -> tuple[str, str]:
-    if exchange is not None:
-        return exchange, os.getenv('MARKET_TYPE', 'perpetual').lower()
-    return os.getenv('EXCHANGE', 'bingx').lower(), os.getenv('MARKET_TYPE', 'perpetual').lower()
+    from src.trading_settings import get_trading_settings
+    settings = get_trading_settings()
+    return (exchange or settings['exchange']).lower(), settings['market_type']
 
 
 def _symbols_for_market(symbols_config: Dict[str, Any], exchange: str, market_type: str) -> List[str]:
@@ -361,6 +382,7 @@ def should_reload_config() -> bool:
     files_to_check = [
         _get_config_path('active'),
         _get_config_path('trading'),
+        _get_config_path('base'),
     ]
 
     for path in files_to_check:
@@ -389,7 +411,7 @@ def reload_config():
         try:
             callback()
         except Exception as e:
-            print(f"⚠️ Config reload callback error: {e}")
+            warning(f"⚠️ Ошибка обработчика конфигурации: тип={type(e).__name__}", category="config")
 
 
 def register_config_callback(callback):
@@ -464,7 +486,7 @@ def convert_to_legacy_format(config: Dict[str, Any], strategy: str) -> Dict[str,
         'NEWS_SETTINGS': base.get('news', {}),
         'DECISION_JOURNAL': base.get('decision_journal', {}),
         'VALIDATION': base.get('validation', {}),
-        'AI_SETTINGS': base.get('ai', {}),
+        'AI_SETTINGS': normalize_ai_settings(deep_merge(deep_merge(base, trading), strategy_config).get('ai', {})),
 
         # From trading
         'SMART_SAMPLING': trading.get('smart_sampling', {}),
@@ -580,7 +602,7 @@ def convert_resolved_to_legacy_format(config: Dict[str, Any], strategy: str) -> 
         'NEWS_SETTINGS': config.get('news', {}),
         'DECISION_JOURNAL': config.get('decision_journal', {}),
         'VALIDATION': config.get('validation', {}),
-        'AI_SETTINGS': config.get('ai', {}),
+        'AI_SETTINGS': normalize_ai_settings(config.get('ai', {})),
 
         'SMART_SAMPLING': config.get('smart_sampling', {}),
         'REGIME_SETTINGS': {

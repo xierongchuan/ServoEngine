@@ -203,21 +203,39 @@ def run_strategy_instance_pipeline(instance: dict, config: dict, ws_cache=None, 
     каждый worker работает со своим STRATEGY_STYLE/SYMBOLS.
     """
     import src.config as config_module
-    from src.runtime import StrategyInstance, apply_legacy_runtime_config
-    from src.exchanges.exchange_factory import reset_client
-    from src.core.pipeline import PipelineOrchestrator
+    from src.runtime import StrategyInstance, apply_legacy_runtime_config, apply_trading_settings
+    from src.exchanges.exchange_factory import reset_client, configure_client_context
+    from src.trading_settings import install_trading_settings_snapshot, execution_account_label
+    from src.core.data.reader import bind_shared_market_cache
+    from src.utils.logger import configure_logging, clear_log_context, set_log_context
 
     strategy_instance = StrategyInstance.from_dict(instance)
+    selected = install_trading_settings_snapshot(config.get("execution", config.get("TRADING_SETTINGS", {})))
+    apply_trading_settings(config_module, selected)
     apply_legacy_runtime_config(config_module, config)
+    apply_trading_settings(config_module, selected)
+    data_dir = config.get("DATA_DIR", config_module.DATA_DIR)
+    os.environ["SERVO_DATA_DIR"] = str(data_dir)
+    configure_logging(data_dir=data_dir)
+    clear_log_context()
+    set_log_context(service="bot", exchange=selected["exchange"], market_type=selected["market_type"],
+                    symbol=strategy_instance.symbol, instance_id=strategy_instance.id,
+                    strategy=strategy_instance.strategy, execution_mode=selected["execution_mode"])
     reset_client()
-
-    if strategy_instance.strategy == "GRID":
-        from src.core.strategies.grid.worker import run_grid_worker
-        run_grid_worker(strategy_instance.symbol, config.get("GRID_SETTINGS", {}), runtime_config=config)
-        return
-
-    orchestrator = PipelineOrchestrator(config=config)
-    orchestrator.run_symbol_pipeline(strategy_instance.symbol, ws_cache, ws_ready)
+    configure_client_context(owner_id=strategy_instance.id, account_id=execution_account_label(selected),
+                             data_dir=data_dir, runtime_config=config)
+    bind_shared_market_cache(ws_cache, ws_ready)
+    try:
+        if strategy_instance.strategy == "GRID":
+            from src.core.strategies.grid.worker import run_grid_worker
+            run_grid_worker(strategy_instance.symbol, config.get("GRID_SETTINGS", {}), runtime_config=config,
+                            ws_cache=ws_cache, ws_ready=ws_ready)
+            return
+        from src.core.pipeline import PipelineOrchestrator
+        orchestrator = PipelineOrchestrator(config=config, ws_cache=ws_cache, ws_ready=ws_ready)
+        orchestrator.run_symbol_pipeline(strategy_instance.symbol, ws_cache, ws_ready)
+    finally:
+        reset_client()
 
 
 def setup_worker(symbol: str, ws_cache=None, ws_ready=None):

@@ -8,8 +8,20 @@ Unit tests for SCALP Phases 2-3:
 
 import time
 import math
+import json
 import pytest
 from unittest.mock import patch
+
+@pytest.fixture(autouse=True)
+def isolate_scalp_ai(monkeypatch):
+    from src import config
+    from src.ai_settings import DEFAULT_AI_SETTINGS
+    from copy import deepcopy
+    import requests
+    monkeypatch.setenv("OPENROUTER_API_KEY", "synthetic-scalp-key")
+    monkeypatch.setattr(config, "BOT_CONFIG", {"AI_SETTINGS": deepcopy(DEFAULT_AI_SETTINGS)})
+    monkeypatch.setattr(requests, "request", lambda *args, **kwargs: pytest.fail("Реальный AI-запрос запрещён"))
+
 
 # Test config to avoid importing real SCALP_SETTINGS
 TEST_SCALP_SETTINGS = {
@@ -627,14 +639,15 @@ class TestScalpSession:
 
 class TestPredictModelOverride:
 
-    @patch("src.core.predict.requests.post")
+    @patch("src.ai.client.requests.request")
     def test_default_model_used(self, mock_post):
         """Without model override, default AI_MODEL should be used."""
         mock_post.return_value.status_code = 200
+        mock_post.return_value.iter_content.side_effect = lambda **kwargs: [json.dumps(mock_post.return_value.json.return_value).encode()]
         mock_post.return_value.json.return_value = {
             "choices": [{"message": {"content": '{"action":"hold"}'}}]
         }
-        with patch("src.core.predict.AI_MODEL", "default/model"):
+        with patch("src.config.BOT_CONFIG", {"AI_SETTINGS": {"model": "default/model"}}):
             from src.core.predict import get_prediction
             get_prediction("test prompt")
             payload = mock_post.call_args[1]["json"]
@@ -642,10 +655,11 @@ class TestPredictModelOverride:
             model_used = payload.get("model") or payload.get("models", [None])[0]
             assert model_used == "default/model"
 
-    @patch("src.core.predict.requests.post")
+    @patch("src.ai.client.requests.request")
     def test_custom_model_override(self, mock_post):
         """Model override should use specified model, not default."""
         mock_post.return_value.status_code = 200
+        mock_post.return_value.iter_content.side_effect = lambda **kwargs: [json.dumps(mock_post.return_value.json.return_value).encode()]
         mock_post.return_value.json.return_value = {
             "choices": [{"message": {"content": '{"action":"hold"}'}}]
         }
@@ -656,10 +670,11 @@ class TestPredictModelOverride:
         # Custom model should NOT have fallback models
         assert "models" not in payload
 
-    @patch("src.core.predict.requests.post")
+    @patch("src.ai.client.requests.request")
     def test_custom_max_tokens(self, mock_post):
         """max_tokens override should be applied."""
         mock_post.return_value.status_code = 200
+        mock_post.return_value.iter_content.side_effect = lambda **kwargs: [json.dumps(mock_post.return_value.json.return_value).encode()]
         mock_post.return_value.json.return_value = {
             "choices": [{"message": {"content": '{"action":"hold"}'}}]
         }
@@ -668,10 +683,11 @@ class TestPredictModelOverride:
         payload = mock_post.call_args[1]["json"]
         assert payload["max_tokens"] == 100
 
-    @patch("src.core.predict.requests.post")
+    @patch("src.ai.client.requests.request")
     def test_custom_temperature(self, mock_post):
         """temperature override should be applied."""
         mock_post.return_value.status_code = 200
+        mock_post.return_value.iter_content.side_effect = lambda **kwargs: [json.dumps(mock_post.return_value.json.return_value).encode()]
         mock_post.return_value.json.return_value = {
             "choices": [{"message": {"content": '{"action":"hold"}'}}]
         }
@@ -829,11 +845,12 @@ class TestVetoStaleness:
         engine._process_veto()
         # Should discard because signal changed from BUY to SELL
 
-    @patch("src.core.scalp_engine.AI_VETO_OVERRIDE", {"model": "google/gemini-2.0-flash-lite", "temperature": 0.1, "max_tokens": 100})
-    @patch("src.core.predict.requests.post")
+    @patch("src.config.BOT_CONFIG", {"AI_SETTINGS": {"overrides": {"veto": {"model": "google/gemini-2.0-flash-lite", "temperature": 0.1, "max_tokens": 100}}}})
+    @patch("src.ai.client.requests.request")
     def test_veto_uses_model_override(self, mock_post):
         engine = self._make_engine()
         mock_post.return_value.status_code = 200
+        mock_post.return_value.iter_content.side_effect = lambda **kwargs: [json.dumps(mock_post.return_value.json.return_value).encode()]
         mock_post.return_value.json.return_value = {
             "choices": [{"message": {"content": '{"action":"buy","confidence":0.8,"reason":"confirmed"}'}}]
         }
@@ -887,7 +904,7 @@ class TestRegimeAdvisorIntegration:
             "regime_enabled": True,
             "regime_interval_seconds": 300,
         }
-        # Note: regime_model is now read from AI_REGIME_OVERRIDE, not ai_integration
+        # Модель и sampling роли берутся из текущего resolved instance при запросе.
         settings = {
             "loops": {"fast_interval": 1.5, "slow_interval": 45},
             "time_exit": {},
@@ -913,7 +930,7 @@ class TestRegimeAdvisorIntegration:
         engine._update_regime_ai()
         assert engine._ai_regime_label == "UNKNOWN"
 
-    @patch("src.core.predict.requests.post")
+    @patch("src.ai.client.requests.request")
     def test_regime_advisor_updates_regime(self, mock_post):
         engine = self._make_engine(regime_interval_seconds=0)
         engine._last_ai_regime_time = 0
@@ -933,6 +950,7 @@ class TestRegimeAdvisorIntegration:
         engine._regime = {"regime": "RANGING"}  # Initial deterministic regime
 
         mock_post.return_value.status_code = 200
+        mock_post.return_value.iter_content.side_effect = lambda **kwargs: [json.dumps(mock_post.return_value.json.return_value).encode()]
         mock_post.return_value.json.return_value = {
             "choices": [{"message": {"content":
                 '{"regime":"TRENDING","confidence":0.85,"bias":"bullish",'
@@ -950,7 +968,7 @@ class TestRegimeAdvisorIntegration:
         assert engine._regime["recommended_min_score"] == 4
         assert engine._regime["recommended_size_factor"] == 1.2
 
-    @patch("src.core.predict.requests.post")
+    @patch("src.ai.client.requests.request")
     def test_regime_low_confidence_keeps_deterministic(self, mock_post):
         engine = self._make_engine(regime_interval_seconds=0)
         engine._last_ai_regime_time = 0
@@ -969,6 +987,7 @@ class TestRegimeAdvisorIntegration:
         engine._regime = {"regime": "RANGING"}
 
         mock_post.return_value.status_code = 200
+        mock_post.return_value.iter_content.side_effect = lambda **kwargs: [json.dumps(mock_post.return_value.json.return_value).encode()]
         mock_post.return_value.json.return_value = {
             "choices": [{"message": {"content":
                 '{"regime":"TRANSITIONAL","confidence":0.4,"bias":"neutral"}'
@@ -983,7 +1002,7 @@ class TestRegimeAdvisorIntegration:
         assert engine._regime["regime"] == "RANGING"  # Unchanged
         assert "ai_confidence" not in engine._regime
 
-    @patch("src.core.predict.requests.post")
+    @patch("src.ai.client.requests.request")
     def test_regime_duration_tracking(self, mock_post):
         engine = self._make_engine(regime_interval_seconds=0)
         engine._last_ai_regime_time = 0
@@ -1004,6 +1023,7 @@ class TestRegimeAdvisorIntegration:
         engine._regime = {"regime": "TRENDING"}
 
         mock_post.return_value.status_code = 200
+        mock_post.return_value.iter_content.side_effect = lambda **kwargs: [json.dumps(mock_post.return_value.json.return_value).encode()]
         mock_post.return_value.json.return_value = {
             "choices": [{"message": {"content":
                 '{"regime":"TRENDING","confidence":0.9}'
@@ -1015,7 +1035,7 @@ class TestRegimeAdvisorIntegration:
         # Duration should increment (same regime)
         assert engine._ai_regime_duration == 4
 
-    @patch("src.core.predict.requests.post")
+    @patch("src.ai.client.requests.request")
     def test_regime_change_resets_duration(self, mock_post):
         engine = self._make_engine(regime_interval_seconds=0)
         engine._last_ai_regime_time = 0
@@ -1036,6 +1056,7 @@ class TestRegimeAdvisorIntegration:
         engine._regime = {"regime": "TRENDING"}
 
         mock_post.return_value.status_code = 200
+        mock_post.return_value.iter_content.side_effect = lambda **kwargs: [json.dumps(mock_post.return_value.json.return_value).encode()]
         mock_post.return_value.json.return_value = {
             "choices": [{"message": {"content":
                 '{"regime":"VOLATILE","confidence":0.75}'
@@ -1047,8 +1068,8 @@ class TestRegimeAdvisorIntegration:
         assert engine._ai_regime_label == "VOLATILE"
         assert engine._ai_regime_duration == 1  # Reset
 
-    @patch("src.core.scalp_engine.AI_REGIME_OVERRIDE", {"model": "google/gemini-2.5-flash", "temperature": 0.2, "max_tokens": 150})
-    @patch("src.core.predict.requests.post")
+    @patch("src.config.BOT_CONFIG", {"AI_SETTINGS": {"overrides": {"regime": {"model": "google/gemini-2.5-flash", "temperature": 0.2, "max_tokens": 150}}}})
+    @patch("src.ai.client.requests.request")
     def test_regime_uses_model_override(self, mock_post):
         engine = self._make_engine(regime_interval_seconds=0)
         engine._last_ai_regime_time = 0
@@ -1067,6 +1088,7 @@ class TestRegimeAdvisorIntegration:
         engine._regime = {}
 
         mock_post.return_value.status_code = 200
+        mock_post.return_value.iter_content.side_effect = lambda **kwargs: [json.dumps(mock_post.return_value.json.return_value).encode()]
         mock_post.return_value.json.return_value = {
             "choices": [{"message": {"content":
                 '{"regime":"RANGING","confidence":0.7}'

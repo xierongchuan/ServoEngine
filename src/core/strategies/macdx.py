@@ -6,12 +6,12 @@ from datetime import datetime
 from src.config import POSITION_SIZE_PERCENT
 from src.core import analyzer
 from src.core.commands.models import TradeCommand
-from src.core.decision_journal import DecisionJournal
+
 from src.core.trade_tracker import TradeTracker
 from src.core.execution.risk import calculate_dynamic_sl_tp, validate_risk_parameters, calculate_position_size
 from src.core.performance import get_performance_tracker
 from src.core.regime import get_regime_detector
-from src.exchanges.exchange_factory import get_exchange_client
+
 from src.utils.logger import info, warning, error, StageTimer
 from .base import StrategyPipeline
 
@@ -23,26 +23,20 @@ class MacdxPipeline(StrategyPipeline):
 
     def __init__(self, config: Dict):
         super().__init__(config)
-        self._tracker = TradeTracker()
-        self._journal = DecisionJournal()
-        self._client = get_exchange_client()
+        self._tracker = None if self.read_only else TradeTracker()
         self._macdx_settings = config.get("MACDX_SETTINGS", {})
         from src.core.signals.macdx import MacdxSignalGenerator
         self._signal_generator = MacdxSignalGenerator(self._macdx_settings)
         self._exit_context: Dict[str, Any] = {}
         self._had_position = False
+        self.records_decisions = True
 
     def generate_command(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None,
                          exit_context: Optional[Dict] = None) -> Optional[TradeCommand]:
         """Генерирует TradeCommand нативно (без промежуточного dict)."""
         try:
-            from src.config import STRATEGY_STYLE
-
-            # Fetch positions
-            all_positions = self._client.get_positions()
-            normalized_symbol = symbol.replace("-", "")
-            symbol_positions = all_positions.get(normalized_symbol, [])
-            real_position = symbol_positions[0] if symbol_positions else None
+            strategy_style = self.config.get("STRATEGY_STYLE", "MACDX")
+            real_position = self._position_for_symbol(symbol, ws_cache, ws_ready)
 
             # Переход «была позиция -> нет позиции» запускает cooldown
             # и сбрасывает контекст trailing/peak предыдущей сделки.
@@ -54,15 +48,16 @@ class MacdxPipeline(StrategyPipeline):
             self._had_position = real_position is not None
 
             # Decision context
-            decision_context = self._journal.get_context(symbol, STRATEGY_STYLE)
+            decision_context = self._journal.get_context(symbol, strategy_style)
 
             # Analysis
             with StageTimer("Анализ индикаторов", symbol, "🔍"):
                 analysis_result = analyzer.analyze_symbol(
-                    symbol, position=real_position, decision_context=decision_context
+                    symbol, position=real_position, decision_context=decision_context, config=self.config
                 )
 
-            self._tracker.sync_position(symbol, real_position, exchange_client=self._client)
+            if self._tracker is not None:
+                self._tracker.sync_position(symbol, real_position, exchange_client=self._client)
 
             # Regime detection
             regime_data = get_regime_detector().detect(analysis_result)
@@ -114,11 +109,16 @@ class MacdxPipeline(StrategyPipeline):
                 )
 
             # Записываем решение в journal (через to_dict для совместимости)
-            prediction = command.to_dict()
+            command.metadata.update({"market_data": analysis_result.get("market_data"),
+                                     "strategy_instance_id": self.config.get("STRATEGY_INSTANCE_ID"),
+                                     "execution_mode": self.config["EXECUTION_MODE"],
+                                     "execution_allowed": not self.read_only})
+            prediction = self._annotate_prediction(command.to_dict(), analysis_result)
+            command.metadata["execution_allowed"] = prediction["execution_allowed"]
             info(f"[{symbol}] Recording to journal: action={command.action.value}, reason={command.reason}, current_price={current_price}")
             self._journal.record(symbol, prediction, current_price)
 
-            self._journal.trim_entries(symbol, STRATEGY_STYLE)
+            self._journal.trim_entries(symbol, strategy_style)
 
             return command
         except Exception as e:
@@ -222,7 +222,7 @@ class MacdxPipeline(StrategyPipeline):
         command = self.generate_command(symbol, ws_cache, ws_ready, exit_context=exit_context)
         if command is None:
             return None
-        return command.to_dict()
+        return self._annotate_prediction(command.to_dict(), {"market_data": command.metadata.get("market_data")})
 
     def _calculate_sl_tp_and_size(self, symbol, signal, current_price, analysis, support, resistance, regime, quality):
         sl, tp, size_pct = None, None, None

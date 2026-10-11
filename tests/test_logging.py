@@ -1,87 +1,75 @@
-import sys
-import os
+"""Проверка настоящих торговых логов без executor, аккаунта и биржевых запросов."""
+
+from datetime import datetime
+import json
 import logging
-from unittest.mock import MagicMock, patch
+import os
+import re
 
-# Add src to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from src.utils import logger as logs
+from src.utils.log_context import get_log_context
+from src.utils.log_store import EventReader
 
-from src.core.executor import create_order, main
 
-def test_trade_logging():
-    print("🧪 Testing Trade Logging...")
-
-    # Mock ExchangeClient
-    mock_client = MagicMock()
-    mock_client.get_balance.return_value = {'balance': 1000.0}
-    mock_client.place_order.return_value = "ORDER_123"
-    mock_client.get_positions.return_value = {}
-    mock_client.check_prerequisites.return_value = True
-    mock_client.close_position.return_value = True
-
-    # Mock log_trade AND all logger functions to prevent contaminating production logs
-    with patch('src.core.executor.log_trade') as mock_log_trade, \
-         patch('src.core.executor.info') as mock_info, \
-         patch('src.core.executor.warning') as mock_warning, \
-         patch('src.core.executor.error') as mock_error:
-        with patch('src.core.executor.get_exchange_client', return_value=mock_client):
-
-            # Test 1: Open Order Logging
-            print("\n--- Test 1: Open Order ---")
-            create_order(
-                symbol="BTC-USDT",
-                direction="BUY",
-                price=50000,
-                reason="Test Strategy",
-                confidence=0.95,
-                ai_tp=51000,
-                ai_sl=49000
+def test_trade_logging(tmp_path, monkeypatch):
+    previous_dir = logs.LOG_DIR
+    previous_context = get_log_context()
+    previous_level = logging.getLogger().level
+    try:
+        with monkeypatch.context() as environment:
+            environment.setenv("LOG_TEST_API_KEY", "synthetic-trade-key-2026")
+            logs.clear_log_context()
+            logs.configure_logging(tmp_path)
+            logs.set_log_context(exchange="bingx", symbol="BTC-USDT", instance="btc-test", request="request-test")
+            logs.log_trade(
+                "Открыта BUY: Qty=0.1; Reason: Test Strategy; Conf: 0.95; raw=synthetic-trade-key-2026",
+                order_id="open-test",
+            )
+            logs.log_trade(
+                "Позиция закрыта: Qty=0.1; Причина: Take Profit Hit; Conf: 0.9; "
+                "https://example.invalid/order?apiKey=unknown-key&token=unknown-token",
+                order_id="close-test",
             )
 
-            # Verify log_trade called
-            if mock_log_trade.called:
-                args, _ = mock_log_trade.call_args
-                log_msg = args[0]
-                print(f"Log Message: {log_msg}")
+            events = EventReader(tmp_path).events()["events"]
+            assert len(events) == 2
+            assert len({event["event_id"] for event in events}) == 2
+            assert [event["order_id"] for event in events] == ["open-test", "close-test"]
+            for event in events:
+                assert event["schema_version"] == 1
+                assert event["level"] == "INFO"
+                assert event["category"] == "trade"
+                assert event["logger"] == "trades"
+                assert event["exchange"] == "bingx"
+                assert event["symbol"] == "BTCUSDT"
+                assert event["instance_id"] == "btc-test"
+                assert event["request_id"] == "request-test"
+                assert event["pid"] == os.getpid()
+                assert event["timestamp"].endswith("Z")
+                assert datetime.fromisoformat(event["timestamp"].replace("Z", "+00:00")).utcoffset().total_seconds() == 0
+            assert "Qty=0.1" in events[0]["message"]
+            assert "Reason: Test Strategy" in events[0]["message"]
+            assert "Conf: 0.95" in events[0]["message"]
+            assert "закрыта" in events[1]["message"]
+            assert "Причина: Take Profit Hit" in events[1]["message"]
+            assert "Conf: 0.9" in events[1]["message"]
 
-                if "Qty=" in log_msg and "Reason: Test Strategy" in log_msg and "Conf: 0.95" in log_msg:
-                    print("✅ Open Order Logged correctly with details")
-                else:
-                    print("❌ Open Order Log missing details")
-            else:
-                print("❌ log_trade NOT called for Open Order")
-
-            mock_log_trade.reset_mock()
-
-            # Test 2: Close Position Logging
-            print("\n--- Test 2: Close Position ---")
-            # Setup positions for main()
-            mock_client.get_positions.return_value = {
-                "BTC-USDT": [{"dealId": "DEAL_123", "size": 0.1, "type": "BUY"}]
-            }
-
-            predictions = [{
-                "symbol": "BTC-USDT",
-                "current_price": 52000,
-                "action": "close",
-                "confidence": 0.9,
-                "reason": "Take Profit Hit"
-            }]
-
-            main(predictions)
-
-            # Verify log_trade called
-            if mock_log_trade.called:
-                args, _ = mock_log_trade.call_args
-                log_msg = args[0]
-                print(f"Log Message: {log_msg}")
-
-                if "закрыта" in log_msg and "Причина: Take Profit Hit" in log_msg:
-                    print("✅ Close Position Logged correctly")
-                else:
-                    print("❌ Close Position Log missing details")
-            else:
-                print("❌ log_trade NOT called for Close Position")
-
-if __name__ == "__main__":
-    test_trade_logging()
+            text = (tmp_path / "trades.log").read_text(encoding="utf-8")
+            lines = text.splitlines()
+            assert len(lines) == 2
+            for line, event in zip(lines, events):
+                assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \| ", line)
+                assert line == event["timestamp"][:19].replace("T", " ") + " | " + event["message"]
+            copies = [json.loads(line) for path in tmp_path.glob("logs/events/*.jsonl")
+                      for line in path.read_text(encoding="utf-8").splitlines()]
+            assert len(copies) == 2
+            assert {event["event_id"] for event in copies} == {event["event_id"] for event in events}
+            assert [event["event_id"] for event in EventReader(tmp_path).events()["events"]] == [event["event_id"] for event in events]
+            content = json.dumps(events) + json.dumps(copies) + text
+            for secret in ("synthetic-trade-key-2026", "unknown-key", "unknown-token"):
+                assert secret not in content
+            assert "[REDACTED]" in content
+    finally:
+        logs.clear_log_context()
+        logs.set_log_context(**previous_context)
+        logs.configure_logging(previous_dir, level=previous_level)

@@ -44,7 +44,7 @@ podman save --format docker-archive -o ../servo-deploy/panel.tar localhost/servo
 scp -pr ../servo-deploy user@server:~/
 ```
 
-Замените `user@server` на свой адрес. Проверьте серверную копию `.env`: ключи, режим торговли и URL панели. Для этих архивов используйте `SERVO_IMAGE_PREFIX=localhost/servo-engine`, `SERVO_IMAGE_TAG=dev` или оставьте defaults. Префикс/тег должны совпадать с экспортированными образами.
+Замените `user@server` на свой адрес. Проверьте серверную копию `.env`: ключи и URL панели. Биржа, рынок и режим торговли задаются в `config/trading.json → execution`, не в `.env`. Для этих архивов используйте `SERVO_IMAGE_PREFIX=localhost/servo-engine`, `SERVO_IMAGE_TAG=dev` или оставьте defaults. Префикс/тег должны совпадать с экспортированными образами.
 
 ### На сервере
 
@@ -105,10 +105,33 @@ podman compose --profile panel up --no-build --force-recreate -d
 |---|---|
 | Код или зависимости | Пересобрать образы и пересоздать контейнеры |
 | `.env` | Пересоздать контейнеры, без сборки |
-| `active.json`, `trading.json` | Hot-reload каждые 30 секунд; состав процессов может требовать перезапуска |
+| `active.json`, `trading.json` (кроме `execution`) | Hot-reload каждые 30 секунд; состав процессов может требовать перезапуска |
+| `trading.json → execution` | Все поля (аккаунт, режимы, Spot-бюджет, protection/market_data) — только новый запуск; PUT разрешён при свежем `stopped` без pending запуска и управляемого состояния |
 | Остальные JSON | Перезапустить runtime, без сборки |
 
+Supervisor использует общий с панелью `config/.trading.lock`, явный refresh перед стартом и multiprocessing spawn с передачей проверенного снимка. Оба контейнера должны видеть один и тот же writable mount `config/`; не переносите `.trading.lock` отдельно и не удаляйте его во время работы. При незавершившемся stop/kill статус остаётся stopping, смена настроек и новый запуск запрещены.
+
+Старый `.env` с `MODE=real` не включает live: без execution действует read_only. Режим выбирайте в панели. По умолчанию `execution_mode=read_only`; BingX VST включается явным `demo`, реальная торговля — явным `live`. У MEXC `demo` означает только чтение production API, не sandbox. Cross запрещён. При миграции удалите только устаревшие operational env (`MODE`, `EXCHANGE`, `MARKET_TYPE`, `ENABLE_NEWS`, `MEXC_ENABLE_LIVE_TRADING`, `MEXC_MARGIN_MODE`, `MEXC_POSITION_MODE`, `MEXC_SETTLE_ASSET`); новости перенесите в `features.enable_news`, исполнение — в `config/trading.json`. Не заменяйте рабочий `.env` шаблоном: секреты и инфраструктурные переменные оставьте неизменными, права `.env` — 600. После изменения env пересоздайте контейнеры. Подробный контракт и ограничения интеграции — [config/schema.md](config/schema.md).
+
+`execution.account_id` — стабильный несекретный ID (default `default`), label `default:<exchange>:<execution_mode>` не меняется при ротации ключей. Сохраняйте durable `data/execution.sqlite3`, Spot ledger и `data/grid/` вместе с рабочим конфигом; незавершённое состояние запрещает смену аккаунта/источника. Чистая инициализированная БД с терминальной историей допустима, неизвестная схема или ошибка чтения блокирует настройки.
+
+Для live MEXC Spot задайте `execution.spot.quote_budget_usdt > 0` и явно включите `allow_local_protection`. Это **общий TOTAL аккаунта** в durable quote-pool: Spot adapter выделяет владельцам только свободные средства с учётом резервов других instances, не создаёт полный бюджет каждому worker. Переход с legacy per-instance funding и изменение уже выделенного бюджета требуют явной сверки ledger. Настройки с бюджетом 0/без согласия можно сохранить, но supervisor и прямой main запретят запуск. Factory уже подключает Spot adapter/supervisor и Perpetual coordinator. SL/TP Spot только локальные: остановка контейнера/процесса или потеря сети оставляет лоты без биржевой защиты. MEXC Spot поддерживает публичный protobuf WS с REST backfill/reconciliation; неподдерживаемые WS TF работают через точный REST polling. Это описание текущей реализации, не подтверждение live-проверки на бирже.
+
+**Perpetual GRID:** новые открывающие GTC LIMIT заблокированы до доказанного lifecycle биржевого SL/TP при partial fills и resize. Для BingX реализован отдельный `native_market` (durable локальные уровни → одна MARKET-позиция с обеими биржевыми защитами в исходном POST, без local SL). Он тоже отключён release-gate: VST `/order/test` принят, но active SL/TP/full close/cleanup ещё не подтверждены. Выбор режима не обходит этот gate. Старые managed LIMIT не отменяются автоматически и могут исполниться без биржевой защиты; перед обновлением адресно сверяйте их и позиции. Выбор режима сетки не снимает запрет. Сверка, owned cancellation/reduce и локальный emergency сохраняются с safety-проверками. Фактический статус интеграции: [API_INTEGRATION_STATUS.md](API_INTEGRATION_STATUS.md).
+
 `restart` не обновляет образ. Не запускайте старый и новый бот одновременно с общей `data/` или одними API-ключами без плана миграции.
+
+### Провайдеры ИИ
+
+Ключи `.env`: `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `LM_STUDIO_API_KEY` (LM Studio — если сервер требует токен). Провайдер, независимые URL/model и VETO/REGIME задаются в **Настройки → ИИ** / `config/base.json → ai`, не через operational env. Смена AI JSON требует контролируемого перезапуска runtime; смена ключей — пересоздания контейнеров bot/panel, без замены рабочей конфигурации. Старый `.env` сохраните, добавляйте только нужные ключи.
+
+Для LM Studio на хосте default `http://host.containers.internal:1234/v1`; localhost внутри контейнера указывает на сам контейнер. Разрешите доступ из Podman к интерфейсу сервера и укажите загруженный model ID. Не открывайте AI-порт в Интернет без авторизации/firewall. Панель отправляет только GET `/models` для диагностики; prompts и платные completions автоматически не отправляются.
+
+### Миграция журналов
+
+Bot и panel должны видеть одну `data/` (`SERVO_DATA_DIR` / `PANEL_DATA_DIR` при нестандартных путях). Новые structured-события сохраняются в `data/logs/events.sqlite3`, JSONL-сегменты — в `data/logs/events/`; `steps.log`, `trades.log` и символьные text-логи продолжают дописываться. Не удаляйте старую историю: она доступна отдельно через legacy API, без дублирования в `/api/logs/events`. Автоматического импорта text/аварийных JSONL и удаления старых сегментов нет; предусмотрите мониторинг диска и отдельную политику архивации. SQLite backup должен быть согласован с WAL; обычное копирование всей `data/` выполняйте после остановки писателей.
+
+Все logs endpoints требуют авторизации. Metadata — `/api/logs/sources`, фильтрованные history/live страницы — `/api/logs/events`; контракт описан в [config/schema.md](config/schema.md#журнал-логов-api-и-контекст). WebSocket уведомляет об изменении, а не заменяет cursor API. Пересборка/recreate обновляет UI и backend одновременно; старые text endpoints сохранены.
 
 ## Управление и доступ
 

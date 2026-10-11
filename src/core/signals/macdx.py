@@ -1441,6 +1441,7 @@ def position_guard_check(
     ws_cache,
     exit_rules: Dict,
     preset: Dict,
+    *, config: Optional[Dict] = None,
 ) -> Dict:
     """
     Быстрая проверка позиции через WebSocket кэш.
@@ -1460,41 +1461,24 @@ def position_guard_check(
     Returns:
         dict: {should_close, reason, urgency}
     """
-    import time as _time
-
     try:
         if ws_cache is None:
             return {"should_close": False, "reason": "No WS cache"}
 
-        # Нормализация символа для кэша
-        if "-" in symbol:
-            cache_key = symbol
-        elif symbol.endswith("USDT"):
-            cache_key = symbol[:-4] + "-USDT"
-        else:
-            cache_key = symbol
-
-        cached = list(ws_cache.get(cache_key, []))
-        if not cached:
-            return {"should_close": False, "reason": "Empty cache"}
-
-        last_candle = cached[-1]
-
-        # Проверка свежести данных
+        from src.core.data.reader import runtime_data_config, read_live_data, MarketDataUnavailable
         pump_cfg = exit_rules.get("pump_guard", {})
         if not pump_cfg.get("enabled", True):
             return {"should_close": False, "reason": "Pump guard disabled"}
-
-        max_staleness = pump_cfg.get("max_staleness_sec", 60)
-        candle_ts = last_candle.get("timestamp", 0)
-        if candle_ts > 0:
-            candle_age = _time.time() - candle_ts / 1000
-            if candle_age > max_staleness:
-                debug(f"[GUARD] {symbol}: stale data ({candle_age:.0f}s)")
-                return {
-                    "should_close": False,
-                    "reason": f"Stale data ({candle_age:.0f}s)",
-                }
+        config = runtime_data_config(config)
+        config["MARKET_DATA"] = {**config["MARKET_DATA"], "max_age_seconds": min(
+            config["MARKET_DATA"]["max_age_seconds"], float(pump_cfg.get("max_staleness_sec", 60)))}
+        try:
+            snapshot = read_live_data(symbol, config, interval=preset.get("timeframe"), cache=ws_cache)
+        except MarketDataUnavailable as exc:
+            return {"should_close": False, "reason": f"Непригодные live данные: {exc}"}
+        # Свежесть определяется last_valid_update, а не началом часовой свечи.
+        cached = snapshot["candles"]
+        last_candle = cached[-1]
 
         # Текущая цена из кэша
         current_price = float(

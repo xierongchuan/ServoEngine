@@ -4,11 +4,11 @@ from typing import Any, Dict, Optional
 
 from src.config import POSITION_SIZE_PERCENT
 from src.core import analyzer, predict
-from src.core.decision_journal import DecisionJournal
+
 from src.core.trade_tracker import TradeTracker
 from src.core.execution.risk import calculate_dynamic_sl_tp, validate_risk_parameters, calculate_position_size
 from src.core.performance import get_performance_tracker
-from src.exchanges.exchange_factory import get_exchange_client
+
 from src.utils.logger import info, warning, StageTimer
 from .base import StrategyPipeline
 
@@ -18,30 +18,24 @@ class AiscalpPipeline(StrategyPipeline):
 
     def __init__(self, config: Dict):
         super().__init__(config)
-        self._tracker = TradeTracker()
-        self._journal = DecisionJournal()
-        self._client = get_exchange_client()
+        self._tracker = None if self.read_only else TradeTracker()
         self._aiscalp_settings = config.get("AISCALP_SETTINGS", {})
 
     def run_cycle(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None) -> Optional[Dict]:
-        from src.config import STRATEGY_STYLE
-
-        # Fetch positions
-        all_positions = self._client.get_positions()
-        normalized_symbol = symbol.replace("-", "")
-        symbol_positions = all_positions.get(normalized_symbol, [])
-        real_position = symbol_positions[0] if symbol_positions else None
+        strategy_style = self.config.get("STRATEGY_STYLE", "AISCALP")
+        real_position = self._position_for_symbol(symbol, ws_cache, ws_ready)
 
         # Decision context
-        decision_context = self._journal.get_context(symbol, STRATEGY_STYLE)
+        decision_context = self._journal.get_context(symbol, strategy_style)
 
         # Analysis
         with StageTimer("Анализ индикаторов", symbol, "🔍"):
             analysis_result = analyzer.analyze_symbol(
-                symbol, position=real_position, decision_context=decision_context
+                symbol, position=real_position, decision_context=decision_context, config=self.config
             )
 
-        self._tracker.sync_position(symbol, real_position, exchange_client=self._client)
+        if self._tracker is not None:
+            self._tracker.sync_position(symbol, real_position, exchange_client=self._client)
 
         # Extract signal data
         signal_data = analysis_result.get("signal_data", {})
@@ -118,7 +112,7 @@ class AiscalpPipeline(StrategyPipeline):
         # === ALWAYS invoke AI — it makes the final decision ===
         with StageTimer("AI Прогноз", symbol, "🧠"):
             info(f"🧠 [{symbol}] AISCALP: AI invoked (signal={signal}, regime={regime_label})")
-            prediction = predict.process_analysis(analysis_result)
+            prediction = predict.process_analysis(analysis_result, config=self.config)
 
             # Use dynamic SL/TP if AI didn't provide its own
             if sl is not None and not prediction.get("stop_loss"):
@@ -128,4 +122,4 @@ class AiscalpPipeline(StrategyPipeline):
             if size_pct is not None:
                 prediction["size_pct"] = size_pct
 
-        return prediction
+        return self._annotate_prediction(prediction, analysis_result)

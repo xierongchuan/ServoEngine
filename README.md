@@ -1,6 +1,6 @@
 # Servo Engine
 
-Торговый бот для BingX Perpetual и MEXC USDT-M Perpetual: технический анализ, AI через OpenRouter, риск-менеджмент и Telegram/Web-панель. MEXC Spot доступен через REST-клиент, но не подключён к торговому конвейеру.
+Торговый бот для BingX Perpetual, MEXC USDT-M Perpetual и MEXC Spot: технический анализ, AI через OpenRouter, официальный DeepSeek или LM Studio, риск-менеджмент и Telegram/Web-панель. Factory подключает durable ExecutionCoordinator для Perpetual и SpotTradingAdapter с локальной защитой для Spot. Наличие реализации и offline-тестов не означает проверенную live-торговлю на реальном счёте.
 
 > Торговля может привести к потере капитала. ПО предоставляется «как есть». Начинайте с BingX demo или MEXC read-only: у MEXC нет API sandbox. Не выдавайте ключам право вывода средств.
 
@@ -19,13 +19,11 @@ mkdir -p data/prices data/news data/logs charts
 
 | Переменная | Значение |
 |---|---|
-| `MODE` | `demo` или `real` |
-| `EXCHANGE` | `bingx` или `mexc` |
-| `MARKET_TYPE` | `perpetual`; `spot` — только REST-интеграция MEXC |
 | `BINGX_API_KEY`, `BINGX_SECRET_KEY` | Ключи BingX |
 | `MEXC_API_KEY`, `MEXC_SECRET_KEY` | Ключи MEXC |
-| `MEXC_ENABLE_LIVE_TRADING` | По умолчанию `false`; `true` разрешает реальные MEXC-операции |
-| `OPENROUTER_API_KEY` | Для стратегий с AI |
+| `OPENROUTER_API_KEY` | Авторизация OpenRouter |
+| `DEEPSEEK_API_KEY` | Авторизация официального DeepSeek |
+| `LM_STUDIO_API_KEY` | Необязательный токен LM Studio, если сервер требует авторизацию |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_ID` | Для Telegram-панели |
 | `TELEGRAM_PANEL_URL` | HTTPS-адрес панели |
 
@@ -38,6 +36,8 @@ podman compose --profile panel up --no-build -d      # Бот и панель
 Панель доступна на `127.0.0.1:8080`; внешний доступ — через HTTPS-прокси или туннель. Код встроен в образы, `.env`, `config/`, `data/` и `charts/` остаются на хосте.
 
 **Сборка amd64/arm64, перенос с `.env` на сервер и обновления: [CONTAINERS.md](CONTAINERS.md).**
+
+Фактический статус REST/WS, результаты проверок и нерешённые ограничения: [API_INTEGRATION_STATUS.md](API_INTEGRATION_STATUS.md).
 
 ## Управление
 
@@ -73,10 +73,34 @@ base.json → trading.json → strategies/{strategy}.json → profiles/{profile}
 - `active.json` выбирает instances, стратегии и профили.
 - `active.json` и `trading.json` проверяются каждые 30 секунд; изменение состава процессов может потребовать перезапуска.
 - Остальные JSON требуют перезапуска runtime; изменение `.env` — пересоздания контейнера.
-- Один runtime обслуживает одну пару `EXCHANGE` + `MARKET_TYPE`.
-- Реальная торговля MEXC: `MODE=real`, `MARKET_TYPE=perpetual`, `MEXC_ENABLE_LIVE_TRADING=true` — только после read-only проверки.
+- Один runtime обслуживает одну пару `execution.exchange` + `execution.market_type`.
+- Единый источник исполнения — секция `execution` в `config/trading.json`, редактор в панели: **Настройки → Исполнение и риск**. По умолчанию `read_only`; BingX `demo` нужно выбрать явно. MEXC не имеет sandbox: `demo` нормализуется в `read_only`, production API остаётся доступным для чтения.
+- `execution` фиксируется на процесс и **не меняется при hot-reload**. На stop/start supervisor явно перечитывает и проверяет settings, обновляет parent globals и передаёт снимок новому child через spawn. Все изменения требуют нового запуска runtime; сохранение не запускает торговлю и не закрывает позиции. PUT и старт сериализованы общим `config/.trading.lock`.
+- Любые изменения `execution` (включая аккаунт, Spot-бюджет, защиту и рыночные данные) блокируются API, пока runtime не имеет свежего статуса `stopped` или есть незавершённое управляемое состояние в journal, Spot ledger, GRID registry или legacy JSON. Чистая инициализированная БД с терминальной историей не блокирует настройки. Не удаляйте файлы состояния ради обхода блокировки; сначала сверяйте позиции и ордера с биржей.
+- Cross запрещён: только `isolated`, расчёт в `USDT`. Perpetual поддерживает `hedge`/`one_way`; Spot использует `one_way` и сетку `inventory`.
+- **Новые входы Perpetual GRID заблокированы**, включая demo: безопасный жизненный цикл биржевой защиты частичных GTC LIMIT-исполнений/изменения объёма не доказан. Для BingX реализована отдельная модель `native_market`: локальный durable touch → одна MARKET-позиция с attached SL/TP в исходном POST, без локального SL. Она тоже отключена release-gate до полной проверки активной пары и закрытия на VST; `order/test code=0` не снимает gate. Выбор `grid_mode` не снимает запрет. Сверка, адресная отмена собственных заявок и уменьшение собственного объёма доступны с прежними safety-проверками. Legacy LIMIT могут исполниться без биржевой защиты — проверьте их на бирже. См. [контракт GRID](src/core/strategies/grid/CONTRACTS.md).
+- Реальная торговля MEXC: `execution.exchange=mexc`, `market_type=perpetual`, `execution_mode=live` — только после read-only проверки и явного запуска.
+- `execution.account_id=default` задаёт стабильный несекретный ID; label `default:<exchange>:<execution_mode>` не зависит от API-ключа. Ротация ключей не меняет namespace и не переносит владение.
+- Spot: `spot.quote_budget_usdt=0` и `spot.allow_local_protection=false` по умолчанию. Бюджет — **TOTAL аккаунта**, общий quote-pool в `spot_ledger.sqlite3`, а не полная сумма каждому worker. Адаптер атомарно выделяет свободный bot quote владельцу перед BUY и учитывает резервы остальных instances; весь баланс кошелька не импортируется. Отключённый live Spot-конфиг можно сохранить, но запуск требует бюджета > 0 и явного принятия риска локальной SL/TP. Биржевых защитных ордеров нет; остановка процесса/сети оставляет лоты без защиты. Публичные данные MEXC Spot поддерживают protobuf WebSocket и REST backfill/reconciliation; TF без WS используют точный REST polling, в том числе в read_only.
+- Старый `.env` не выбирает биржу/рынок/исполнение: даже `MODE=real` не включает live. Без секции execution используется безопасный `read_only`; нужный режим выбирайте в панели.
+- Operational env `MODE`, `EXCHANGE`, `MARKET_TYPE`, `ENABLE_NEWS`, `MEXC_ENABLE_LIVE_TRADING`, `MEXC_MARGIN_MODE`, `MEXC_POSITION_MODE`, `MEXC_SETTLE_ASSET` больше не переопределяют конфигурацию. Уберите их из старого `.env`; новости задаются `features.enable_news`. В окружении остаются ключи и инфраструктура контейнеров/панели.
+
+При ошибке запуска владельца market-data runtime останавливается до запуска торговых workers. Уже работающий data runtime при обрыве WS использует REST-восстановление; устаревшие/неполные свечи не разрешают новые входы. Изменение своей позиции вручную не означает автоматическое принятие нового объёма ботом: неоднозначность вызывает durable-паузу, карточка панели показывает причину, но не снимает её без доказанной сверки.
+
+Контракт `src.trading_settings.get_trading_settings()` описан в [config/schema.md](config/schema.md). Main повторяет `validate_trading_start(settings)`; factory передаёт один execution snapshot, стабильный account label и owner ID в coordinator/Spot adapter. Публичный market-data runtime обслуживает WS и REST, а workers читают shared snapshots. Проверка локальных файлов не заменяет сверку реального счёта: незавершённые и UNKNOWN-ордера требуют reconciliation, не удаления состояния. До live-запуска отдельно проверьте права ключей, режим счёта, защиту и восстановление; здесь нет обещания их проверки на реальной бирже.
 
 Схема и профили: [config/schema.md](config/schema.md).
+
+## Настройки ИИ
+
+В панели: **Настройки → ИИ**. OpenRouter, официальный DeepSeek и LM Studio имеют независимые `base_url` и модели; смена провайдера не стирает остальные профили. Температура, лимит токенов, таймаут и повторы — в расширенных настройках. Для VETO и REGIME можно отдельно выбрать провайдер/модель либо наследовать основной профиль. Полная схема — [config/schema.md](config/schema.md#конфигурация-ии-basejson--ai).
+
+- Ключи задаются только в `.env`: `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `LM_STUDIO_API_KEY`. Панель показывает наличие, не значение. После изменения ключей пересоздайте контейнеры; рабочий `.env` не заменяйте шаблоном.
+- DeepSeek default: `https://api.deepseek.com`, `deepseek-flash`; thinking выключен. При включении reasoning расходует общий лимит токенов и может не оставить финального ответа для короткого VETO. Сохранённые собственные адреса/старые ID моделей автоматически не заменяются.
+- LM Studio: из Podman обычно `http://host.containers.internal:1234/v1`; сервер должен слушать доступный контейнеру интерфейс, а не только loopback хоста. Выберите ID загруженной модели. Токен необязателен только если авторизация сервера выключена; не публикуйте порт наружу без защиты.
+- «Проверить соединение» и «Обновить модели» выполняют **GET `/models` по сохранённому профилю**, без prompt и платной генерации. Изменённые URL/model нужно сначала сохранить. Доступный каталог не доказывает качество или совместимость completion.
+- OpenRouter reasoning/routing/fallbacks не отправляются другим провайдерам. Reasoning-only, обрезанные, tool/refusal и невалидные ответы не становятся торговым сигналом: безопасный результат — HOLD.
+- Сохранение не запускает торговлю; после изменения AI-секции нужен контролируемый перезапуск runtime. Настройки профиля стратегии могут переопределять базовый AI-снимок.
 
 ## Панель и данные
 
@@ -91,6 +115,14 @@ Telegram-команды: `/start`, `/status`, `/trades`, `/chart`, `/logs`, `/co
 | `data/prices/`, `data/news/` | Рыночные данные |
 | `data/logs/`, `data/steps.log`, `data/trades.log` | Логи |
 | `charts/` | PNG-графики |
+
+### Структурированные логи
+
+`GET /api/logs/events` возвращает события с постоянным `event_id`, UTC-временем, PID и контекстом биржи/символа/instance/request/order. Категории: `runtime`, `exchange`, `market_data`, `strategy`, `llm`, `risk`, `order`, `trade`, `config`, `panel`. Панель поддерживает фильтры, историю, pause live и независимый follow.
+
+Источник событий — `data/logs/events.sqlite3` (SQLite/WAL), JSONL-копии — `data/logs/events/`. Text-файлы остаются совместимыми и не подмешиваются в structured history. `GET /api/logs/sources` возвращает категории, уровни, источники, биржи, символы, instances и отдельно `legacy_sources`. Полный контракт курсоров/фильтров — [config/schema.md](config/schema.md#журнал-логов-api-и-контекст).
+
+Старая история сохраняется без автоматического импорта и удаления. JSONL ротируются по сегментам, но retention пока не удаляет их; следите за свободным местом. Новые записи очищаются от секретов, но это не переписывает ранее сохранённые text-логи. При переносе/резервном копировании SQLite остановите писателей или используйте согласованный SQLite backup, не копируйте только DB без активного WAL.
 
 ## Разработка
 

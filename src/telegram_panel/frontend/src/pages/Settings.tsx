@@ -8,7 +8,6 @@ import {
   getSymbolProfiles,
   setSymbolProfile,
   getBaseConfig,
-  updateBaseConfig,
   createStrategyInstance,
   updateStrategyInstance,
   deleteStrategyInstance,
@@ -37,6 +36,8 @@ import {
 import type { Trade } from '../api/types';
 import { ProfileCard } from '../components/ProfileCard';
 import { ProfileEditor } from '../components/ProfileEditor';
+import { ExecutionSettings } from '../components/config/ExecutionSettings';
+import { AISettings } from '../components/config/AISettings';
 import { Spinner } from '../components/Spinner';
 import { Button } from '../components/ui/Button';
 import { Card as Section } from '../components/ui/Card';
@@ -44,7 +45,7 @@ import { ListInputRow as SettingRow, ListToggleRow as ToggleRow } from '../compo
 import { StatusDot } from '../components/ui/StatusDot';
 import { Tabs } from '../components/ui/Tabs';
 
-type Tab = 'runtime' | 'trading' | 'profiles' | 'infrastructure';
+type Tab = 'runtime' | 'trading' | 'profiles' | 'infrastructure' | 'ai';
 
 type Message = { type: 'success' | 'error' | 'warning'; text: string } | null;
 
@@ -185,14 +186,17 @@ export function Settings() {
         onChange={(v) => setTab(v as Tab)}
         options={[
           { value: 'runtime', label: 'Runtime' },
-          { value: 'trading', label: 'Position & Risk' },
+          { value: 'trading', label: 'Исполнение и риск' },
           { value: 'profiles', label: 'Profiles' },
-          { value: 'infrastructure', label: 'AI Settings' },
+          { value: 'ai', label: 'ИИ' },
+          { value: 'infrastructure', label: 'Инфраструктура' },
         ]}
       />
 
       {/* Content */}
       {tab === 'trading' && tradingConfig && (
+        <>
+        <ExecutionSettings />
         <TradingTab
           config={tradingConfig}
           onUpdate={async (data) => {
@@ -222,24 +226,12 @@ export function Settings() {
             }
           }}
         />
+        </>
       )}
 
-      {tab === 'infrastructure' && baseConfig && strategies && (
-        <InfrastructureTab
-          config={baseConfig}
-          onUpdate={async (data) => {
-            try {
-              const result = await updateBaseConfig(data);
-              setBaseConfig(result.config);
-              showMessage({ type: 'success', text: 'Infrastructure settings saved' });
-              hapticFeedback('success');
-            } catch (err) {
-              showMessage({ type: 'error', text: 'Failed to save infrastructure' });
-              hapticFeedback('error');
-            }
-          }}
-        />
-      )}
+      {tab === 'ai' && <AISettings />}
+
+      {tab === 'infrastructure' && baseConfig && strategies && <InfrastructureTab />}
 
       {tab === 'profiles' && profiles && (
         <ProfilesTab
@@ -289,7 +281,8 @@ function TradingTab({
   const handleSave = async () => {
     setSaving(true);
     try {
-      await onUpdate(localConfig);
+      // execution сохраняется отдельно, без автоматического перезапуска.
+      await onUpdate({ position: localConfig.position, risk: localConfig.risk, features: localConfig.features });
       setEditing(false);
     } finally {
       setSaving(false);
@@ -388,7 +381,7 @@ function TradingTab({
       {/* Features */}
       <Section title="Features" badge="hot-reload">
         <ToggleRow
-          label="News Enabled"
+          label="Новости (из конфигурации)"
           value={localConfig.features?.enable_news ?? false}
           editing={editing}
           onChange={(v) => updateFeature('enable_news', v)}
@@ -432,148 +425,14 @@ function TradingTab({
 // Infrastructure Tab
 // ============================================================================
 
-function InfrastructureTab({
-  config,
-  onUpdate,
-}: {
-  config: BaseConfig;
-  onUpdate: (data: Partial<BaseConfig>) => Promise<void>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [localConfig, setLocalConfig] = useState(config);
-  const [saving, setSaving] = useState(false);
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await onUpdate(localConfig);
-      setEditing(false);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const updateAI = (key: string, value: any) => {
-    setLocalConfig({
-      ...localConfig,
-      ai: { ...localConfig.ai, [key]: value },
-    });
-  };
-
+function InfrastructureTab() {
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex justify-end">
-        <Button
-          onClick={() => {
-            if (editing) setLocalConfig(config);
-            setEditing(!editing);
-          }}
-          variant={editing ? 'secondary' : 'ghost'}
-          size="sm"
-        >
-          {editing ? 'Cancel' : 'Edit'}
-        </Button>
-      </div>
-
-      <Section title="AI Infrastructure" badge="restart">
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-tg-text">Provider</span>
-            {editing ? (
-              <select
-                value={localConfig.ai?.provider || 'openai'}
-                onChange={(e) => updateAI('provider', e.target.value)}
-                className="tg-control max-w-40 text-sm rounded-lg px-2 py-1.5"
-              >
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="google">Google</option>
-                <option value="deepseek">DeepSeek</option>
-                <option value="openrouter">OpenRouter</option>
-              </select>
-            ) : (
-              <span className="text-sm text-tg-hint capitalize">{localConfig.ai?.provider || 'openai'}</span>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <span className="text-sm text-tg-text">Model</span>
-            {editing ? (
-              <input
-                type="text"
-                value={localConfig.ai?.model || ''}
-                onChange={(e) => updateAI('model', e.target.value)}
-                className="tg-control text-sm rounded-lg px-3 py-1.5"
-                placeholder="e.g. gpt-4o"
-              />
-            ) : (
-              <span className="text-xs text-tg-hint font-mono bg-tg-bg p-1.5 rounded">{localConfig.ai?.model || 'N/A'}</span>
-            )}
-          </div>
-
-          <SettingRow
-            label="Temperature"
-            value={localConfig.ai?.temperature}
-            editing={editing}
-            step={0.1}
-            onChange={(v) => updateAI('temperature', v)}
-          />
-
-          <SettingRow
-            label="Max Tokens"
-            value={localConfig.ai?.max_tokens}
-            editing={editing}
-            step={100}
-            onChange={(v) => updateAI('max_tokens', v)}
-          />
-        </div>
-      </Section>
-
-      <Section title="AI Reasoning" badge="restart">
-        <ToggleRow
-          label="Enable Reasoning"
-          value={localConfig.ai?.reasoning?.enabled ?? false}
-          editing={editing}
-          onChange={(v) => {
-            const reasoning = { ...(localConfig.ai?.reasoning || { effort: 'medium', exclude: false }), enabled: v };
-            updateAI('reasoning', reasoning);
-          }}
-        />
-        {localConfig.ai?.reasoning?.enabled && (
-          <div className="flex items-center justify-between mt-1">
-            <span className="text-sm text-tg-text pl-4">Effort level</span>
-            {editing ? (
-              <select
-                value={localConfig.ai?.reasoning?.effort || 'medium'}
-                onChange={(e) => {
-                  const reasoning = { ...(localConfig.ai?.reasoning || { enabled: true, exclude: false }), effort: e.target.value };
-                  updateAI('reasoning', reasoning);
-                }}
-                className="tg-control max-w-36 text-sm rounded-lg px-2 py-1.5"
-              >
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-            ) : (
-              <span className="text-sm text-tg-hint uppercase">{localConfig.ai?.reasoning?.effort || 'medium'}</span>
-            )}
-          </div>
-        )}
-      </Section>
-
-      {editing && (
-        <Button
-          fullWidth
-          onClick={handleSave}
-          disabled={saving}
-          isLoading={saving}
-        >
-          Save Infrastructure Settings
-        </Button>
-      )}
-
-    </div>
+    <Section title="Инфраструктура">
+      <p className="text-sm leading-relaxed text-tg-hint">
+        Провайдеры и модели перенесены в отдельную вкладку «ИИ».
+        Ключи API задаются только в окружении контейнера, не в панели.
+      </p>
+    </Section>
   );
 }
 

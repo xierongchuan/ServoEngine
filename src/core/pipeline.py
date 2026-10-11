@@ -1,10 +1,8 @@
-"""PipelineOrchestrator — главный оркестратор торгового цикла.
+"""Оркестратор: изолированный анализ и journal; исполнение только вне read_only."""
 
-Заменяет process_worker.py (749 строк if/elif/elif).
-"""
-
-import time
 import os
+import random
+import time
 import traceback
 from typing import Any, Dict, Optional
 
@@ -12,7 +10,10 @@ from src.config import STRATEGY_STYLE, BOT_CONFIG, ERROR_HANDLING, STYLE_PRESETS
 from src.config import should_reload_config, reload_bot_config
 from src.core.strategies.factory import create_pipeline
 from src.core.data.collector import process_symbol
-from src.core.tracking.journal import DecisionJournal
+from src.core.data.reader import (
+    bind_shared_market_cache, runtime_data_config, is_read_only, validate_analysis_market_data,
+        trading_settings_for_config,
+)
 from src.core.tracking.trade import TradeTracker
 from src.core.position_ownership import get_position_ownership_store
 from src.core.performance import get_performance_tracker
@@ -23,282 +24,207 @@ from src.utils.logger import info, error, warning, StageTimer
 
 
 class PipelineOrchestrator:
-    """Главный оркестратор торгового цикла."""
-
-    def __init__(self, config: Optional[Dict] = None):
-        self.config = config or BOT_CONFIG
+    def __init__(self, config: Optional[Dict] = None, *, ws_cache=None, ws_ready=None):
+        # Shared cache привязывается до создания стратегии и любого execution client.
+        bind_shared_market_cache(ws_cache, ws_ready)
+        self.config = runtime_data_config(BOT_CONFIG if config is None else config)
+        self.read_only = is_read_only(self.config)
         self.strategy = self.config.get("STRATEGY_STYLE", STRATEGY_STYLE)
         self.instance = self.config.get("STRATEGY_INSTANCE", {})
         self.instance_id = self.config.get("STRATEGY_INSTANCE_ID", self.instance.get("id", f"legacy_{self.strategy}".lower()))
         self.pipeline = create_pipeline(self.strategy, self.config)
-        self._tracker = TradeTracker()
-        self._journal = DecisionJournal()
-        self._client = get_exchange_client()
-        self._ownership = get_position_ownership_store()
+        self._tracker = None if self.read_only else TradeTracker()
+        self._journal = self.pipeline._journal
+        self._client = None
+        self._ownership = None if self.read_only else get_position_ownership_store()
         self._cycle_count = 0
+        self._last_real_position = None
+
+    def _execution_client(self):
+        if self.read_only:
+            raise RuntimeError("Торговый клиент запрещён в read_only")
+        if self._client is None:
+            self._client = get_exchange_client(settings=trading_settings_for_config(self.config))
+        return self._client
 
     def run_cycle(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None) -> Optional[Dict]:
-        """Один полный цикл для символа."""
+        """Анализ без исполнения; shared cache всегда привязывается первым."""
+        bind_shared_market_cache(ws_cache, ws_ready)
+        if self.read_only and self.strategy == "SCALP":
+            # Dedicated ScalpEngine находится вне этого оркестратора; readonly даёт технический контекст.
+            from src.core.analyzer import analyze_symbol
+            analysis = analyze_symbol(symbol, config=self.config)
+            return {**analysis, "action": "hold", "confidence": 0.0, "execution_allowed": False,
+                    "reason": "SCALP read_only: технический анализ без запуска торгового движка"}
         return self.pipeline.run_cycle(symbol, ws_cache, ws_ready)
 
     def reload(self):
-        """Перезагрузка конфигурации и пересоздание пайплайна."""
-        if should_reload_config():
-            info("🔄 Config file changed, reloading...")
-            if self.instance:
-                from src.config_loader import resolve_strategy_instance_config
-                import src.config as config_module
-                from src.runtime import apply_legacy_runtime_config
+        if not should_reload_config():
+            return
+        info("🔄 Перезагрузка конфигурации стратегии")
+        old = self.config
+        if self.instance:
+            from src.config_loader import resolve_strategy_instance_config
+            config = resolve_strategy_instance_config(self.instance)
+        else:
+            reload_bot_config()
+            from src.config import BOT_CONFIG as new_config
+            config = dict(new_config)
+        # Runtime injections и выбор аккаунта не теряются при hot-reload стратегии.
+        for key in ("PUBLIC_RATE_LIMITERS", "DATA_DIR", "EXCHANGE", "MARKET_TYPE", "EXECUTION_MODE"):
+            if key in old:
+                config[key] = old[key]
+        self.config = runtime_data_config(config)
+        self.read_only = is_read_only(self.config)
+        self.strategy = self.config.get("STRATEGY_STYLE", self.strategy)
+        self.instance = self.config.get("STRATEGY_INSTANCE", self.instance)
+        self.instance_id = self.config.get("STRATEGY_INSTANCE_ID", self.instance_id)
+        if not self.read_only:
+            import src.config as config_module
+            from src.runtime import apply_legacy_runtime_config
+            apply_legacy_runtime_config(config_module, self.config)
+        self.pipeline = create_pipeline(self.strategy, self.config)
+        self._journal = self.pipeline._journal
+        info(f"✅ Конфигурация {self.instance_id} обновлена ({self.strategy})")
 
-                self.config = resolve_strategy_instance_config(self.instance)
-                apply_legacy_runtime_config(config_module, self.config)
-            else:
-                reload_bot_config()
-                from src.config import BOT_CONFIG as _new_config
-                self.config = _new_config
-
-            from src.config import STRATEGY_STYLE as _new_style
-            self.strategy = self.config.get("STRATEGY_STYLE", _new_style)
-            self.instance = self.config.get("STRATEGY_INSTANCE", self.instance)
-            self.instance_id = self.config.get("STRATEGY_INSTANCE_ID", self.instance_id)
-            self.pipeline = create_pipeline(self.strategy, self.config)
-            info(f"✅ Config reloaded (strategy={self.strategy})")
-
-    def run_symbol_pipeline(self, symbol: str, ws_cache: Any = None, ws_ready: Any = None):
-        """
-        Запускает бесконечный торговый цикл для ОДНОГО символа.
-        Заменяет process_worker.py (749 строк if/elif/elif).
-        """
-        try:
-            # Setup shared WebSocket cache
-            if ws_cache is not None and ws_ready is not None:
-                try:
-                    from src.exchanges.ws_provider_factory import set_shared_cache
-                    set_shared_cache(ws_cache, ws_ready)
-                except Exception as e:
-                    warning(f"⚠️ Failed to set shared cache: {e}")
-
-            # Setup logger
-            from src.utils.logger import setup_symbol_logger
-            setup_symbol_logger(symbol)
-
-            info(f"🚀 [PROCESS START] Запущен процесс {self.instance_id} для {symbol} ({self.strategy}) (PID: {os.getpid()})")
-
-            # SCALP mode — use dedicated engine
-            if self.strategy == "SCALP":
-                info(f"⚡ [{symbol}] SCALP mode — launching ScalpEngine")
-                from src.core.scalp_engine import ScalpEngine
-                engine = ScalpEngine(symbol, ws_cache=ws_cache, ws_ready=ws_ready)
-                engine.run()
-                return
-
-            # === STARTUP SYNC ===
+    def run_iteration(self, symbol: str, ws_cache=None, ws_ready=None):
+        """Один полный ограниченный цикл; доступен для main и offline-регрессий."""
+        bind_shared_market_cache(ws_cache, ws_ready)
+        real_position, all_positions = None, {}
+        normalized = normalize_symbol_key(symbol)
+        if not self.read_only:
+            client = self._execution_client()
+            if hasattr(client, "reconcile_if_due"):
+                client.reconcile_if_due(symbol)
+            all_positions = client.get_positions()
+            self._ownership.sync_with_positions(all_positions)
+            positions = all_positions.get(normalized, [])
+            real_position = positions[0] if positions else None
+            self._last_real_position = real_position
+            owner = self._ownership.get_owner(symbol)
+            if owner and owner.owner_id != self.instance_id:
+                info(f"⏸️ [{symbol}] Стратегия {owner.owner_id} владеет позицией; {self.instance_id} ожидает")
+                return None
+        with StageTimer("Сбор данных", symbol, "📊"):
+            if not process_symbol(symbol, self.config):
+                warning(f"⚠️ [{symbol}] Цикл пропущен: нет пригодных рыночных данных")
+                return None
+        prediction = self.run_cycle(symbol, ws_cache, ws_ready)
+        if prediction is None:
+            return None
+        prediction["strategy_instance_id"] = self.instance_id
+        prediction.setdefault("strategy", self.strategy)
+        prediction["execution_mode"] = self.config["EXECUTION_MODE"]
+        valid = validate_analysis_market_data(prediction, self.config)
+        prediction["execution_allowed"] = not self.read_only and valid and prediction.get("execution_allowed", True)
+        current_price = prediction.get("current_price", 0)
+        if not getattr(self.pipeline, "records_decisions", False):
+            self._journal.record(symbol, prediction, current_price)
+        self._journal.trim_entries(symbol, self.strategy)
+        if self.read_only:
+            info(f"🔎 [{symbol}] {self.instance_id}: анализ={prediction.get('action', 'hold')}, исполнение запрещено (read_only)")
+            return prediction
+        if not prediction["execution_allowed"]:
+            warning(f"⚠️ [{symbol}] Исполнение пропущено: snapshot устарел или сигнал запрещён")
+            return prediction
+        all_positions = self._execution_client().get_positions()
+        self._ownership.sync_with_positions(all_positions)
+        positions = all_positions.get(normalized, [])
+        real_position = positions[0] if positions else None
+        self._last_real_position = real_position
+        if not real_position and self._journal.data.get(symbol, {}).get("trade_plan"):
+            self._journal.record_close(symbol)
+            self._journal.clear_trade_plan(symbol)
+        # Private синхронизация и journal могли занять время: проверяем данные у границы исполнения.
+        if not validate_analysis_market_data(prediction, self.config):
+            prediction["execution_allowed"] = False
+            warning(f"⚠️ [{symbol}] Исполнение отменено: данные устарели во время синхронизации")
+            return prediction
+        with StageTimer("Исполнение сигналов", symbol, "💰"):
+            executed = executor.execute_prediction(prediction, all_positions=all_positions,
+                                                   owner_id=self.instance_id, strategy_id=self.strategy)
+        action = prediction.get("action", "hold")
+        if executed:
+            if action in ("buy", "sell") and not real_position:
+                self._journal.set_trade_plan(symbol, prediction, current_price)
+            elif action == "close":
+                self._journal.record_close(symbol)
+                self._journal.clear_trade_plan(symbol)
+        if executed and action in ("buy", "sell") and not real_position and self.strategy in ("HYBRID", "AISCALP", "MACDX"):
+            details = prediction.get("details", {})
             try:
-                real_positions_dict = self._client.get_positions()
-                stale_count = self._tracker.force_sync_all(real_positions_dict)
-                if stale_count > 0:
-                    info(f"🧹 [{symbol}] Startup sync: cleaned {stale_count} stale trades")
-            except Exception as e:
-                warning(f"⚠️ [{symbol}] Startup sync failed: {e}")
+                self._tracker.set_entry_context(symbol, {
+                    "entry_regime": prediction.get("regime", "UNKNOWN"), "entry_score": details.get("score", 0),
+                    "entry_quality": details.get("quality", 0.0), "entry_rsi": prediction.get("rsi", 0),
+                    "entry_atr": prediction.get("atr", 0), "entry_volume_ratio": prediction.get("volume_ratio", 0),
+                })
+            except Exception as exc:
+                warning(f"⚠️ [{symbol}] Контекст входа не сохранён: {exc}")
+        with StageTimer("Мониторинг позиции", symbol, "👀"):
+            monitor.monitor_symbol(symbol, all_positions=all_positions)
+        return prediction
 
-            # === STARTUP: Clean old price data ===
+    def run_symbol_pipeline(self, symbol: str, ws_cache=None, ws_ready=None, *, stop_event=None):
+        bind_shared_market_cache(ws_cache, ws_ready)
+        from src.utils.logger import setup_symbol_logger
+        setup_symbol_logger(symbol)
+        info(f"🚀 Запущен {self.instance_id}/{symbol} ({self.strategy}), PID={os.getpid()}, режим={self.config['EXECUTION_MODE']}")
+        if self.strategy == "SCALP" and not self.read_only:
+            from src.core.scalp_engine import ScalpEngine
+            ScalpEngine(symbol, ws_cache=ws_cache, ws_ready=ws_ready).run()
+            return
+        if not self.read_only:
             try:
-                from src.utils.helpers import get_filename
-                from src.config import DATA_DIR
-                symbol_file = get_filename(symbol)
-                for suffix in ["", "_htf"]:
-                    old_file = f"{DATA_DIR}/prices/{symbol_file}{suffix}.json"
-                    if os.path.exists(old_file):
-                        os.remove(old_file)
-                        info(f"🧹 [{symbol}] Removed old price file: {symbol_file}{suffix}.json")
-            except Exception as e:
-                warning(f"⚠️ [{symbol}] Price cleanup failed: {e}")
-
-            # === STARTUP: Fetch commission rates ===
-            try:
-                commission = self._client.get_commission_rate(symbol)
+                client = self._execution_client()
+                self._tracker.force_sync_all(client.get_positions())
+                commission = client.get_commission_rate(symbol)
                 if commission:
                     from src.config import update_fee_rates
                     update_fee_rates(commission.maker, commission.taker)
-                    info(f"💰 [{symbol}] Commission rates: maker={commission.maker}%, taker={commission.taker}%")
-            except Exception as e:
-                warning(f"⚠️ [{symbol}] Commission rate fetch failed: {e}")
-
-            cycle_count = 0
-            config_check_interval = 30
-            last_config_check = time.time()
-            preset = STYLE_PRESETS.get(self.strategy, {})
-
-            while True:
-                try:
-                    start_time = time.time()
-
-                    # 0. Periodic config hot-reload check
-                    current_time = time.time()
-                    if current_time - last_config_check >= config_check_interval:
-                        self.reload()
-                        preset = self.config.get("STYLE_PRESETS", {}).get(self.strategy, preset)
-                        last_config_check = current_time
-
-                    all_positions = self._client.get_positions()
-                    self._ownership.sync_with_positions(all_positions)
-                    normalized_symbol = normalize_symbol_key(symbol)
-                    symbol_positions = all_positions.get(normalized_symbol, [])
-                    real_position = symbol_positions[0] if symbol_positions else None
-                    owner = self._ownership.get_owner(symbol)
-
-                    if owner and owner.owner_id != self.instance_id:
-                        info(
-                            f"⏸️ [{symbol}] Символ занят стратегией {owner.owner_id} "
-                            f"({owner.strategy}); {self.instance_id} ждёт освобождения"
-                        )
-                        self._sleep_cycle(symbol, preset, real_position, cycle_count)
-                        cycle_count += 1
-                        self._cycle_count += 1
-                        continue
-
-                    info(f"▶️ [{symbol}] Начало торгового цикла ({self.instance_id})")
-
-                    # 1. Collect data
-                    with StageTimer("Сбор данных", symbol, "📊"):
-                        data_ready = process_symbol(symbol, self.config)
-
-                    if not data_ready:
-                        elapsed = time.time() - start_time
-                        warning(f"⚠️ [{symbol}] Цикл пропущен: рыночные данные недоступны ({elapsed:.2f}s)")
-                        self._sleep_cycle(symbol, preset, None, cycle_count)
-                        cycle_count += 1
-                        self._cycle_count += 1
-                        continue
-
-                    # 2. Run pipeline
-                    prediction = self.run_cycle(symbol, ws_cache, ws_ready)
-
-                    if prediction is None:
-                        elapsed = time.time() - start_time
-                        info(f"✅ [{symbol}] Цикл завершён ({elapsed:.2f}s). 💤 Нет prediction")
-                        self._sleep_cycle(symbol, preset, None, cycle_count)
-                        cycle_count += 1
-                        self._cycle_count += 1
-                        continue
-
-                    # 3. Journal
-                    prediction["strategy_instance_id"] = self.instance_id
-                    prediction.setdefault("strategy", self.strategy)
-                    action = prediction.get("action", "hold")
-                    current_price = prediction.get("current_price", 0)
-                    self._journal.record(symbol, prediction, current_price)
-
-                    # Trade plan
-                    all_positions = self._client.get_positions()
-                    self._ownership.sync_with_positions(all_positions)
-                    symbol_positions = all_positions.get(normalized_symbol, [])
-                    real_position = symbol_positions[0] if symbol_positions else None
-
-                    if not real_position and self._journal.data.get(symbol, {}).get("trade_plan"):
-                        self._journal.record_close(symbol)
-                        self._journal.clear_trade_plan(symbol)
-
-                    self._journal.trim_entries(symbol, self.strategy)
-
-                    # 4. Execute
-                    with StageTimer("Исполнение сигналов", symbol, "💰"):
-                        execution_success = executor.execute_prediction(
-                            prediction,
-                            all_positions=all_positions,
-                            owner_id=self.instance_id,
-                            strategy_id=self.strategy,
-                        )
-
-                    if execution_success:
-                        if action in ("buy", "sell") and not real_position:
-                            self._journal.set_trade_plan(symbol, prediction, current_price)
-                        elif action == "close":
-                            self._journal.record_close(symbol)
-                            self._journal.clear_trade_plan(symbol)
-
-                    # 5. Save entry context
-                    if execution_success and action in ("buy", "sell") and not real_position and self.strategy in ("HYBRID", "AISCALP", "MACDX"):
-                        try:
-                            signal_data = prediction.get("details", {})
-                            entry_ctx = {
-                                "entry_regime": prediction.get("regime", "UNKNOWN"),
-                                "entry_score": signal_data.get("score", 0),
-                                "entry_quality": signal_data.get("quality", 0.0),
-                                "entry_rsi": prediction.get("rsi", 0),
-                                "entry_atr": prediction.get("atr", 0),
-                                "entry_volume_ratio": prediction.get("volume_ratio", 0),
-                            }
-                            self._tracker.set_entry_context(symbol, entry_ctx)
-                        except Exception as e:
-                            warning(f"⚠️ [{symbol}] Failed to save entry context: {e}")
-
-                    # 6. Monitor
-                    with StageTimer("Мониторинг позиции", symbol, "👀"):
-                        monitor.monitor_symbol(symbol, all_positions=all_positions)
-
-                    # Sleep
-                    elapsed = time.time() - start_time
-                    self._sleep_cycle(symbol, preset, real_position, cycle_count)
-
-                    cycle_count += 1
-                    self._cycle_count += 1
-
-                except KeyboardInterrupt:
-                    info(f"🛑 [{symbol}] Остановка по запросу (KeyboardInterrupt)")
-                    return
-                except Exception as e:
-                    error(f"❌ [{symbol}] Ошибка внутри торгового цикла: {str(e)}")
-                    error(traceback.format_exc())
-                    sleep_time = ERROR_HANDLING.get("cycle_error_fallback_sleep", 5)
-                    time.sleep(sleep_time)
-
-                # Flush PnL updates
-                self._tracker.flush()
-
-        except KeyboardInterrupt:
-            print(f"🛑 [{symbol}] Process terminated.")
-        except Exception as e:
-            print(f"CRITICAL WORKER INIT ERROR {symbol}: {e}")
-            traceback.print_exc()
-
-    def _sleep_cycle(self, symbol: str, preset: Dict, real_position: Any, cycle_count: int):
-        """Dynamic sleep with jitter, calibration, and funding rate checks."""
-        import random
-
-        if real_position:
-            pos_interval = preset.get("position_check_interval", 5)
-            sleep_time = pos_interval
-            info(f"✅ [{symbol}] Цикл завершён. 👀 Позиция активна -> Sleep {sleep_time}s")
-        else:
-            sleep_time = preset.get("loop_interval", 60)
-            info(f"✅ [{symbol}] Цикл завершён. 💤 Поиск ({self.strategy}) -> Sleep {sleep_time}s")
-
-        # Jitter ±20%
-        jitter = random.uniform(-0.2, 0.2) * sleep_time
-        sleep_time = max(5, sleep_time + jitter)
-
-        # Periodic calibration check
-        if cycle_count % 50 == 0:
+            except Exception as exc:
+                warning(f"⚠️ [{symbol}] Начальная синхронизация аккаунта не выполнена: {exc}")
+        # Общие и чужие price files не удаляем: пригодность определяет atomic reader.
+        last_check = time.monotonic()
+        while stop_event is None or not stop_event.is_set():
             try:
-                perf_tracker = get_performance_tracker()
-                suggestions = perf_tracker.should_adjust_thresholds()
+                if time.monotonic() - last_check >= 30:
+                    self.reload()
+                    last_check = time.monotonic()
+                self.run_iteration(symbol, ws_cache, ws_ready)
+                preset = self.config.get("STYLE_PRESETS", STYLE_PRESETS).get(self.strategy, {})
+                self._sleep_cycle(symbol, preset, self._last_real_position, self._cycle_count, stop_event=stop_event)
+                self._cycle_count += 1
+                if self._tracker is not None:
+                    self._tracker.flush()
+            except KeyboardInterrupt:
+                info(f"🛑 [{symbol}] Цикл остановлен")
+                return
+            except Exception as exc:
+                error(f"❌ [{symbol}] Ошибка цикла: {exc}")
+                error(traceback.format_exc())
+                delay = ERROR_HANDLING.get("cycle_error_fallback_sleep", 5)
+                if stop_event is not None:
+                    stop_event.wait(delay)
+                else:
+                    time.sleep(delay)
+
+    def _sleep_cycle(self, symbol, preset, real_position, cycle_count, *, stop_event=None):
+        interval = preset.get("position_check_interval", 5) if real_position else preset.get("loop_interval", 60)
+        delay = max(5, interval * random.uniform(0.8, 1.2))
+        if not self.read_only and cycle_count % 50 == 0:
+            try:
+                tracker = get_performance_tracker()
+                suggestions = tracker.should_adjust_thresholds()
                 if suggestions:
-                    perf_tracker.save_calibration_suggestions(suggestions)
-                    info(f"📊 [{symbol}] Calibration check: {len(suggestions)} suggestions (cycle {cycle_count})")
-            except Exception as e:
-                warning(f"⚠️ [{symbol}] Calibration check failed: {e}")
-
-        # Periodic funding rate check
-        if cycle_count % 10 == 0:
+                    tracker.save_calibration_suggestions(suggestions)
+            except Exception as exc:
+                warning(f"⚠️ [{symbol}] Калибровка не выполнена: {exc}")
+        if not self.read_only and cycle_count % 10 == 0:
             try:
-                funding = self._client.get_funding_rate(symbol)
-                if funding:
-                    if hasattr(funding, 'funding_rate_pct'):
-                        info(f"💸 [{symbol}] Funding rate: {funding.funding_rate_pct:+.4f}% | Next: {funding.next_funding_time}")
-                    else:
-                        info(f"💸 [{symbol}] Funding rate: {funding['funding_rate_pct']:+.4f}% | Next: {funding['next_funding_time']}")
-            except Exception:
-                pass
-
-        time.sleep(sleep_time)
+                self._execution_client().get_funding_rate(symbol)
+            except Exception as exc:
+                warning(f"⚠️ [{symbol}] Funding rate недоступен: {exc}")
+        if stop_event is not None:
+            stop_event.wait(delay)
+        else:
+            time.sleep(delay)

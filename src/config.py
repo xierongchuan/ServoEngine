@@ -32,8 +32,18 @@ try:
 except Exception:
     pass
 
-# System settings
-MODE = os.getenv("MODE", "demo")
+from src.utils.logger import info, warning, error
+from src.ai_settings import normalize_ai_settings, resolve_ai_role, api_key, PROVIDERS, AISettingsError
+
+# Снимок исполнения фиксируется на процесс и не участвует в hot-reload.
+from src.trading_settings import get_trading_settings
+
+TRADING_SETTINGS = get_trading_settings()
+EXCHANGE = TRADING_SETTINGS["exchange"]
+MARKET_TYPE = TRADING_SETTINGS["market_type"]
+EXECUTION_MODE = TRADING_SETTINGS["execution_mode"]
+# Старые вызовы сравнивают MODE с demo/real; read_only остаётся отдельным режимом.
+MODE = "real" if EXECUTION_MODE == "live" else EXECUTION_MODE
 
 # --- Hot-Reload State ---
 _CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bot_config.json')
@@ -58,10 +68,13 @@ def load_bot_config():
         try:
             from src.config_loader import get_legacy_compatible_config
             config = get_legacy_compatible_config()
-            print("✅ Loaded configuration from config/ directory (new system)")
+            info("✅ Конфигурация загружена из каталога config/ (модульная система)", category="config")
             return config
+        except AISettingsError:
+            error("❌ Неверная модульная конфигурация AI; переход к defaults запрещён", category="config")
+            raise
         except Exception as e:
-            print(f"⚠️ New config system failed: {e}, falling back to legacy")
+            warning(f"⚠️ Ошибка модульной конфигурации: {e}; переход к bot_config.json", category="config")
 
     # Legacy loading
     config_path = _CONFIG_PATH
@@ -105,9 +118,9 @@ def load_bot_config():
             with open(config_path, 'r') as f:
                 user_config = json.load(f)
                 default_config.update(user_config)
-                print(f"✅ Загружена конфигурация из {config_path}")
+                info(f"✅ Загружена конфигурация из {config_path}", category="config")
         except Exception as e:
-            print(f"⚠️ Ошибка загрузки {config_path}: {e}. Используются настройки по умолчанию.")
+            warning(f"⚠️ Ошибка загрузки {config_path}: {e}. Используются настройки по умолчанию.", category="config")
 
     return default_config
 
@@ -167,6 +180,7 @@ def reload_bot_config() -> dict:
     global TECHNICAL_ANALYSIS, CHART_SETTINGS, ERROR_HANDLING, MOMENTUM_STRATEGY
     global STRATEGY_STYLE, STYLE_PRESETS, SCALP_SETTINGS, MACDX_SETTINGS
     global AI_SETTINGS, AI_MODEL, AI_TEMPERATURE, AI_MAX_TOKENS
+    global AI_PROVIDER, AI_API_KEY, AI_VETO_OVERRIDE, AI_REGIME_OVERRIDE
     global AI_REASONING, AI_RETRY_COUNT, AI_PROVIDER_ROUTING
     global AI_FALLBACK_MODELS, AI_REQUEST_TIMEOUT, AI_RETRY_BACKOFF_BASE, AI_BASE_URL
     global TRADING_FEE, TRADING_FEE_MAKER, TRADING_FEE_TAKER
@@ -178,13 +192,16 @@ def reload_bot_config() -> dict:
         if current_instance and _use_new_config_system():
             from src.config_loader import clear_config_cache, resolve_strategy_instance_config
             clear_config_cache()
-            BOT_CONFIG = resolve_strategy_instance_config(current_instance)
+            new_config = resolve_strategy_instance_config(current_instance)
         else:
-            BOT_CONFIG = load_bot_config()
+            new_config = load_bot_config()
+        # Полный AI snapshot проверяется до изменения BOT_CONFIG и любых globals.
+        ai_snapshot = _ai_settings_snapshot(new_config)
     except Exception as e:
-        print(f"⚠️ Config reload failed: {e}. Keeping previous config.")
+        error(f"❌ Ошибка перезагрузки конфигурации: {e}. Сохранена предыдущая конфигурация.", category="config")
         return BOT_CONFIG
 
+    BOT_CONFIG = new_config
     _config_mtime = get_config_mtime()
 
     # Update all derived variables
@@ -238,25 +255,15 @@ def reload_bot_config() -> dict:
     current_preset = STYLE_PRESETS.get(STRATEGY_STYLE, STYLE_PRESETS.get("AISCALP", {}))
     LEVERAGE = current_preset.get("leverage", 10)
 
-    # AI Settings
-    AI_SETTINGS = BOT_CONFIG.get("AI_SETTINGS", {})
-    AI_MODEL = AI_SETTINGS.get("model", "x-ai/grok-4.1-fast")
-    AI_TEMPERATURE = AI_SETTINGS.get("temperature", 0.3)
-    AI_MAX_TOKENS = AI_SETTINGS.get("max_tokens", 512)
-    AI_REASONING = AI_SETTINGS.get("reasoning", {})
-    AI_RETRY_COUNT = AI_SETTINGS.get("retry_count", 3)
-    AI_PROVIDER_ROUTING = AI_SETTINGS.get("provider_routing", {})
-    AI_FALLBACK_MODELS = AI_SETTINGS.get("fallback_models", [])
-    AI_REQUEST_TIMEOUT = AI_SETTINGS.get("request_timeout", 60)
-    AI_RETRY_BACKOFF_BASE = AI_SETTINGS.get("retry_backoff_base", 2)
-    AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://openrouter.ai/api/v1/chat/completions"
+    # Совместимые globals обновляются вместе с выбранным провайдером и ролями.
+    globals().update(ai_snapshot)
 
     # Notify callbacks
     for callback in _config_callbacks:
         try:
             callback(old_config, BOT_CONFIG)
         except Exception as e:
-            print(f"⚠️ Config callback error: {e}")
+            error(f"❌ Ошибка обработчика обновления конфигурации: {e}", category="config")
 
     return BOT_CONFIG
 
@@ -265,11 +272,7 @@ def reload_bot_config() -> dict:
 BOT_CONFIG = load_bot_config()
 _config_mtime = get_config_mtime()
 
-# Exchange selection
-EXCHANGE = os.getenv("EXCHANGE", "bingx")
-MARKET_TYPE = os.getenv("MARKET_TYPE", "perpetual").lower()
-if EXCHANGE.lower() == "bingx":
-    MARKET_TYPE = "perpetual"
+
 
 # Trading settings from config
 EXCHANGE_SYMBOLS = BOT_CONFIG.get("EXCHANGE_SYMBOLS", {})
@@ -316,8 +319,8 @@ MIN_PARTIAL_CLOSE_PNL = BOT_CONFIG.get("MIN_PARTIAL_CLOSE_PNL", 0.5)
 AI_THRESHOLDS = BOT_CONFIG.get("AI_THRESHOLDS", {})
 
 # Data paths
-DATA_DIR = "data"
-CHARTS_DIR = "charts"
+DATA_DIR = os.getenv("SERVO_DATA_DIR", "data")
+CHARTS_DIR = os.getenv("SERVO_CHARTS_DIR", "charts")
 
 # Chart settings
 CHART_RANGES = BOT_CONFIG.get("CHART_RANGES", {})
@@ -432,10 +435,10 @@ _strategy_config = BOT_CONFIG.get(f"{STRATEGY_STYLE}_SETTINGS", {})
 _strategy_leverage = _strategy_config.get("preset", {}).get("leverage")
 if _strategy_leverage is not None:
     LEVERAGE = _strategy_leverage
-    print(f"🔧 Strategy: {STRATEGY_STYLE}, Leverage: {LEVERAGE}x (from strategy config)")
+    info(f"🔧 Стратегия: {STRATEGY_STYLE}, плечо: {LEVERAGE}x (из конфигурации стратегии)", category="config")
 else:
     LEVERAGE = current_preset.get("leverage", 10)
-    print(f"🔧 Strategy: {STRATEGY_STYLE}, Leverage: {LEVERAGE}x (from STYLE_PRESETS)")
+    info(f"🔧 Стратегия: {STRATEGY_STYLE}, плечо: {LEVERAGE}x (из STYLE_PRESETS)", category="config")
 
 
 def parse_interval_minutes(interval_str):
@@ -457,14 +460,14 @@ def parse_interval_minutes(interval_str):
 target_chart_period = current_preset.get("chart_period")
 if target_chart_period and target_chart_period in CHART_RANGES:
     if DEFAULT_CHART_RANGE != target_chart_period:
-        print(f"🔄 Auto-adjusted CHART_RANGE to {target_chart_period} for {STRATEGY_STYLE} style")
+        info(f"🔄 Диапазон CHART_RANGE автоматически изменён на {target_chart_period} для стратегии {STRATEGY_STYLE}", category="config")
         DEFAULT_CHART_RANGE = target_chart_period
         BOT_CONFIG["DEFAULT_CHART_RANGE"] = target_chart_period
 
 target_plotter_period = current_preset.get("plotter_period")
 if target_plotter_period and target_plotter_period in PLOTTER_RANGES:
     if DEFAULT_PLOTTER_RANGE != target_plotter_period:
-        print(f"🔄 Auto-adjusted PLOTTER_RANGE to {target_plotter_period} for {STRATEGY_STYLE} style")
+        info(f"🔄 Диапазон PLOTTER_RANGE автоматически изменён на {target_plotter_period} для стратегии {STRATEGY_STYLE}", category="config")
         DEFAULT_PLOTTER_RANGE = target_plotter_period
         BOT_CONFIG["DEFAULT_PLOTTER_RANGE"] = target_plotter_period
 
@@ -492,37 +495,55 @@ if SMART_SAMPLING.get("enabled", True) and history_candles > ai_history_budget:
     import math
     optimal_step = max(1, math.ceil(history_candles / ai_history_budget))
     expected_total = (history_candles // optimal_step) + recent_candles
-    print(f"🔄 Smart Sampling: step={optimal_step} | {fetched_candles} candles → ~{expected_total} for AI")
+    info(f"🔄 Умная выборка: шаг={optimal_step} | {fetched_candles} свечей → ~{expected_total} для ИИ", category="config")
     SMART_SAMPLING["history_step"] = optimal_step
 else:
     SMART_SAMPLING["history_step"] = 1
 
-# AI API Settings
-AI_SETTINGS = BOT_CONFIG.get("AI_SETTINGS", {})
-AI_PROVIDER = "openrouter"
-AI_MODEL = AI_SETTINGS.get("model", "x-ai/grok-4.1-fast")
-AI_TEMPERATURE = AI_SETTINGS.get("temperature", 0.3)
-AI_MAX_TOKENS = AI_SETTINGS.get("max_tokens", 512)
-AI_REASONING = AI_SETTINGS.get("reasoning", {})
-AI_RETRY_COUNT = AI_SETTINGS.get("retry_count", 3)
-AI_PROVIDER_ROUTING = AI_SETTINGS.get("provider_routing", {})
-AI_FALLBACK_MODELS = AI_SETTINGS.get("fallback_models", [])
-AI_REQUEST_TIMEOUT = AI_SETTINGS.get("request_timeout", 60)
-AI_RETRY_BACKOFF_BASE = AI_SETTINGS.get("retry_backoff_base", 2)
+def get_current_ai_settings(config=None):
+    """Снимок актуального конфига процесса/instance; ключ читается только при запросе."""
+    source = BOT_CONFIG if config is None else config
+    return normalize_ai_settings(source.get("AI_SETTINGS", source.get("ai", {})))
 
-# AI Overrides
-_ai_overrides = AI_SETTINGS.get("overrides", {})
-AI_VETO_OVERRIDE = _ai_overrides.get("veto", {})
-AI_REGIME_OVERRIDE = _ai_overrides.get("regime", {})
 
-# API Keys
+def _ai_settings_snapshot(source):
+    """Подготавливает все AI globals без изменения опубликованного состояния."""
+    settings = get_current_ai_settings(source)
+    selected = resolve_ai_role(settings)
+    return {
+        "AI_SETTINGS": settings,
+        "AI_PROVIDER": selected["provider"],
+        "AI_MODEL": selected["model"],
+        "AI_API_KEY": api_key(selected["provider"]),
+        "AI_BASE_URL": selected["base_url"] + "/chat/completions",
+        "AI_TEMPERATURE": settings["temperature"],
+        "AI_MAX_TOKENS": settings["max_tokens"],
+        "AI_REASONING": settings["reasoning"],
+        "AI_RETRY_COUNT": settings["retry_count"],
+        "AI_PROVIDER_ROUTING": settings["provider_routing"],
+        "AI_FALLBACK_MODELS": settings["fallback_models"],
+        "AI_REQUEST_TIMEOUT": settings["request_timeout"],
+        "AI_RETRY_BACKOFF_BASE": settings["retry_backoff_base"],
+        "AI_VETO_OVERRIDE": settings["overrides"]["veto"],
+        "AI_REGIME_OVERRIDE": settings["overrides"]["regime"],
+    }
+
+
+def _sync_ai_settings():
+    try:
+        snapshot = _ai_settings_snapshot(BOT_CONFIG)
+    except AISettingsError as exc:
+        warning(f"⚠️ Неверная конфигурация ИИ: {exc}; запросы будут отклонены", category="config")
+        snapshot = _ai_settings_snapshot({})
+    globals().update(snapshot)
+
+
+_sync_ai_settings()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-AI_API_KEY = OPENROUTER_API_KEY
-AI_BASE_URL = AI_SETTINGS.get("base_url") or "https://openrouter.ai/api/v1/chat/completions"
-print(f"🤖 AI Provider: OpenRouter ({AI_MODEL})")
+info(f"🤖 Провайдер ИИ: {PROVIDERS[AI_PROVIDER]['label']} ({AI_MODEL})", category="config")
 
-if not AI_API_KEY:
-    print(f"⚠️ WARNING: API Key for provider '{AI_PROVIDER}' is missing!")
+if PROVIDERS[AI_PROVIDER]["requires_api_key"] and not AI_API_KEY:
+    warning(f"⚠️ Отсутствует ключ API провайдера '{AI_PROVIDER}'!", category="config")
 
 # Exchange API
 BINGX_API_KEY = os.getenv("BINGX_API_KEY", "")
@@ -531,10 +552,10 @@ BINGX_API_URL = "https://open-api-vst.bingx.com" if MODE == "demo" else "https:/
 MEXC_API_KEY = os.getenv("MEXC_API_KEY", "")
 MEXC_SECRET_KEY = os.getenv("MEXC_SECRET_KEY", "")
 if EXCHANGE.lower() == "mexc":
-    print(f"🌐 MEXC API endpoint: https://api.mexc.com ({MARKET_TYPE}, live API; MODE={MODE})")
+    info(f"🌐 MEXC: рабочий API, рынок={MARKET_TYPE}, исполнение={EXECUTION_MODE}; тестовая среда отсутствует", category="config")
 else:
-    print(f"🌐 BingX API endpoint: {BINGX_API_URL} ({'Demo (VST)' if MODE == 'demo' else 'Real'})")
-print(f"📰 Новости: {'ВКЛЮЧЕНЫ' if ENABLE_NEWS else 'ОТКЛЮЧЕНЫ'}")
+    info(f"🌐 BingX API: {BINGX_API_URL}, исполнение={EXECUTION_MODE}", category="config")
+info(f"📰 Новости: {'ВКЛЮЧЕНЫ' if ENABLE_NEWS else 'ОТКЛЮЧЕНЫ'}", category="config")
 
 
 # --- Per-Symbol Config Access (New System) ---
@@ -551,7 +572,7 @@ def get_symbol_config(symbol: str) -> dict:
             from src.config_loader import resolve_symbol_config
             return resolve_symbol_config(symbol)
         except Exception as e:
-            print(f"⚠️ Symbol config resolution failed for {symbol}: {e}")
+            warning(f"⚠️ Ошибка разрешения конфигурации символа {symbol}: {e}", category="config")
     return BOT_CONFIG
 
 

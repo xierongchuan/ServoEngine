@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from ..config import DATA_DIR, CHARTS_DIR, CONFIG_PATH
+from src.utils.log_context import SecretRedactor
+from src.utils.log_store import EventReader
 
 logger = logging.getLogger("panel.data_reader")
 
@@ -82,32 +84,37 @@ class DataReader:
         return self._read_json(self.data_dir / "decision_journal.json", default={})
 
     def read_log_tail(self, path: Path, lines: int = 100) -> list[str]:
+        """Ограниченный хвост: не выдаёт частичные строки и очищает старую историю."""
+        if not 1 <= lines <= 1000:
+            raise ValueError("Недопустимое количество строк")
+        resolved = path.resolve()
+        if not resolved.is_relative_to(self.data_dir.resolve()) or path.is_symlink():
+            raise ValueError("Недопустимый источник журнала")
         try:
-            with open(path, "rb") as f:
-                # Seek from end to efficiently read last N lines
-                f.seek(0, 2)
-                size = f.tell()
-                if size == 0:
-                    return []
-
-                block_size = 8192
-                data = b""
-                pos = size
-
-                while pos > 0 and data.count(b"\n") <= lines:
-                    read_size = min(block_size, pos)
-                    pos -= read_size
-                    f.seek(pos)
-                    data = f.read(read_size) + data
-
-                result = data.decode("utf-8", errors="replace").splitlines()
-                return result[-lines:]
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            with os.fdopen(os.open(path, flags), "rb") as f:
+                size = f.seek(0, 2)
+                start = max(0, size - 1024 * 1024)
+                f.seek(start)
+                data = f.read(size - start)
+            if start:
+                boundary = data.find(b"\n")
+                data = data[boundary + 1:] if boundary >= 0 else b""
+            end = data.rfind(b"\n")
+            if end < 0:
+                return []
+            redactor = SecretRedactor()
+            return [redactor.text(line) for line in data[:end].decode("utf-8", errors="replace").splitlines()[-lines:]]
         except FileNotFoundError:
-            logger.debug("Log file not found: %s", path)
             return []
-        except Exception as e:
-            logger.warning("Error reading log %s: %s", path, e)
-            return []
+
+    def read_log_events(self, filters=None, cursor=None, limit=100) -> dict:
+        result = EventReader(self.data_dir).events(filters, cursor, limit)
+        # Новые значения секретов также скрываем в ранее записанных событиях.
+        return SecretRedactor().clean(result)
+
+    def read_log_sources(self) -> dict:
+        return SecretRedactor().clean(EventReader(self.data_dir).sources())
 
     def list_charts(self) -> list[dict]:
         try:

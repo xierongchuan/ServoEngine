@@ -1,17 +1,10 @@
-"""
-WebSocket providers for different exchanges.
+"""Общий контракт WS и публичного REST fallback рыночных данных."""
 
-Этот модуль экспортирует базовые классы и фабрику для создания провайдеров.
-"""
-
-from .base import (
-    WebSocketProvider,
-    WebSocketConfig,
-    WebSocketState,
-)
+from .base import WebSocketConfig, WebSocketProvider, WebSocketState
+from .runtime import ManagedMarketDataProvider, RESTPollingProvider
+from ..market_data import StreamKey, StreamStore
 
 __all__ = [
-    "WebSocketProvider",
-    "WebSocketConfig",
-    "WebSocketState",
+    "WebSocketConfig", "WebSocketProvider", "WebSocketState", "ManagedMarketDataProvider",
+    "RESTPollingProvider", "StreamKey", "StreamStore",
 ]

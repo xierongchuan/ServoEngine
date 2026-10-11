@@ -609,14 +609,28 @@ class TestRegimeAdaptation:
 # ============================================================================
 
 class TestPositionGuardCheck:
-    """Tests for position_guard_check function."""
+    """Guard читает точный live envelope; начало часовой свечи не определяет свежесть."""
+
+    @pytest.fixture(autouse=True)
+    def fixed_market_context(self, monkeypatch):
+        from functools import partial
+        from market_data_fixtures import FixedClock, runtime_config
+        self.clock = FixedClock()
+        self.config = runtime_config("/tmp/guard-fixture", style="MACDX", interval="1h", history=1,
+                                     instance="guard")
+        monkeypatch.setattr("src.exchanges.market_data.time.time", self.clock)
+        # Реальная функция без подмены reader; каждый вызов получает явный runtime config.
+        monkeypatch.setitem(globals(), "position_guard_check", partial(position_guard_check, config=self.config))
 
     def _make_ws_cache(self, symbol="BTC-USDT", close_price=50000, timestamp=None):
-        """Create mock WebSocket cache."""
-        import time
-        if timestamp is None:
-            timestamp = int(time.time() * 1000)
-        return {symbol: [{"closePrice": close_price, "close": close_price, "timestamp": timestamp}]}
+        from src.exchanges.market_data import StreamKey
+        from market_data_fixtures import make_snapshot
+        key = StreamKey(self.config["EXCHANGE"], self.config["MARKET_TYPE"], symbol, "1h")
+        snapshot = make_snapshot(key, self.clock, 2, close=close_price, source="ws")
+        if timestamp is not None:
+            snapshot["last_valid_update"] = timestamp / 1000
+        assert self.clock() * 1000 - snapshot["candles"][-1]["timestamp"] > 30 * 60_000
+        return {key.id: snapshot}
 
     def _make_preset(self, **overrides):
         d = {"leverage": 6, "timeframe": "1h"}
@@ -652,7 +666,8 @@ class TestPositionGuardCheck:
         result = position_guard_check("BTC-USDT", {"type": "BUY", "entry": 50000}, {},
                                       ws, self._make_exit_rules(), self._make_preset())
         assert result["should_close"] is False
-        assert "Stale" in result.get("reason", "")
+        assert "Непригодные live данные" in result.get("reason", "")
+        assert "Нет свежего ready snapshot" in result["reason"]
 
     def test_reversal_triggers_close(self):
         """Large drawdown from peak should trigger pump reversal close."""
@@ -730,7 +745,7 @@ class TestPositionGuardCheck:
         """Guard should normalize symbol for cache lookup."""
         import time
         ts = int(time.time() * 1000)
-        ws = {"BTC-USDT": [{"closePrice": 48000, "close": 48000, "timestamp": ts}]}
+        ws = self._make_ws_cache(symbol="BTC-USDT", close_price=48000, timestamp=ts)
         exit_context = {"peak_price": 50000, "peak_pnl": 0}
         # Pass BTCUSDT (without hyphen) -> should normalize to BTC-USDT
         result = position_guard_check("BTCUSDT",
@@ -753,6 +768,25 @@ class TestPositionGuardCheck:
                                       exit_context,
                                       ws, self._make_exit_rules(), self._make_preset())
         assert result["should_close"] is True
+
+    def test_wrong_source_and_timeframe_skip(self):
+        from src.exchanges.market_data import StreamKey
+        from market_data_fixtures import make_snapshot
+        for key in (StreamKey("mexc", "perpetual", "BTCUSDT", "1h"),
+                    StreamKey("bingx", "spot", "BTCUSDT", "1h"),
+                    StreamKey("bingx", "perpetual", "BTCUSDT", "5m")):
+            snapshot = make_snapshot(key, self.clock, 2, close=48000, source="ws")
+            result = position_guard_check("BTCUSDT", {"type": "BUY", "entry": 50000}, {},
+                                          {key.id: snapshot}, self._make_exit_rules(), self._make_preset())
+            assert result["should_close"] is False
+            assert "Нет свежего ready snapshot" in result["reason"]
+
+    def test_legacy_cache_without_source_is_not_trusted(self):
+        result = position_guard_check("BTCUSDT", {"type": "BUY", "entry": 50000}, {},
+                                      {"BTCUSDT": [{"closePrice": 48000, "timestamp": int(self.clock() * 1000)}]},
+                                      self._make_exit_rules(), self._make_preset())
+        assert result["should_close"] is False
+        assert "Непригодные live данные" in result["reason"]
 
     def test_error_handling(self):
         """Guard should gracefully handle errors."""

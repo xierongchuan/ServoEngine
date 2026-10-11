@@ -1,234 +1,107 @@
+"""Единая закрытая по умолчанию авторизация HTTP и WebSocket."""
+
 import hashlib
 import hmac
 import json
-import logging
-from urllib.parse import parse_qs, unquote
+import os
+import time
+from urllib.parse import parse_qs
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from ..config import BOT_TOKEN, ALLOWED_IDS
-from .token_store import get_token_store
-
-logger = logging.getLogger("panel.auth")
+from .token_store import get_token_store, get_rate_limiter
 
 
 def validate_init_data(init_data: str, bot_token: str) -> dict | None:
-    """Validate Telegram Mini App initData HMAC-SHA256 signature.
-
-    Returns parsed user data dict if valid, None if invalid.
-    See: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
-    """
-    if not init_data or not bot_token:
+    if not init_data or not bot_token or len(init_data) > 16384:
         return None
-
     try:
-        parsed = parse_qs(init_data, keep_blank_values=True)
-        # Each value in parse_qs is a list; take the first element
-        flat: dict[str, str] = {k: v[0] for k, v in parsed.items()}
-
-        received_hash = flat.pop("hash", None)
-        if not received_hash:
+        parsed = parse_qs(init_data, keep_blank_values=True, max_num_fields=32)
+        if any(len(values) != 1 for values in parsed.values()):
             return None
-
-        # Build data_check_string: sorted key=value pairs joined by \n
-        data_check_string = "\n".join(
-            f"{k}={v}" for k, v in sorted(flat.items())
-        )
-
-        # secret_key = HMAC_SHA256("WebAppData", bot_token)
-        secret_key = hmac.new(
-            b"WebAppData", bot_token.encode("utf-8"), hashlib.sha256
-        ).digest()
-
-        # computed_hash = HMAC_SHA256(secret_key, data_check_string)
-        computed_hash = hmac.new(
-            secret_key, data_check_string.encode("utf-8"), hashlib.sha256
-        ).hexdigest()
-
-        if not hmac.compare_digest(computed_hash, received_hash):
+        flat = {key: values[0] for key, values in parsed.items()}
+        received_hash = flat.pop("hash", "")
+        check = "\n".join(f"{key}={value}" for key, value in sorted(flat.items()))
+        secret = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
+        expected = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, received_hash):
             return None
-
-        # Parse user JSON if present
-        user_str = flat.get("user")
-        if user_str:
-            flat["user"] = json.loads(unquote(user_str))
-
-        return flat
-
-    except Exception as e:
-        logger.warning("initData validation error: %s", e)
+        auth_date = int(flat["auth_date"])
+        ttl = int(os.getenv("PANEL_INIT_DATA_TTL_SECONDS", "86400"))
+        now = time.time()
+        if ttl <= 0 or auth_date <= 0 or auth_date > now + 30 or now - auth_date >= ttl:
+            return None
+        # parse_qs уже декодировал значение: повторный unquote искажает JSON пользователя.
+        user = json.loads(flat["user"])
+        if not isinstance(user, dict) or type(user.get("id")) is not int or user["id"] <= 0:
+            return None
+        return {**flat, "user": user, "auth_method": "telegram", "expires_at": auth_date + ttl}
+    except (ValueError, TypeError, KeyError):
         return None
 
 
 def _extract_user_id(data: dict) -> int:
-    """Extract Telegram user ID from validated initData."""
-    user = data.get("user")
-    if isinstance(user, dict):
-        return user.get("id", 0)
-    return 0
-
-
-def validate_init_data_string(init_data: str) -> None:
-    """Validate Telegram initData passed as a query parameter (for <img src> etc.).
-
-    Raises HTTPException on failure.  When BOT_TOKEN is empty (dev mode),
-    any value is accepted.
-    """
-    if not init_data:
-        raise HTTPException(status_code=401, detail="Missing auth parameter")
-
-    if not BOT_TOKEN:
-        # Dev mode: no token configured, skip validation
-        return
-
-    result = validate_init_data(init_data, BOT_TOKEN)
-    if result is None:
-        raise HTTPException(status_code=401, detail="Invalid auth parameter")
-
-    user_id = _extract_user_id(result)
-    if ALLOWED_IDS and user_id not in ALLOWED_IDS:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-
-async def get_current_user(
-    # X-Telegram-Init-Data: авторизация через Telegram Mini App (web_app)
-    x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data"),
-    # X-Web-Token: авторизация через ссылку /weblink (браузер)
-    x_web_token: str = Header(default="", alias="X-Web-Token"),
-) -> dict:
-    """FastAPI dependency: validates Telegram initData or web token and checks user against allowed list.
-
-    Supports both X-Telegram-Init-Data (Telegram Mini App) and X-Web-Token (weblink).
-    """
-    # Delegate to the combined function
-    return await get_current_user_with_token(
-        x_telegram_init_data=x_telegram_init_data,
-        x_web_token=x_web_token,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Web Token Authentication (для /weblink)
-# ----------------------------------------------------------------------------
+    return data.get("user", {}).get("id", 0)
 
 
 def validate_web_token(token: str) -> dict | None:
-    """Validate a web access token from /weblink command.
-
-    Returns user data dict if valid, None if invalid/expired.
-    """
-    if not token:
+    if not token or len(token) > 256:
         return None
-
-    try:
-        token_store = get_token_store()
-        result = token_store.validate_token(token)
-
-        if result is None:
-            return None
-
-        user_id = result.get("user_id")
-        if user_id is None:
-            return None
-
-        # Check user is in allowed list
-        if ALLOWED_IDS and user_id not in ALLOWED_IDS:
-            logger.warning("Web token access denied for user_id=%d", user_id)
-            return None
-
-        return {
-            "user": {
-                "id": user_id,
-                "is_web_token": True,
-            },
-            "auth_method": "web_token",
-            "token_created_at": result.get("created_at"),
-            "token_expires_at": result.get("expires_at"),
-        }
-
-    except Exception as e:
-        logger.error("Web token validation error: %s", e)
+    result = get_token_store().validate_token(token)
+    if not result or result.get("user_id") not in ALLOWED_IDS:
         return None
+    return {"user": {"id": result["user_id"], "is_web_token": True},
+            "auth_method": "web_token", "token_created_at": result["created_at"],
+            "token_expires_at": result["expires_at"]}
 
 
-async def get_current_user_with_token(
-    # X-Telegram-Init-Data: авторизация через Telegram Mini App (web_app)
-    x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data"),
-    # X-Web-Token: авторизация через ссылку /weblink (браузер)
-    x_web_token: str = Header(default="", alias="X-Web-Token"),
-) -> dict:
-    """FastAPI dependency: supports both Telegram initData and web token auth.
-
-    Auth flow:
-    1. If X-Web-Token provided → validate web token
-    2. Else if X-Telegram-Init-Data → validate Telegram auth
-    3. Neither → 401
-    4. Invalid credentials → 401
-    5. User not in ALLOWED_IDS → 403
-    6. All checks pass → return user data
-    """
-    logger.info("Auth request: x_web_token='%s' (len=%d), x_telegram_init_data present=%s",
-                x_web_token[:8]+'...' if x_web_token else "(empty)",
-                len(x_web_token) if x_web_token else 0,
-                bool(x_telegram_init_data))
-
-    # Try web token first
-    if x_web_token:
-        logger.info("Trying web token validation for token=%s...", x_web_token[:8])
-        result = validate_web_token(x_web_token)
-        if result is not None:
-            logger.info("Web token validation SUCCESS for user_id=%s", result.get("user", {}).get("id"))
+def authenticate(init_data: str = "", web_token: str = "") -> dict:
+    if web_token:
+        result = validate_web_token(web_token)
+        if result:
             return result
-        logger.warning("Web token validation FAILED")
-        # Invalid web token - try Telegram auth as fallback
-        if not x_telegram_init_data:
-            raise HTTPException(
-                status_code=401,
-                detail="Невалидная ссылка. Используйте /weblink для новой ссылки."
-            )
-
-    # Fall back to Telegram initData
-    if x_telegram_init_data:
-        if not x_telegram_init_data:
-            raise HTTPException(status_code=401, detail="Откройте панель через Telegram Mini App")
-
-        if not BOT_TOKEN:
-            return {"user": {"id": 0, "first_name": "dev"}}
-
-        result = validate_init_data(x_telegram_init_data, BOT_TOKEN)
+        raise HTTPException(401, "Ссылка истекла, отозвана или недействительна. Получите новую через /weblink.")
+    if init_data:
+        result = validate_init_data(init_data, BOT_TOKEN)
         if result is None:
-            raise HTTPException(status_code=401, detail="Невалидные данные авторизации Telegram")
-
-        user_id = _extract_user_id(result)
-        if ALLOWED_IDS and user_id not in ALLOWED_IDS:
-            logger.warning("Доступ запрещён для user_id=%d", user_id)
-            raise HTTPException(status_code=403, detail="У вас нет доступа к этой панели")
-
+            raise HTTPException(401, "Сессия Telegram истекла или недействительна. Закройте панель и откройте её заново через бота.")
+        if _extract_user_id(result) not in ALLOWED_IDS:
+            raise HTTPException(403, "У вас нет доступа к этой панели")
         return result
+    raise HTTPException(401, "Откройте панель заново через Telegram Mini App или получите ссылку /weblink.")
 
-    # No auth provided
-    raise HTTPException(
-        status_code=401,
-        detail="Требуется авторизация: откройте панель через Telegram Mini App "
-                "или используйте ссылку от /weblink"
-    )
+
+def local_dev_enabled(request: Request) -> bool:
+    # Только прямой loopback, без доверия X-Forwarded-For и без production bot token.
+    return (os.getenv("PANEL_ALLOW_LOCAL_DEV_AUTH") == "1" and not BOT_TOKEN
+            and request.client is not None and request.client.host in {"127.0.0.1", "::1"})
+
+
+async def get_current_user(request: Request,
+                           x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data"),
+                           x_web_token: str = Header(default="", alias="X-Web-Token")) -> dict:
+    if local_dev_enabled(request):
+        return {"user": {"id": 0}, "auth_method": "local_dev"}
+    try:
+        return authenticate(x_telegram_init_data, x_web_token)
+    except HTTPException:
+        identifier = request.client.host if request.client else "unknown"
+        if not get_rate_limiter().is_allowed(identifier):
+            raise HTTPException(429, "Слишком много неудачных попыток авторизации. Повторите через минуту.")
+        raise
+
+
+# Совместимость существующих зависимостей без второго экземпляра сервиса.
+get_current_user_with_token = get_current_user
+
+
+def validate_init_data_string(init_data: str) -> None:
+    authenticate(init_data=init_data)
 
 
 def validate_auth_string(auth: str) -> None:
-    """Validate auth from query parameter (for <img src> etc.).
-
-    Supports both Telegram initData and web token.
-    """
-    if not auth:
-        raise HTTPException(status_code=401, detail="Missing auth parameter")
-
-    # Check if it's a web token (contains no hash= which is required for Telegram initData)
-    if "hash=" not in auth:
-        # Try as web token
-        result = validate_web_token(auth)
-        if result is None:
-            raise HTTPException(status_code=401, detail="Invalid auth parameter")
-        return
-
-    # Otherwise validate as Telegram initData
-    validate_init_data_string(auth)
+    if "hash=" in auth:
+        authenticate(init_data=auth)
+    else:
+        authenticate(web_token=auth)

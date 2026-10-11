@@ -16,6 +16,13 @@ except ImportError:
 from src.config import DATA_DIR, CHARTS_DIR, PLOTTER_RANGES, DEFAULT_PLOTTER_RANGE, CLEANUP_SETTINGS, SYMBOLS, AI_THRESHOLDS, AGGRESSIVE_MODE, BOT_CONFIG, CHART_SETTINGS, TECHNICAL_ANALYSIS
 from src.utils.logger import info, error
 from src.utils.helpers import get_filename
+from src.exchanges.market_data import (
+    StreamKey, canonical_symbol, canonical_interval, evaluate_snapshot,
+    normalize_candle, interval_start, next_start, timestamp_ms,
+)
+from src.exchanges.market_data_storage import (
+    atomic_publish, list_market_snapshots, read_market_snapshot,
+)
 
 def calculate_rsi(closes, period=14):
     """Рассчитывает RSI индикатор для всех точек как скользящее окно"""
@@ -57,56 +64,38 @@ def calculate_rsi(closes, period=14):
 
     return rsi_values
 
-def resample_data(dates, opens, highs, lows, closes, volumes, timeframe):
-    """Resamples 1m data to target timeframe using Pandas"""
-    if not PANDAS_AVAILABLE:
-        info("⚠️ Pandas not available, skipping resampling (plotting 1m data)")
-        return dates, opens, highs, lows, closes, volumes
-
-    if timeframe == "1m":
-        return dates, opens, highs, lows, closes, volumes
-
-    try:
-        # Create DataFrame
-        df = pd.DataFrame({
-            'date': dates, # dates are already naive UTC or aware UTC
-            'open': opens,
-            'high': highs,
-            'low': lows,
-            'close': closes,
-            'volume': volumes
-        })
-        df.set_index('date', inplace=True)
-
-        # Convert timeframe to pandas offset (e.g. 5m -> 5min)
-        # Pandas 2.x requires lowercase: 'h' for hours, 'd' for days, 'min' for minutes
-        rule = timeframe.replace('m', 'min')  # 5m -> 5min, 1h stays 1h, 1d stays 1d
-
-        # Resample
-        # Aggregation rules:
-        # Open: first, High: max, Low: min, Close: last, Volume: sum
-        ohlc_dict = {
-            'open': 'first',
-            'high': 'max',
-            'low': 'min',
-            'close': 'last',
-            'volume': 'sum'
-        }
-
-        resampled = df.resample(rule).agg(ohlc_dict)
-        resampled.dropna(inplace=True)
-
-        return (
-            resampled.index.tolist(),
-            resampled['open'].tolist(),
-            resampled['high'].tolist(),
-            resampled['low'].tolist(),
-            resampled['close'].tolist(),
-            resampled['volume'].tolist()
-        )
-    except Exception as e:
-        error(f"❌ Error resampling data to {timeframe}: {e}")
-        return dates, opens, highs, lows, closes, volumes
+def resample_data(dates, opens, highs, lows, closes, volumes, timeframe, *, source_interval="1m", now=None):
+    """Только явная агрегация полных периодов; пропуски и несовместимый TF — ошибка."""
+    timeframe, source_interval = canonical_interval(timeframe), canonical_interval(source_interval)
+    columns = (dates, opens, highs, lows, closes, volumes)
+    if len({len(values) for values in columns}) != 1:
+        raise ValueError("Массивы графика имеют разную длину")
+    key = StreamKey("bingx", "perpetual", "BTCUSDT", source_interval)
+    indexed = {}
+    for date, o, h, l, c, v in zip(*columns):
+        row = normalize_candle({"timestamp": timestamp_ms(date), "open": o, "high": h,
+                                "low": l, "close": c, "volume": v}, key, now=now)
+        indexed[row["timestamp"]] = row
+    groups = {}
+    ordered = sorted(indexed)
+    for previous, current in zip(ordered, ordered[1:]):
+        if next_start(previous, source_interval) != current:
+            raise ValueError("Агрегация истории с пропусками запрещена")
+    for ts in ordered:
+        start = interval_start(ts, timeframe)
+        if next_start(ts, source_interval) > next_start(start, timeframe):
+            raise ValueError("Исходный TF не делит целевой период")
+        groups.setdefault(start, []).append(indexed[ts])
+    result = ([], [], [], [], [], [])
+    for start, rows in sorted(groups.items()):
+        if rows[0]["timestamp"] != start or next_start(rows[-1]["timestamp"], source_interval) != next_start(start, timeframe):
+            raise ValueError("Нельзя выдать неполный период за агрегированную свечу")
+        values = (datetime.fromtimestamp(start / 1000, timezone.utc), rows[0]["openPrice"],
+                  max(row["highPrice"] for row in rows), min(row["lowPrice"] for row in rows),
+                  rows[-1]["closePrice"], sum(row["volume"] for row in rows))
+        for column, value in zip(result, values):
+            column.append(value)
+    return result
 
 def cleanup_old_files():
     """Удаляет старые файлы графиков и данных"""
@@ -153,25 +142,58 @@ def cleanup_old_files():
     except Exception as e:
         error(f"❌ Ошибка при очистке старых файлов: {str(e)}")
 
-def plot_symbol(symbol, time_range=None, current_position=None):
-    """Строит график для символа и сохраняет как PNG"""
-    # Загружаем данные
-    price_file = f"{DATA_DIR}/prices/{get_filename(symbol)}.json"
-    if not os.path.exists(price_file):
-        info(f"📊 Файл данных {price_file} ещё не создан, пропускаем построение графика для {symbol}")
+def plot_symbol(symbol, time_range=None, current_position=None, *, stream_key=None,
+                snapshot=None, config=None, data_dir=None, charts_dir=None):
+    """Нативные live свечи: никаких неявных преобразований TF из глобального config."""
+    config = config or {}
+    data_dir = data_dir or config.get("DATA_DIR", DATA_DIR)
+    charts_dir = charts_dir or config.get("CHARTS_DIR", CHARTS_DIR)
+    chart_settings = config.get("CHART_SETTINGS", CHART_SETTINGS)
+    if stream_key is not None:
+        stream_key = StreamKey.from_value(stream_key)
+        if canonical_symbol(symbol) != stream_key.symbol:
+            raise ValueError("Символ графика не совпадает с источником")
+        snapshot = snapshot or read_market_snapshot(data_dir, stream_key, allow_stale=True)
+        if snapshot is None:
+            info(f"⚠️ Нет snapshot для графика {stream_key.id}")
+            return
+    if snapshot is None:
+        candidates = [value for value in list_market_snapshots(data_dir)
+                      if value["stream"]["symbol"] == canonical_symbol(symbol)]
+        if len(candidates) > 1:
+            error(f"❌ Неоднозначный источник графика {symbol}; передайте StreamKey")
+            return
+        snapshot = candidates[0] if candidates else None
+    if snapshot is not None:
+        snapshot = evaluate_snapshot(snapshot)
+        source_key = StreamKey.from_value(snapshot["stream"])
+        if source_key.symbol != canonical_symbol(symbol) or (stream_key and source_key != stream_key):
+            raise ValueError("Источник snapshot не совпадает с графиком")
+        stream_key = source_key
+        prices = snapshot["candles"]
+        if current_position and (current_position.get("exchange") != source_key.exchange or
+                                 current_position.get("market_type") != source_key.market_type):
+            current_position = None
+    else:
+        price_file = f"{data_dir}/prices/{get_filename(symbol)}.json"
+        if not os.path.exists(price_file):
+            info(f"📊 Файл {price_file} ещё не создан")
+            return
+        with open(price_file) as f:
+            prices = json.load(f)
+    if not prices:
         return
-    with open(price_file) as f:
-        prices = json.load(f)
 
     # Determine time range settings
     if time_range is None:
         time_range = DEFAULT_PLOTTER_RANGE
 
-    range_config = PLOTTER_RANGES.get(time_range)
+    plotter_ranges = config.get("PLOTTER_RANGES", PLOTTER_RANGES)
+    range_config = plotter_ranges.get(time_range)
 
     if not range_config:
         # Try case-insensitive match
-        for key, val in PLOTTER_RANGES.items():
+        for key, val in plotter_ranges.items():
             if key.lower() == time_range.lower():
                 range_config = val
                 time_range = key # Update to canonical name for display
@@ -179,12 +201,13 @@ def plot_symbol(symbol, time_range=None, current_position=None):
 
     if not range_config:
         info(f"⚠️ Range '{time_range}' not found in config. Using default 1D.")
-        range_config = PLOTTER_RANGES.get("1D") or {"days": 1}
+        range_config = plotter_ranges.get("1D") or {"days": 1}
         time_range = "1D"
 
     # Calculate cutoff time
     # Use timezone-aware UTC
-    now = datetime.now(timezone.utc)
+    now = (datetime.fromtimestamp(prices[-1]["timestamp"] / 1000, timezone.utc)
+       if snapshot is not None else datetime.now(timezone.utc))
     cutoff_time = now
 
     if "days" in range_config:
@@ -208,14 +231,18 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     for candle in prices:
         ts_str = candle["snapshotTimeUTC"]
         try:
-            if ts_str.endswith('Z'):
+            if snapshot is not None:
+                ts_dt = datetime.fromtimestamp(candle["timestamp"] / 1000, timezone.utc)
+            elif ts_str.endswith('Z'):
                 ts_dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
             else:
-                ts_dt = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
+                ts_dt = datetime.fromisoformat(ts_str)
+                ts_dt = ts_dt.replace(tzinfo=timezone.utc) if ts_dt.tzinfo is None else ts_dt.astimezone(timezone.utc)
         except ValueError:
             try:
                 from dateutil import parser
-                ts_dt = parser.parse(ts_str).replace(tzinfo=timezone.utc)
+                ts_dt = parser.parse(ts_str)
+                ts_dt = ts_dt.replace(tzinfo=timezone.utc) if ts_dt.tzinfo is None else ts_dt.astimezone(timezone.utc)
             except Exception:
                 continue
 
@@ -238,27 +265,15 @@ def plot_symbol(symbol, time_range=None, current_position=None):
         info(f"⚠️ Нет данных для {symbol}")
         return
 
-    # --- RESAMPLING START ---
-    # Determine target timeframe from config
-    target_timeframe = "1m"
-    try:
-        style = BOT_CONFIG.get("STRATEGY_STYLE", "SCALP")
-        presets = BOT_CONFIG.get("STYLE_PRESETS", {})
-        target_timeframe = presets.get(style, {}).get("timeframe", "1m")
-    except Exception as e:
-        error(f"⚠️ Error reading timeframe config: {e}")
-
-    if target_timeframe != "1m":
-        # info(f"🔄 Resampling {symbol} data to {target_timeframe}...")
-        all_dates, all_opens, all_highs, all_lows, all_closes, all_volumes = resample_data(
-            all_dates, all_opens, all_highs, all_lows, all_closes, all_volumes, target_timeframe
-        )
-    # --- RESAMPLING END ---
+    # В том числе legacy данные сортируем/дедуплицируем, но не угадываем их таймфрейм.
+    indexed = {dt: row for dt, row in zip(all_dates, zip(all_opens, all_highs, all_lows, all_closes, all_volumes))}
+    all_dates = sorted(indexed)
+    all_opens, all_highs, all_lows, all_closes, all_volumes = map(list, zip(*(indexed[dt] for dt in all_dates)))
 
     # Calculate indicators on FULL filtered/resampled dataset
     # SMAs
     all_smas = {}
-    sma_periods = CHART_SETTINGS.get("sma_periods", [10, 20, 50, 100, 200])
+    sma_periods = chart_settings.get("sma_periods", [10, 20, 50, 100, 200])
     for period in sma_periods:
         if len(all_closes) >= period:
             all_smas[period] = [sum(all_closes[max(0, i-period+1):i+1])/min(period, i+1) for i in range(len(all_closes))]
@@ -266,7 +281,7 @@ def plot_symbol(symbol, time_range=None, current_position=None):
             all_smas[period] = [sum(all_closes) / len(all_closes)] * len(all_closes)
 
     # RSI
-    rsi_period = AI_THRESHOLDS["RSI_PERIOD"]
+    rsi_period = config.get("AI_THRESHOLDS", AI_THRESHOLDS).get("RSI_PERIOD", 14)
     all_rsi = calculate_rsi(all_closes, rsi_period)
 
     # Now filter for display
@@ -351,7 +366,7 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     # Creates subplot figure (PRICE, VOLUME, RSI)
     # Reduced height by 25% (18 -> 13.5)
     plt.close('all') # Fix for RuntimeWarning: More than 20 figures have been opened
-    _chart_height = CHART_SETTINGS.get("chart_height", 13.5)
+    _chart_height = chart_settings.get("chart_height", 13.5)
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(chart_width, _chart_height), gridspec_kw={'height_ratios': [3, 1, 1]}, sharex=True)
 
     # ... (Prepare plotting data arrays for filtered range) ...
@@ -405,7 +420,10 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     col_down = '#ef5350' # Red
     # Determine width dynamically based on minimum time difference
     # This ensures candles never overlap and always have appropriate spacing
-    if len(dates) > 1:
+    if stream_key is not None:
+        timestamp = prices[-1]["timestamp"]
+        width = (next_start(timestamp, stream_key.interval) - timestamp) / 86_400_000 * 0.8
+    elif len(dates) > 1:
         # Calculate differences between consecutive dates in days (matplotlib format)
         # dates contains datetime objects, so diff is timedelta
         diffs = [(dates[i+1] - dates[i]).total_seconds() / (24*3600) for i in range(len(dates)-1)]
@@ -453,7 +471,7 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     }
 
     for period in sma_periods:
-        ax1.plot(dates, smas[period], label=f"SMA({period})", color=sma_colors[period], linewidth=1.5, alpha=0.9)
+        ax1.plot(dates, smas[period], label=f"SMA({period})", color=sma_colors.get(period, '#9e9e9e'), linewidth=1.5, alpha=0.9)
 
     # Рисуем Standard Error Bands (SEB)
     ax1.plot(dates, plot_seb_mid, label="LinReg (SEB)", color="purple", linestyle="-.", linewidth=1.5, alpha=0.8)
@@ -485,7 +503,14 @@ def plot_symbol(symbol, time_range=None, current_position=None):
             info(f"⚠️ Ошибка отображения позиции на графике: {e}")
 
     # Оформление графика цены
-    ax1.set_title(f"{symbol} - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')} ({time_range})", fontsize=20, pad=40)
+    source_label = (f"{stream_key.exchange}/{stream_key.market_type} {stream_key.interval}"
+                    if stream_key else "legacy: источник/TF неизвестен")
+    data_status = ("STALE" if snapshot and snapshot["stale"] else
+                   "ERROR" if snapshot and snapshot.get("error") else
+                   "GAPS" if snapshot and snapshot.get("gaps") else
+                   "RECOVERING" if snapshot and not snapshot["ready"] else
+                   "LIVE" if snapshot else "UNKNOWN")
+    ax1.set_title(f"{symbol} — {source_label} ({time_range}) [{data_status}]", fontsize=20, pad=40)
 
     # --- STATUS BADGES ---
     # 1. Trading Mode Badge
@@ -534,7 +559,8 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     if down_vol_dates:
         ax2.bar(down_vol_dates, down_volumes, width, color=col_down, alpha=0.5)
 
-    ax2.set_ylabel("Объем", fontsize=12, labelpad=10)
+    volume_label = "Объём (контракты)" if stream_key and stream_key.exchange == "mexc" and stream_key.market_type == "perpetual" else "Объём"
+    ax2.set_ylabel(volume_label, fontsize=12, labelpad=10)
     ax2.grid(alpha=0.2)
 
     # --- 3. График RSI ---
@@ -572,13 +598,18 @@ def plot_symbol(symbol, time_range=None, current_position=None):
     if len(dates) > 1:
         ax1.set_xlim(dates[0], dates[-1])
 
-    # Сохраняем с высоким разрешением (перезаписываем файл)
-    filename = f"{CHARTS_DIR}/{get_filename(symbol)}.png"
-    _dpi = CHART_SETTINGS.get("dpi", 200)
-    plt.savefig(filename, dpi=_dpi, bbox_inches='tight')
-    plt.close(fig) # Explicitly close the specific figure object
+    # Источники/TF не перезаписывают PNG друг друга; FileResponse видит целый inode.
+    basename = (f"{stream_key.exchange}_{stream_key.market_type}_{get_filename(stream_key.symbol)}_{stream_key.interval}"
+                if stream_key else get_filename(symbol))
+    filename = os.path.join(charts_dir, f"{basename}.png")
+    _dpi = chart_settings.get("dpi", 200)
+    try:
+        atomic_publish(filename, lambda stream: fig.savefig(stream, format="png", dpi=_dpi, bbox_inches="tight"))
+    finally:
+        plt.close(fig)
 
-    info(f"🖼️ График для {symbol} сохранен как {filename} (Range: {time_range})")
+    info(f"🖼️ График для {symbol} сохранён как {filename} (диапазон: {time_range})")
+    return filename
 
 def main():
     """Основная функция генерации графиков"""

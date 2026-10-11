@@ -46,6 +46,64 @@ export interface LogLine {
   timestamp: string;
 }
 
+export type LogCategory = 'runtime' | 'exchange' | 'market_data' | 'strategy' | 'llm' | 'risk' | 'order' | 'trade' | 'config' | 'panel';
+export type LogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
+
+export interface LogEvent {
+  schema_version: number;
+  event_id: string;
+  sequence: number;
+  timestamp: string;
+  pid: number;
+  run_id: string;
+  logger: string;
+  service: string;
+  source: string;
+  level: LogLevel;
+  category: LogCategory;
+  message: string;
+  symbol: string | null;
+  exchange: string | null;
+  instance_id: string | null;
+  order_id: string | null;
+  request_id: string | null;
+  duration_ms: number | null;
+  exception?: string;
+}
+
+export interface LogFilters {
+  level?: string;
+  category?: string;
+  exchange?: string;
+  symbol?: string;
+  instance?: string;
+  search?: string;
+  order?: string;
+  request?: string;
+  source?: string;
+  time_from?: string;
+  time_to?: string;
+}
+
+export interface LogEventsPage {
+  events: LogEvent[];
+  next_cursor: string | null;
+  live_cursor: string | null;
+  has_more: boolean;
+  watermark: number;
+}
+
+export interface LogSources {
+  categories: LogCategory[];
+  levels: LogLevel[];
+  sources: string[];
+  exchanges: string[];
+  symbols: string[];
+  instances: string[];
+  legacy_sources: { source: string; filename: string }[];
+  watermark: number;
+}
+
 export interface IndicatorStatus {
   name: string;
   weight: number;

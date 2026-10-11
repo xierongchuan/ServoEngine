@@ -1,51 +1,55 @@
-import sys
-import os
-import time
+"""Параллельное прогнозирование через fake HTTP и настоящие свежие snapshots."""
+
 import json
-from unittest.mock import MagicMock, patch
+import threading
 
-# Add src to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
+from src.ai import client as ai_client
 from src.core.predict import main
+from src.core.data.reader import read_strategy_data, market_data_context, validate_analysis_market_data
+from src.exchanges import ws_provider_factory as factory
+from market_data_fixtures import FixedClock, runtime_config, publish_instance
+from test_ai_runtime import completion
 
-def test_parallel_execution():
-    print("🧪 Testing Parallel Execution...")
 
-    # Mock analysis data for 3 symbols
-    analyses = [
-        {"symbol": "BTCUSDT", "rsi": 70, "current_price": 90000, "sma": 89000, "prompt": "prompt1"},
-        {"symbol": "ETHUSDT", "rsi": 30, "current_price": 3000, "sma": 3100, "prompt": "prompt2"},
-        {"symbol": "SOLUSDT", "rsi": 80, "current_price": 100, "sma": 90, "prompt": "prompt3"}
-    ]
+def test_parallel_execution(tmp_path, monkeypatch, request):
+    clock = FixedClock()
+    monkeypatch.setattr("src.exchanges.market_data.time.time", clock)
+    previous_cache = factory.get_shared_cache()
+    factory.set_shared_cache(None, None)
+    request.addfinalizer(lambda: factory.set_shared_cache(*previous_cache))
+    config = runtime_config(tmp_path, instance="parallel-predict")
+    config.update(ENABLE_PARALLEL_PROCESSING=True, ENABLE_AI_SKIP_ON_RSI=False,
+                  AI_SETTINGS={"provider": "lmstudio", "providers": {"lmstudio": {"model": "offline/model"}}})
+    analyses = []
+    for symbol, price in (("BTCUSDT", 90000), ("ETHUSDT", 3000), ("SOLUSDT", 100)):
+        publish_instance(config, symbol, clock, close=price)
+        view = read_strategy_data(symbol, config)
+        analysis = {"symbol": symbol, "rsi": 70, "current_price": view["candles"][-1]["closePrice"],
+                    "sma": price, "prompt": f"offline {symbol}", "market_data": market_data_context(view)}
+        assert validate_analysis_market_data(analysis, config)
+        analyses.append(analysis)
 
-    # Mock get_prediction to simulate delay
-    def mock_get_prediction_delayed(prompt):
-        time.sleep(1) # Simulate 1 second API latency
-        return json.dumps({
-            "action": "hold",
-            "confidence": 0.5,
-            "reason": "Test"
-        })
+    # Последовательный runtime не сможет пройти barrier: проверяем перекрытие
+    # реальных transport-вызовов, а не нестабильный лимит времени на CI.
+    barrier = threading.Barrier(3, timeout=5)
+    lock = threading.Lock()
+    calls = []
 
-    with patch('src.core.predict.get_prediction', side_effect=mock_get_prediction_delayed):
-        start_time = time.time()
-        predictions = main(analyses)
-        end_time = time.time()
+    def fake_request(method, url, **kwargs):
+        assert method == "POST" and url.endswith("/chat/completions")
+        assert kwargs["allow_redirects"] is False and kwargs["stream"] is True
+        assert kwargs["json"]["model"] == "offline/model"
+        with lock:
+            calls.append(kwargs["json"]["messages"][0]["content"])
+        barrier.wait()
+        return completion(json.dumps({"action": "hold", "confidence": 0.5, "reason": "Test"}))
 
-        duration = end_time - start_time
-        print(f"⏱️ Processed {len(analyses)} symbols in {duration:.2f} seconds.")
-
-        # If sequential, it would take ~3 seconds (1s * 3).
-        # If parallel, it should take ~1 second (plus overhead).
-
-        if duration < 1.5:
-            print("✅ Parallel execution confirmed (Duration < 1.5s)")
-        else:
-            print("❌ Parallel execution FAILED (Duration >= 1.5s)")
-
-        assert len(predictions) == 3
-        print("✅ All predictions received")
-
-if __name__ == "__main__":
-    test_parallel_execution()
+    monkeypatch.setattr(ai_client.requests, "request", fake_request)
+    predictions = main(analyses, config=config)
+    assert len(predictions) == 3
+    assert set(calls) == {analysis["prompt"] for analysis in analyses}
+    assert {prediction["symbol"] for prediction in predictions} == {analysis["symbol"] for analysis in analyses}
+    for prediction in predictions:
+        assert prediction["action"] == "hold" and prediction["reason"] == "Test"
+        assert prediction["market_data"]["instance_id"] == "parallel-predict"
+        assert validate_analysis_market_data(prediction, config)

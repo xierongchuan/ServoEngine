@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Entry point for the Telegram Panel — runs FastAPI backend + Telegram bot.
+"""Запуск FastAPI и Telegram-бота в едином namespace.
 
-Can be run from project root:    python -m src.telegram_panel.run_panel
-Or from telegram_panel/ dir:     python run_panel.py
-Or inside Docker container:      python run_panel.py
+Из корня репозитория и текущего контейнера: python -m src.telegram_panel.run_panel.
+Из src/telegram_panel: python run_panel.py (корень добавляется в sys.path).
 """
 
 import logging
@@ -40,42 +39,33 @@ if _env_path.exists():
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-# Also add telegram_panel dir so relative imports work in Docker
-if str(_this_dir) not in sys.path:
-    sys.path.insert(0, str(_this_dir))
+# Один namespace предотвращает дублирование singleton-хранилищ в bot/backend.
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger("panel")
+# HTTPX печатает URL Telegram API с bot token на INFO; секреты не должны уходить в журнал.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def _import_bot_class():
-    """Import TelegramPanelBot with fallback for different project layouts."""
-    try:
-        from src.telegram_panel.bot import TelegramPanelBot
-    except ImportError:
-        from bot import TelegramPanelBot
+    """Импорт бота в едином namespace приложения."""
+    from src.telegram_panel.bot import TelegramPanelBot
     return TelegramPanelBot
 
 
 def _import_config():
-    """Import panel config with fallback for different project layouts."""
-    try:
-        from src.telegram_panel.backend.config import PANEL_PORT, BOT_TOKEN
-    except ImportError:
-        from backend.config import PANEL_PORT, BOT_TOKEN
+    """Импорт общей конфигурации бота и backend."""
+    from src.telegram_panel.backend.config import PANEL_PORT, BOT_TOKEN
     return PANEL_PORT, BOT_TOKEN
 
 
 def _get_app_import_string() -> str:
     """Return the correct uvicorn import string for the app."""
-    try:
-        import src.telegram_panel.backend.app  # noqa: F401
-        return "src.telegram_panel.backend.app:app"
-    except ImportError:
-        return "backend.app:app"
+    return "src.telegram_panel.backend.app:app"
 
 
 def run_bot_polling():
@@ -114,31 +104,40 @@ def run_bot_polling():
         except Exception as e:
             if attempt < max_retries:
                 delay = 2 ** attempt
-                logger.warning("Telegram bot attempt %d/%d failed: %s. Retry in %ds...", attempt, max_retries, e, delay)
+                logger.warning("⚠️ Попытка запуска бота %d/%d: %s. Повтор через %ds", attempt, max_retries, type(e).__name__, delay)
                 time.sleep(delay)
             else:
-                logger.error("Telegram bot failed after %d attempts: %s", max_retries, e)
+                logger.error("❌ Бот не запущен после %d попыток: %s", max_retries, type(e).__name__)
 
 
 def main():
+    import uvicorn
+
     PANEL_PORT, BOT_TOKEN = _import_config()
+    from src.telegram_panel.backend.config import DATA_DIR
+    from src.utils.logger import configure_logging, protect_logging_handlers
+
+    configure_logging(data_dir=DATA_DIR)
+    protect_logging_handlers()
 
     # Start Telegram bot in background thread
     if BOT_TOKEN:
         bot_thread = threading.Thread(target=run_bot_polling, daemon=True, name="telegram-bot")
         bot_thread.start()
-        logger.info("Telegram bot started in background thread")
+        logger.info("✅ Telegram-бот запущен в фоновом потоке")
     else:
-        logger.warning("TELEGRAM_BOT_TOKEN not set — bot disabled")
+        logger.warning("⚠️ TELEGRAM_BOT_TOKEN не задан — бот отключён")
 
     # Run FastAPI server (blocking)
     app_string = _get_app_import_string()
-    logger.info("Starting FastAPI on port %d (app=%s)", PANEL_PORT, app_string)
+    logger.info("Запуск FastAPI на порту %d (app=%s)", PANEL_PORT, app_string)
     uvicorn.run(
         app_string,
-        host="0.0.0.0",
+        host="127.0.0.1" if os.getenv("PANEL_ALLOW_LOCAL_DEV_AUTH") == "1" else "0.0.0.0",
+        proxy_headers=os.getenv("PANEL_ALLOW_LOCAL_DEV_AUTH") != "1",
         port=PANEL_PORT,
         log_level="info",
+        access_log=False,  # Query старых PNG-ссылок и WS-билеты не попадают в access log.
     )
 
 

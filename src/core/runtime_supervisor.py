@@ -7,11 +7,21 @@ import os
 import signal
 import time
 from datetime import datetime, timezone
-from multiprocessing import Process
+from multiprocessing import get_context
 from pathlib import Path
 from typing import Any
 
 from src.utils.logger import error, info, warning
+from src.runtime import prepare_runtime_config
+from src.symbol_runtime_control import atomic_write_json
+from src.trading_settings import (
+    RECONFIGURE_KEYS, install_trading_settings_snapshot, managed_state_block_reason,
+    refresh_trading_settings, trading_config_path, trading_settings_lock,
+    validate_trading_settings, validate_trading_start,
+)
+
+# Свежий интерпретатор не наследует старые клиенты, потоки и from-import globals parent.
+Process = get_context("spawn").Process
 
 
 DATA_DIR = Path(os.getenv("SERVO_DATA_DIR", "data"))
@@ -24,11 +34,7 @@ def _utc_now() -> str:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
-    os.replace(tmp_path, path)
+    atomic_write_json(path, payload)
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -43,7 +49,9 @@ def _read_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _run_trading_runtime() -> None:
+def _run_trading_runtime(settings: dict[str, Any]) -> None:
+    # Не перечитываем execution после отпускания lifecycle lock: child получает выбранный снимок.
+    prepare_runtime_config(settings)
     from src.main import main
 
     main()
@@ -59,9 +67,13 @@ class RuntimeSupervisor:
         poll_interval: float | None = None,
         stop_timeout: float | None = None,
         start_on_boot: bool | None = None,
+        settings_path: Path | None = None,
+        data_dir: Path | None = None,
     ) -> None:
         self.command_path = command_path
         self.status_path = status_path
+        self.settings_path = settings_path if settings_path is not None else trading_config_path()
+        self.data_dir = data_dir if data_dir is not None else DATA_DIR
         self.poll_interval = poll_interval or float(os.getenv("SERVO_RUNTIME_CONTROL_INTERVAL", "1.0"))
         self.stop_timeout = stop_timeout or float(os.getenv("SERVO_RUNTIME_STOP_TIMEOUT", "25"))
         self.start_on_boot = (
@@ -79,6 +91,13 @@ class RuntimeSupervisor:
         self.last_command_action: str | None = None
         self.last_command_at: str | None = None
         self._shutdown_requested = False
+        self.execution_settings: dict[str, Any] | None = None
+        previous = _read_json(self.status_path)
+        if previous and isinstance(previous.get("execution"), dict):
+            try:
+                self.execution_settings = validate_trading_settings(previous["execution"])
+            except ValueError as exc:
+                warning(f"⚠️ Предыдущий снимок runtime недостоверен: {exc}")
 
     def request_shutdown(self, signum: int | None = None) -> None:
         if self._shutdown_requested:
@@ -96,12 +115,13 @@ class RuntimeSupervisor:
             return self.runtime_process.pid
         return None
 
-    def _write_status(self) -> None:
+    def _write_status(self, *, strict: bool = False) -> None:
         payload = {
             "state": self.state,
-            "control_enabled": True,
+            "control_enabled": not self._shutdown_requested,
             "supervisor_pid": os.getpid(),
             "runtime_pid": self._runtime_pid(),
+            "execution": self.execution_settings,
             "started_at": self.started_at,
             "stopped_at": self.stopped_at,
             "last_exit_code": self.last_exit_code,
@@ -116,12 +136,14 @@ class RuntimeSupervisor:
             _atomic_write_json(self.status_path, payload)
         except Exception as exc:
             warning(f"⚠️ Не удалось записать runtime status: {exc}")
+            if strict:
+                raise
 
     def _refresh_state(self) -> None:
         if self.runtime_process is None:
             return
         if self.runtime_process.is_alive():
-            if self.state not in {"starting", "running", "restarting"}:
+            if self.state not in {"starting", "running", "restarting", "stopping"}:
                 self.state = "running"
             return
 
@@ -140,33 +162,81 @@ class RuntimeSupervisor:
             error(f"❌ {self.last_error}")
 
     def start_runtime(self, source: str = "manual") -> None:
+        with trading_settings_lock(self.settings_path):
+            self._start_runtime_locked(source)
+
+    def _start_runtime_locked(self, source: str) -> None:
         self._refresh_state()
         if self.runtime_process and self.runtime_process.is_alive():
-            info(f"ℹ️ Runtime уже запущен (PID: {self.runtime_process.pid})")
-            self.state = "running"
+            info(f"ℹ️ Runtime уже запущен (PID: {self.runtime_process.pid}); снимок не меняется")
+            self._write_status()
             return
 
         self.state = "starting"
         self.last_error = None
-        self._write_status()
-
-        process = Process(target=_run_trading_runtime, name="TradingRuntime")
-        process.daemon = False
-        process.start()
+        process = None
+        settings = None
+        try:
+            # Без опубликованного starting запуск запрещён: PUT не должен видеть старый stopped.
+            self._write_status(strict=True)
+            # Один read: между проверкой managed state и spawn не выбираем другой снимок.
+            settings = refresh_trading_settings(self.settings_path)
+            previous = self.execution_settings
+            changing_account = previous is None or any(previous[key] != settings[key] for key in RECONFIGURE_KEYS)
+            if changing_account:
+                reason = managed_state_block_reason(self.data_dir)
+                if reason:
+                    if previous is not None:
+                        install_trading_settings_snapshot(previous)
+                    raise ValueError(reason)
+            validate_trading_start(settings)
+            prepare_runtime_config(settings)
+            if self._shutdown_requested:
+                self.state = "stopped"
+                self._write_status()
+                return
+            process = Process(target=_run_trading_runtime, args=(settings,), name="TradingRuntime")
+            process.daemon = False
+            process.start()
+        except Exception as exc:
+            if process is not None and process.is_alive():
+                # Частичный отказ spawn не позволяет забыть уже живой процесс.
+                self.runtime_process = process
+                self.execution_settings = settings
+                self.state = "stopping"
+                self.started_at = _utc_now()
+                self.stopped_at = None
+            else:
+                if self.execution_settings is not None:
+                    install_trading_settings_snapshot(self.execution_settings)
+                self.state = "crashed"
+                self.stopped_at = _utc_now()
+            self.last_error = f"Запуск runtime запрещён или не удался: {exc}"
+            error(f"❌ {self.last_error}")
+            self._write_status()
+            return
 
         self.runtime_process = process
+        self.execution_settings = settings
         self.state = "running"
         self.started_at = _utc_now()
         self.stopped_at = None
         self.last_exit_code = None
-        info(f"▶️ Runtime запущен через {source} (PID: {process.pid})")
+        self._refresh_state()
+        self._write_status()
+        info(f"▶️ Runtime запущен через {source} (PID: {process.pid}, {settings['exchange']}/{settings['market_type']}/{settings['execution_mode']})")
 
     def stop_runtime(self, source: str = "manual") -> None:
+        with trading_settings_lock(self.settings_path):
+            self._stop_runtime_locked(source)
+
+    def _stop_runtime_locked(self, source: str) -> None:
         self._refresh_state()
         if not self.runtime_process or not self.runtime_process.is_alive():
             self.state = "stopped"
             self.stopped_at = self.stopped_at or _utc_now()
             info("ℹ️ Runtime уже остановлен")
+            self._write_status()
             return
 
         process = self.runtime_process
@@ -192,19 +262,27 @@ class RuntimeSupervisor:
             process.kill()
             process.join(timeout=3)
 
+        if process.is_alive():
+            self.last_error = "Runtime остался жив после kill; смена настроек и новый запуск запрещены"
+            error(f"❌ {self.last_error}")
+            self._write_status()
+            return
         self.last_exit_code = process.exitcode
         self.runtime_process = None
         self.state = "stopped"
         self.stopped_at = _utc_now()
+        self._write_status()
         info(f"✅ Runtime остановлен через {source} (exit={self.last_exit_code})")
 
     def restart_runtime(self, source: str = "manual") -> None:
         info(f"🔄 Перезапуск runtime через {source}")
-        self.state = "restarting"
-        self._write_status()
-        self.stop_runtime(source=source)
-        time.sleep(1)
-        self.start_runtime(source=source)
+        with trading_settings_lock(self.settings_path):
+            self.state = "restarting"
+            self._write_status()
+            self._stop_runtime_locked(source)
+            if self.runtime_process and self.runtime_process.is_alive():
+                return
+            self._start_runtime_locked(source)
 
     def _handle_command(self, command: dict[str, Any]) -> None:
         command_id = str(command.get("id") or "")

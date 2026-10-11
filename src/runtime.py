@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -71,8 +72,98 @@ def build_legacy_instances(
     return result
 
 
+def validate_runtime_config_source(bot_config: Dict[str, Any]) -> None:
+    """Instance/profile не вправе переключать общий снимок исполнения runtime."""
+    from src.trading_settings import execution_account_label, get_trading_settings, validate_trading_settings
+    settings = get_trading_settings()
+    aliases = {"EXCHANGE": "exchange", "MARKET_TYPE": "market_type", "EXECUTION_MODE": "execution_mode", "ACCOUNT_ID": "account_id"}
+    sources = [bot_config]
+    instance = bot_config.get("STRATEGY_INSTANCE")
+    if isinstance(instance, dict):
+        sources.append(instance)
+    for source in sources:
+        for key in ("execution", "TRADING_SETTINGS"):
+            if key in source and validate_trading_settings(source[key]) != settings:
+                from src.utils.logger import error
+                error(f"❌ {key} в конфигурации instance не совпадает со снимком runtime")
+                raise ValueError("Конфигурация instance не может менять execution; остановите весь runtime")
+        for key, field in aliases.items():
+            if key in source and source[key] != settings[field]:
+                from src.utils.logger import error
+                error(f"❌ {key} не совпадает со снимком runtime")
+                raise ValueError(f"Instance не может переопределять {key}")
+        if "EXECUTION_ACCOUNT_ID" in source and source["EXECUTION_ACCOUNT_ID"] != execution_account_label(settings):
+            from src.utils.logger import error
+            error("❌ EXECUTION_ACCOUNT_ID не совпадает со стабильным namespace runtime")
+            raise ValueError("Instance не может переопределять EXECUTION_ACCOUNT_ID")
+        if "MODE" in source and source["MODE"] != ("real" if settings["execution_mode"] == "live" else settings["execution_mode"]):
+            from src.utils.logger import error
+            error("❌ MODE не совпадает со снимком runtime")
+            raise ValueError("Instance не может переопределять MODE")
+
+
+def apply_trading_settings(config_module: Any, settings: Dict[str, Any]) -> None:
+    """Обновляет operational globals только перед запуском, без env и callbacks hot-reload."""
+    from src.trading_settings import execution_account_label, validate_trading_settings
+    selected = validate_trading_settings(settings)
+    bot_config = getattr(config_module, "BOT_CONFIG", {})
+    symbols = bot_config.get("EXCHANGE_SYMBOLS", {}).get(selected["exchange"], [])
+    if isinstance(symbols, dict):
+        symbols = symbols.get(selected["market_type"], [])
+    if bot_config.get("STRATEGY_INSTANCE"):
+        symbols = bot_config.get("SYMBOLS", symbols)
+    fees = bot_config.get("EXCHANGE_FEES", {}).get(selected["exchange"], {})
+    if isinstance(fees, dict) and selected["market_type"] in fees:
+        fees = fees[selected["market_type"]]
+    maker = fees.get("maker", 0.02) if isinstance(fees, dict) else fees
+    taker = fees.get("taker", 0.05) if isinstance(fees, dict) else fees
+    updates = {
+        "TRADING_SETTINGS": deepcopy(selected),
+        "EXCHANGE": selected["exchange"], "MARKET_TYPE": selected["market_type"],
+        "EXECUTION_MODE": selected["execution_mode"],
+        "ACCOUNT_ID": selected["account_id"],
+        "EXECUTION_ACCOUNT_ID": execution_account_label(selected),
+        "MODE": "real" if selected["execution_mode"] == "live" else selected["execution_mode"],
+        "BINGX_API_URL": "https://open-api-vst.bingx.com" if selected["execution_mode"] == "demo" else "https://open-api.bingx.com",
+        "SYMBOLS": deepcopy(symbols),
+        "TRADING_FEE_MAKER": maker, "TRADING_FEE_TAKER": taker, "TRADING_FEE": taker,
+    }
+    config_module.__dict__.update(updates)
+
+
+def prepare_runtime_config(settings: Dict[str, Any]) -> None:
+    """Подготавливает parent или новый child до main; текущие instances не hot-switch."""
+    from src.trading_settings import install_trading_settings_snapshot
+    selected = install_trading_settings_snapshot(settings)
+    from src import config as config_module
+    from src.config_loader import clear_config_cache, get_legacy_compatible_config
+    clear_config_cache()
+    bot_config = get_legacy_compatible_config()
+    validate_runtime_config_source(bot_config)
+    # Сначала выбираем общую биржу/рынок; legacy apply использует их для symbols/fees.
+    apply_trading_settings(config_module, selected)
+    apply_legacy_runtime_config(config_module, bot_config)
+    apply_trading_settings(config_module, selected)
+
+
+def run_runtime_chart_worker(settings: Dict[str, Any], config: Dict[str, Any], stop_event=None) -> None:
+    """Spawn получает утверждённый снимок, а не staged execution из trading.json."""
+    prepare_runtime_config(settings)
+    from src.trading_settings import get_trading_settings, execution_account_label
+    from src.core.chart_worker import run_chart_worker
+    selected = get_trading_settings()
+    chart_config = deepcopy(config)
+    chart_config.update(
+        execution=selected, TRADING_SETTINGS=selected,
+        EXCHANGE=selected["exchange"], MARKET_TYPE=selected["market_type"],
+        EXECUTION_MODE=selected["execution_mode"], EXECUTION_ACCOUNT_ID=execution_account_label(selected),
+    )
+    run_chart_worker(chart_config, stop_event)
+
+
 def apply_legacy_runtime_config(config_module: Any, bot_config: Dict[str, Any]) -> None:
-    """Применяет legacy BOT_CONFIG к модулю src.config внутри текущего процесса."""
+    """Применяет legacy BOT_CONFIG, но не позволяет instance менять общий execution."""
+    validate_runtime_config_source(bot_config)
     config_module.BOT_CONFIG = bot_config
 
     config_module.DISABLED_SYMBOLS = bot_config.get("DISABLED_SYMBOLS", [])

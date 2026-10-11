@@ -34,7 +34,20 @@ def print_banner():
     info("|========== НАЧАЛО НОВОГО ТОРГОВОГО ЦИКЛА ==========|")
 
 def check_prerequisites():
-    """Проверяет наличие всех необходимых условий для запуска"""
+    """Read-only запускает публичные данные без ключей и private API."""
+    from src.trading_settings import get_trading_settings, validate_trading_start
+    selected = validate_trading_start(get_trading_settings())
+    if selected["execution_mode"] == "read_only":
+        info("🔎 Режим read_only: публичные данные и анализ, торговые операции запрещены")
+        return True
+    if selected["market_type"] == "spot":
+        # Локальная защита запускается только в owner-worker, не в supervisor/precheck.
+        from src import config
+        import os
+        if not os.getenv("MEXC_API_KEY") or not os.getenv("MEXC_SECRET_KEY"):
+            error("❌ Для Spot не настроены ключи MEXC")
+            return False
+        return True
     print("\n🔍 Проверка предварительных условий...")
 
     errors = []
@@ -56,15 +69,17 @@ def check_prerequisites():
     except Exception as exc:
         warning(f"⚠️ Не удалось определить потребность runtime в ИИ: {exc}")
 
-    if ai_required and (not AI_API_KEY or AI_API_KEY == ""):
-        errors.append(f"❌ API Key для провайдера {AI_PROVIDER} не настроен. Установите соответствующую переменную окружения.")
+    if ai_required and not AI_API_KEY:
+        warning(f"⚠️ Ключ {AI_PROVIDER} не настроен: AI-стратегии не смогут подтверждать входы")
 
     # Validation: Check for conflicting strategies (REMOVED: Smart Filter handles this now)
     # Conflict check removed to allow Smart Filter logic
     pass
 
     # Check exchange prerequisites
-    client = get_exchange_client()
+    from src.exchanges.exchange_factory import _create_client
+    client = _create_client(selected["exchange"], selected["market_type"],
+                            selected["execution_mode"] == "demo", settings=selected)
     if not client.capabilities.automated_strategy:
         errors.append(
             "❌ Выбранный рынок не поддерживает автоматический futures pipeline; "
@@ -147,9 +162,44 @@ def run_multiprocess_pipeline():
     from src.config import CHART_SETTINGS
     from src.config_loader import clear_config_cache, get_strategy_instances, resolve_strategy_instance_config
     from src.core.process_worker import run_strategy_instance_pipeline
-    from src.core.chart_worker import run_chart_worker
     from src.symbol_runtime_control import COMMAND_PATH, STATUS_PATH, atomic_write_json, read_json, utc_now
-    from src.runtime import normalize_symbol_key
+    from src.runtime import normalize_symbol_key, run_runtime_chart_worker
+    from src.trading_settings import get_trading_settings, execution_account_label
+    from src.core.data.reader import build_streams_for_configs
+    from src.exchanges.rate_limit import get_exchange_rate_limiters
+    from src.exchanges.ws_provider_factory import start_ws_provider, stop_ws_provider, sync_subscriptions, configure_market_data
+    from src.config import BOT_CONFIG, DATA_DIR, CHARTS_DIR
+    from copy import deepcopy
+    selected = get_trading_settings()
+    account_id = execution_account_label(selected)
+    public_limiters = get_exchange_rate_limiters(selected["exchange"], data_dir=DATA_DIR, account_id=account_id)
+    process_context = multiprocessing.get_context("spawn")
+
+    def resolve_runtime_config(instance):
+        config = resolve_strategy_instance_config(instance)
+        config.update(execution=selected, TRADING_SETTINGS=selected, DATA_DIR=DATA_DIR,
+                      EXCHANGE=selected["exchange"], MARKET_TYPE=selected["market_type"],
+                      EXECUTION_MODE=selected["execution_mode"], EXECUTION_ACCOUNT_ID=account_id,
+                      PUBLIC_RATE_LIMITERS=public_limiters)
+        return config
+
+    def stream_settings(configs):
+        from src.core.data.collector import _request_parameters
+        options = dict(selected["market_data"])
+        options["data_dir"] = DATA_DIR
+        # История загружается владельцем потока один раз для всех consumers.
+        options["history_limit"] = max([options["history_limit"]] +
+                                        [_request_parameters(config)[1] + 1 for config in configs])
+        return options
+
+    def desired_streams(configs):
+        streams = set(build_streams_for_configs(configs))
+        if selected["market_type"] == "spot":
+            from src.exchanges.market_data import StreamKey
+            for config in configs:
+                for symbol in config.get("SYMBOLS", []):
+                    streams.add(StreamKey(selected["exchange"], "spot", symbol, "1m"))
+        return sorted(streams)
 
     print("\n🚀 Запуск мультипроцессного пайплайна...")
     info("🚀 Запуск мультипроцессного пайплайна...")
@@ -163,59 +213,43 @@ def run_multiprocess_pipeline():
         warning("⚠️ Нет включённых strategy instances; runtime ждёт команду запуска символа")
 
     instance_configs = {
-        instance.id: resolve_strategy_instance_config(instance)
+        instance.id: resolve_runtime_config(instance)
         for instance in instances
     }
-    symbols = sorted({instance.symbol for instance in instances})
     strategies = ", ".join(f"{i.id}:{i.symbol}:{i.strategy}" for i in instances)
     info(f"📋 Strategy instances: {strategies}")
 
-    # 0. Start WebSocket data provider BEFORE workers
     ws_cache = None
     ws_ready = None
-    try:
-        from src.exchanges.ws_provider_factory import start_ws_provider
-
-        intervals = set()
-        for config in instance_configs.values():
-            style = config.get("STRATEGY_STYLE")
-            preset = config.get("STYLE_PRESETS", {}).get(style, {})
-            intervals.add(preset.get("timeframe", "5m"))
-
-        if len(intervals) == 1:
-            ws_interval = next(iter(intervals))
-            print(f"   📡 Запуск WebSocket провайдера (interval={ws_interval})...")
-            info(f"📡 Запуск WebSocket провайдера для {len(symbols)} символов")
-
-            ws_cache, ws_ready = start_ws_provider(symbols, interval=ws_interval)
-
-            if ws_cache is None:
-                print("   ℹ️ Для выбранного рынка используется REST market-data fallback")
-                info("📡 WebSocket отключён для выбранного рынка; используем REST")
-            else:
-                # Backfill выполняется синхронно внутри provider.
-                print("   ⏳ Загрузка исторических данных...")
-                time.sleep(3)
-                print("   ✅ WebSocket провайдер запущен")
-                info("✅ WebSocket провайдер запущен и кэш заполнен")
-        else:
-            info(f"📡 WebSocket кэш отключён: разные timeframe у инстансов ({sorted(intervals)}). Используем REST.")
-
-    except Exception as e:
-        print(f"   ⚠️ WebSocket провайдер недоступен: {e}")
-        info(f"⚠️ WebSocket провайдер недоступен, используем REST: {e}")
-
+    applied_stream_settings = None
+    applied_streams = None
     workers = {}
     chart_process = None
+    chart_stop_event = None
     last_symbol_command_id = None
     existing_symbol_command = read_json(COMMAND_PATH)
     if existing_symbol_command and existing_symbol_command.get("id"):
         last_symbol_command_id = str(existing_symbol_command["id"])
 
+    def update_market_data():
+        nonlocal applied_stream_settings, applied_streams
+        configs = list(instance_configs.values())
+        options = stream_settings(configs)
+        streams = desired_streams(configs)
+        # refresh_settings запускает reconcile: неизменный polling не должен сбрасывать историю.
+        if options != applied_stream_settings:
+            configure_market_data(settings=options, rate_limiters=public_limiters)
+            applied_stream_settings = deepcopy(options)
+        if streams != applied_streams:
+            sync_subscriptions(streams)
+            applied_streams = streams
+
     def start_worker(instance):
         clear_config_cache()
-        config = resolve_strategy_instance_config(instance)
-        p = multiprocessing.Process(
+        config = resolve_runtime_config(instance)
+        instance_configs[instance.id] = config
+        update_market_data()
+        p = process_context.Process(
             target=run_strategy_instance_pipeline,
             args=(instance.to_dict(), config, ws_cache, ws_ready),
             name=f"Worker-{instance.id}"
@@ -223,13 +257,14 @@ def run_multiprocess_pipeline():
         worker_type = instance.strategy
 
         p.daemon = True
-        p.start()
+        # Сохраняем handle до start: частичный отказ spawn тоже требует cleanup.
         workers[instance.id] = {
             "process": p,
             "instance": instance,
             "started_at": utc_now(),
             "last_exit_code": None,
         }
+        p.start()
         print(f"   🔄 Запущен {worker_type} процесс {instance.id} для {instance.symbol} (PID: {p.pid})")
         info(f"🔄 Запущен {worker_type} процесс {instance.id} для {instance.symbol} (PID: {p.pid})")
         return p
@@ -243,9 +278,11 @@ def run_multiprocess_pipeline():
         process = worker["process"]
         instance = worker["instance"]
         if not process.is_alive():
-            process.join(timeout=0)
+            if process.pid is not None:
+                process.join(timeout=0)
             worker["last_exit_code"] = process.exitcode
             workers.pop(instance_id, None)
+            instance_configs.pop(instance_id, None)
             info(f"ℹ️ Worker {instance_id} уже завершён (exit={process.exitcode})")
             return
 
@@ -269,7 +306,11 @@ def run_multiprocess_pipeline():
             process.join(timeout=3)
 
         worker["last_exit_code"] = process.exitcode
+        if process.is_alive():
+            error(f"❌ Worker {instance_id} всё ещё жив; новый процесс не будет запущен")
+            return
         workers.pop(instance_id, None)
+        instance_configs.pop(instance_id, None)
         info(f"✅ Worker {instance_id} остановлен через {reason} (exit={process.exitcode})")
 
     def refresh_workers_state():
@@ -282,6 +323,7 @@ def run_multiprocess_pipeline():
             worker["last_exit_code"] = process.exitcode
             stopped.append((instance_id, process.exitcode))
             workers.pop(instance_id, None)
+            instance_configs.pop(instance_id, None)
         for instance_id, exit_code in stopped:
             warning(f"⚠️ Worker {instance_id} завершился (exit={exit_code})")
 
@@ -369,67 +411,92 @@ def run_multiprocess_pipeline():
         except Exception as exc:
             warning(f"⚠️ Не удалось записать symbol runtime status: {exc}")
 
-    # 1. Запускаем торговые процессы (по одному на strategy instance)
-    for instance in instances:
-        start_worker(instance)
-
-        # Staggered start: задержка между запуском процессов чтобы не перегрузить API
-        if len(instances) > 5:
-            time.sleep(2)  # 2 секунды между запусками при >5 символов
-
-    # 2. Запускаем отдельный процесс для графиков (если включен)
-    if CHART_SETTINGS.get("enabled", True):
-        chart_p = multiprocessing.Process(
-            target=run_chart_worker,
-            name="Worker-Charts"
-        )
-        # ВАЖНО: chart_p НЕ может быть демоном, так как он сам порождает процессы (ProcessPoolExecutor)
-        chart_p.daemon = False
-        chart_process = chart_p
-        chart_p.start()
-        print(f"   🎨 Запущен процесс генерации графиков (PID: {chart_p.pid})")
-        info(f"🎨 Запущен процесс генерации графиков (PID: {chart_p.pid})")
-    else:
-        print("   🎨 Генерация графиков отключена (CHART_SETTINGS.enabled=false)")
-        info("🎨 Генерация графиков отключена через конфиг")
-
-    print("✅ Все процессы запущены. Нажмите Ctrl+C для остановки.")
-    info("✅ Все процессы запущены")
-
-    # Держим главный процесс живым, пока не нажмут Ctrl+C
     try:
+        # Владелец обязателен и для REST polling: без него workers запускать нельзя.
+        configs = list(instance_configs.values())
+        applied_stream_settings = stream_settings(configs)
+        applied_streams = desired_streams(configs)
+        try:
+            ws_cache, ws_ready = start_ws_provider(
+                streams=applied_streams, settings=applied_stream_settings, rate_limiters=public_limiters,
+            )
+            if ws_cache is None or ws_ready is None:
+                raise RuntimeError("Владелец market-data не вернул shared cache/ready")
+        except Exception as exc:
+            error(f"❌ Запуск владельца market-data не удался; запуск workers запрещён: {exc}")
+            raise RuntimeError("Runtime остановлен: владелец market-data недоступен") from exc
+        info(f"📡 Запущен владелец {len(applied_streams)} потоков; исполнение ждёт свежей непрерывной истории")
+
+        for instance in instances:
+            start_worker(instance)
+            if len(instances) > 5:
+                time.sleep(2)
+
+        if CHART_SETTINGS.get("enabled", True):
+            chart_config = deepcopy(BOT_CONFIG)
+            chart_config.update(DATA_DIR=DATA_DIR, CHARTS_DIR=CHARTS_DIR, CHART_SETTINGS=deepcopy(CHART_SETTINGS))
+            chart_stop_event = process_context.Event()
+            chart_process = process_context.Process(
+                target=run_runtime_chart_worker,
+                args=(selected, chart_config, chart_stop_event),
+                name="Worker-Charts",
+            )
+            # Процесс графиков сам создаёт ProcessPoolExecutor и не может быть daemon.
+            chart_process.daemon = False
+            chart_process.start()
+            info(f"🎨 Запущен процесс генерации графиков (PID: {chart_process.pid})")
+        else:
+            info("🎨 Генерация графиков отключена через конфиг")
+
+        print("✅ Все процессы запущены. Нажмите Ctrl+C для остановки.")
+        info("✅ Все процессы запущены")
+        last_stream_refresh = time.monotonic()
         while True:
             refresh_workers_state()
             handle_symbol_runtime_command()
+            if time.monotonic() - last_stream_refresh >= 30:
+                clear_config_cache()
+                for instance_id, worker in workers.items():
+                    instance_configs[instance_id] = resolve_runtime_config(worker["instance"])
+                for instance_id in set(instance_configs) - set(workers):
+                    instance_configs.pop(instance_id, None)
+                last_stream_refresh = time.monotonic()
+            update_market_data()
             write_symbol_runtime_status()
             time.sleep(1)
     except KeyboardInterrupt:
         print("\n🛑 Остановка главного процесса...")
         info("🛑 Остановка главного процесса...")
     finally:
-        # Stop WebSocket provider
-        try:
-            from src.exchanges.ws_provider_factory import stop_ws_provider
-            stop_ws_provider()
-            info("📡 WebSocket провайдер остановлен")
-        except Exception:
-            pass
-
-        # Graceful shutdown of ALL processes
-        for instance_id in list(workers.keys()):
+        # Readers завершаются до shutdown Manager, включая частичный отказ startup.
+        for instance_id in list(workers):
             stop_worker(instance_id, reason="runtime_shutdown")
-        if chart_process and chart_process.is_alive():
-            chart_process.terminate()
-
-        time.sleep(0.5)
-
-        # Force kill if still alive
-        if chart_process and chart_process.is_alive():
-            print(f"   💀 Force killing PID: {chart_process.pid}")
-            chart_process.kill()
+        if chart_stop_event is not None:
+            chart_stop_event.set()
+        if chart_process is not None and chart_process.pid is not None:
+            chart_process.join(timeout=10)
+            if chart_process.is_alive():
+                chart_process.terminate()
+                chart_process.join(timeout=5)
+            if chart_process.is_alive():
+                chart_process.kill()
+                chart_process.join(timeout=3)
+        try:
+            stop_ws_provider()
+            info("📡 Владелец market-data остановлен")
+        except Exception as exc:
+            warning(f"⚠️ Не удалось остановить владельца market-data: {exc}")
+        write_symbol_runtime_status()
 
 def main():
     """Главная функция"""
+    from src.config import DATA_DIR
+    from src.utils.logger import configure_logging, set_log_context
+    from src.trading_settings import get_trading_settings
+    selected = get_trading_settings()
+    configure_logging(data_dir=DATA_DIR)
+    set_log_context(service="bot", exchange=selected["exchange"], market_type=selected["market_type"],
+                    execution_mode=selected["execution_mode"])
     print_banner()
 
     # Проверяем предварительные условия

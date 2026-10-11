@@ -1,6 +1,31 @@
 {
   "_description": "Core trading parameters - changed occasionally",
   "_version": "1.0.0",
+  "execution": {
+    "account_id": "default",
+    "exchange": "bingx",
+    "market_type": "perpetual",
+    "execution_mode": "read_only",
+    "margin_mode": "isolated",
+    "position_mode": "hedge",
+    "settle_asset": "USDT",
+    "grid_mode": "hedged",
+    "spot": {
+      "quote_budget_usdt": 0,
+      "allow_local_protection": false
+    },
+    "protection": {
+      "trigger_price": "mark",
+      "failure_policy": "pause",
+      "verification_timeout_seconds": 10,
+      "recovery_attempts": 3
+    },
+    "market_data": {
+      "max_age_seconds": 30,
+      "reconcile_interval_seconds": 60,
+      "history_limit": 500
+    }
+  },
   "position": {
     "size_percent": 0.05,
     "min_trade_amount_usdt": 15

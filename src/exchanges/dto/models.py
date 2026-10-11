@@ -31,6 +31,11 @@ class OrderType(Enum):
     STOP_MARKET = "STOP_MARKET"
     TAKE_PROFIT = "TAKE_PROFIT"
     TAKE_PROFIT_MARKET = "TAKE_PROFIT_MARKET"
+    TRAILING_STOP_MARKET = "TRAILING_STOP_MARKET"
+    TRAILING_TP_SL = "TRAILING_TP_SL"
+    LIMIT_MAKER = "LIMIT_MAKER"
+    IMMEDIATE_OR_CANCEL = "IMMEDIATE_OR_CANCEL"
+    FILL_OR_KILL = "FILL_OR_KILL"
 
 
 class OrderStatus(Enum):
@@ -164,6 +169,9 @@ class Position:
     updated_at: Optional[datetime] = None  # Время обновления
     exchange_quantity: Optional[float] = None  # Нативный объём биржи (контракты)
     contract_size: Optional[float] = None  # Размер одного контракта
+    margin_mode: Optional[str] = None
+    available_quantity: Optional[float] = None
+    raw_data: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_long(self) -> bool:

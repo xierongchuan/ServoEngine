@@ -1,4 +1,7 @@
-import type { DashboardData, Trade, TradeStats, ChartFile, ChartData, JournalEntry, JournalStats } from './types';
+import type { DashboardData, Trade, TradeStats, ChartFile, JournalEntry, JournalStats } from './types';
+import type { ChartSnapshot, ChartStream } from './chartTypes';
+import type { ExecutionState } from './executionTypes';
+import type { LogEventsResponse, LogSourcesResponse, LogTailResponse, LogFilters } from './logTypes';
 
 const BASE_URL = import.meta.env.VITE_API_URL || window.location.origin;
 
@@ -8,45 +11,24 @@ function getInitData(): string {
 }
 
 function getWebToken(): string {
-  // X-Web-Token: авторизация через ссылку /weblink (браузер)
-  // DEBUG: log full URL info
-  console.log('[API] URL debug:', {
-    href: window.location.href,
-    origin: window.location.origin,
-    pathname: window.location.pathname,
-    search: window.location.search,
-    hash: window.location.hash,
-  });
-
-  // Проверяем сначала hash (#/auth?token=xxx), затем search (?token=xxx)
-  const hash = window.location.hash;
-  if (hash && hash.includes('token=')) {
-    const hashParams = new URLSearchParams(hash.substring(1)); // убираем #
-    const token = hashParams.get('token');
-    console.log('[API] getWebToken from hash:', token ? token.substring(0,8)+'...' : null);
-    return token || '';
-  }
-  const urlParams = new URLSearchParams(window.location.search);
-  const token = urlParams.get('token');
-  console.log('[API] getWebToken from search:', token ? token.substring(0,8)+'...' : null);
-  return token || '';
+  const hash = window.location.hash.substring(1);
+  const hashParams = new URLSearchParams(hash.includes('?') ? hash.split('?')[1] : hash);
+  return hashParams.get('token') || new URLSearchParams(window.location.search).get('token') || '';
 }
 
 function isWebTokenMode(): boolean {
-  // If there's a token in URL and no Telegram initData
-  const token = getWebToken();
-  const initData = getInitData();
-  const result = !!token && !initData;
-  console.log('[API] isWebTokenMode:', {
-    hasToken: !!token,
-    tokenPreview: token ? token.substring(0,8)+'...' : null,
-    hasInitData: !!initData,
-    result
-  });
-  return result;
+  return !!getWebToken() && !getInitData();
 }
 
-async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
+export class APIError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
+export class AuthenticationError extends APIError {
+  constructor(message: string, status = 401) { super(status, message); }
+}
+
+export async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getWebToken(); // X-Web-Token
   const initData = getInitData(); // X-Telegram-Init-Data
   const useToken = isWebTokenMode();
@@ -54,10 +36,9 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   // Если useToken=true: отправляем X-Web-Token (браузер через /weblink)
   // Если useToken=false: отправляем X-Telegram-Init-Data (Telegram Mini App)
 
-  // DEBUG: log auth details
-  console.log('[API] fetchAPI:', path, { token: token ? token.substring(0,8)+'...' : null, initData: initData ? 'present' : 'none', useToken });
 
   const res = await fetch(`${BASE_URL}${path}`, {
+    cache: 'no-store',
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -71,12 +52,12 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   if (!res.ok) {
     if (res.status === 401) {
       if (useToken) {
-        throw new Error('Ссылка истекла или недействительна. Используйте /weblink для новой ссылки.');
+        throw new AuthenticationError('Ссылка истекла, отозвана или недействительна. Получите новую через /weblink.');
       }
-      throw new Error('Откройте панель через Telegram Mini App');
+      throw new AuthenticationError('Сессия Telegram истекла или недействительна. Закройте панель и откройте её заново через бота.');
     }
     if (res.status === 403) {
-      throw new Error('У вас нет доступа к этой панели');
+      throw new AuthenticationError('У вас нет доступа к этой панели', 403);
     }
     // Try to extract error detail from response body
     let detail = '';
@@ -84,14 +65,22 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
       const body = await res.json();
       if (body.detail) {
         detail = `: ${body.detail}`;
-        if (body.type) detail += ` (${body.type})`;
+        if (body.request_id) detail += ` (ID: ${body.request_id})`;
       }
     } catch {
       // Response body is not JSON
     }
-    throw new Error(`API error: ${res.status}${detail}`);
+    throw new APIError(res.status, `API error: ${res.status}${detail}`);
   }
-  return res.json();
+  try {
+    return await res.json();
+  } catch {
+    throw new APIError(502, 'Некорректный ответ сервера. Повторите запрос.');
+  }
+}
+
+export function getExecutionState(signal?: AbortSignal) {
+  return fetchAPI<ExecutionState>('/api/execution/state', { signal });
 }
 
 export function getDashboard() {
@@ -114,10 +103,26 @@ export function getChartsList() {
   return fetchAPI<ChartFile[]>('/api/charts/list');
 }
 
-export function getChartData(symbol: string, range: string = 'AUTO') {
-  return fetchAPI<ChartData>(
-    `/api/chart-data/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}`
-  );
+export function getChartSources(symbol: string, signal?: AbortSignal) {
+  return fetchAPI<ChartStream[]>(`/api/chart-data/sources/${encodeURIComponent(symbol)}`, { signal });
+}
+
+export function getChartData(symbol: string, range: string = 'AUTO', signal?: AbortSignal, stream?: ChartStream) {
+  const query = new URLSearchParams({ range });
+  if (stream) {
+    query.set('exchange', stream.exchange);
+    query.set('market_type', stream.market_type);
+    query.set('interval', stream.interval);
+  }
+  return fetchAPI<ChartSnapshot>(`/api/chart-data/${encodeURIComponent(symbol)}?${query}`, { signal });
+}
+
+export async function getWebSocketUrl(signal?: AbortSignal): Promise<string> {
+  const { ticket } = await fetchAPI<{ ticket: string }>('/api/ws-ticket', { method: 'POST', signal });
+  const url = new URL('/ws', BASE_URL);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.searchParams.set('ticket', ticket);
+  return url.toString();
 }
 
 export function getChartUrl(filename: string) {
@@ -130,12 +135,24 @@ export function getChartUrl(filename: string) {
   return `${BASE_URL}/api/charts/${encodeURIComponent(filename)}?${authParam}=${encodeURIComponent(auth)}`;
 }
 
-export function getSystemLogs(lines = 200) {
-  return fetchAPI<string[]>(`/api/logs/system?lines=${lines}`);
+export async function getSystemLogs(lines = 200) {
+  const response = await fetchAPI<LogTailResponse>(`/api/logs/system?lines=${lines}`);
+  return response.lines;
 }
 
-export function getSymbolLogs(symbol: string, lines = 200) {
-  return fetchAPI<string[]>(`/api/logs/${encodeURIComponent(symbol)}?lines=${lines}`);
+export async function getSymbolLogs(symbol: string, lines = 200) {
+  const response = await fetchAPI<LogTailResponse>(`/api/logs/${encodeURIComponent(symbol)}?lines=${lines}`);
+  return response.lines;
+}
+
+export function getLogEvents(filters: LogFilters = {}, signal?: AbortSignal) {
+  const query = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => { if (value !== undefined && value !== '') query.set(key, String(value)); });
+  return fetchAPI<LogEventsResponse>(`/api/logs/events?${query}`, { signal });
+}
+
+export function getLogSources(signal?: AbortSignal) {
+  return fetchAPI<LogSourcesResponse>('/api/logs/sources', { signal });
 }
 
 // ============================================================================

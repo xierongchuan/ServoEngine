@@ -9,8 +9,11 @@ Provides endpoints for:
 - Trading config (config/trading.json)
 """
 
+
+import asyncio
 import json
 import logging
+import tempfile
 import os
 import re
 from pathlib import Path
@@ -20,7 +23,15 @@ from fastapi.responses import JSONResponse
 
 from ..services.auth import get_current_user
 from ..services.data_reader import DataReader
-from ..config import CONFIG_PATH
+from ..config import CONFIG_PATH, DATA_DIR
+from src.config_loader import deep_merge
+from src.ai_settings import guard_config_ai, migrate_ai_settings, normalize_ai_settings, AISettingsError
+from src.utils.log_context import SecretRedactor
+from src.ai.settings_store import read_config_document, config_write_lock
+from src.trading_settings import (
+    managed_state_block_reason, read_trading_settings,
+    trading_settings_lock, validate_trading_settings,
+)
 
 logger = logging.getLogger("panel.config")
 
@@ -89,16 +100,170 @@ def _load_json(path: Path) -> dict:
     try:
         if path.exists():
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                return _public_config(json.load(f))
     except Exception as e:
-        logger.warning("Failed to load %s: %s", path, e)
+        logger.warning("⚠️ Не удалось загрузить конфигурацию: тип=%s", type(e).__name__)
     return {}
 
 
+def _read_config_document(path):
+    try:
+        return read_config_document(path)
+    except AISettingsError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+def _base_write_lock():
+    return config_write_lock(CONFIG_DIR / "base.json")
+
+
+def _update_base_document(patch):
+    """Общая read-modify-write транзакция для /base и legacy /config AI PUT."""
+    path = CONFIG_DIR / "base.json"
+    try:
+        with _base_write_lock():
+            current = _read_config_document(path)
+            if "ai" in patch and "ai" not in current:
+                raise HTTPException(422, "Сохранённая конфигурация AI отсутствует")
+            if "ai" in current:
+                normalize_ai_settings(current["ai"])
+            current = deep_merge(current, patch)
+            _save_json(path, current)
+            return current
+    except AISettingsError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except OSError:
+        raise HTTPException(500, "Не удалось сохранить базовую конфигурацию") from None
+
+
+def _guard_ai_request(data):
+    try:
+        return guard_config_ai(data)
+    except AISettingsError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+def _public_config(data):
+    # Старый файл с credentials не должен раскрыть их через произвольный GET.
+    from src.ai_settings import _SECRET_FIELD
+    redactor = SecretRedactor()
+    def strip(value):
+        if isinstance(value, dict):
+            return {key: strip(item) for key, item in value.items()
+                                if not _SECRET_FIELD.search(str(key)) and redactor.text(key) == key}
+        if isinstance(value, list):
+            return [strip(item) for item in value]
+        return redactor.text(value) if isinstance(value, str) else value
+    return strip(data)
+
+
 def _save_json(path: Path, data: dict) -> None:
-    """Save JSON file with pretty formatting."""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    """Атомарная замена: читатель видит только полный JSON."""
+    guarded = _guard_ai_request(data)
+    if path.parent in {STRATEGIES_DIR, PROFILES_DIR}:
+        if "AI_SETTINGS" in guarded:
+            if "ai" in guarded:
+                raise HTTPException(422, "Используйте только один раздел AI")
+            guarded["ai"] = guarded.pop("AI_SETTINGS")
+        if "ai" in guarded:
+            inherited = _load_json(CONFIG_DIR / "base.json")
+            strategy = path.stem if path.parent == STRATEGIES_DIR else guarded.get("_strategy")
+            if strategy:
+                inherited = deep_merge(inherited, _load_json(STRATEGIES_DIR / f"{str(strategy).lower()}.json"))
+            parent = guarded.get("_inherits") if path.parent == PROFILES_DIR else None
+            if parent and parent != "default":
+                inherited = deep_merge(inherited, _load_profile_with_inheritance(str(parent)))
+            provider = normalize_ai_settings(inherited.get("ai", {}))["provider"]
+            try:
+                guarded["ai"] = migrate_ai_settings(guarded["ai"], provider)
+            except AISettingsError as exc:
+                raise HTTPException(422, str(exc)) from None
+    if path == CONFIG_DIR / "base.json" and "ai" in guarded:
+        guarded["ai"] = normalize_ai_settings(guarded["ai"])
+    data.clear()
+    data.update(guarded)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def _trading_write_lock():
+    """Тот же lock, который supervisor держит от starting до spawn."""
+    return trading_settings_lock(CONFIG_DIR / "trading.json")
+
+
+def _execution_change_block_reason() -> str | None:
+    from . import runtime
+    status = runtime._normalize_status(runtime._read_json(runtime.STATUS_PATH))
+    if status.get("stale") or status.get("state") != "stopped" or status.get("runtime_pid"):
+        return "Остановите runtime; требуется актуальный подтверждённый статус stopped"
+    command = runtime._read_json(runtime.COMMAND_PATH)
+    if runtime.COMMAND_PATH.exists() and command is None:
+        return "Не удалось проверить очередь runtime; смена исполнения запрещена"
+    if command and command.get("id") != status.get("last_command_id") and command.get("action") in {"start", "restart"}:
+        return "В очереди есть команда запуска runtime; дождитесь её завершения и остановите runtime"
+    return managed_state_block_reason(DATA_DIR)
+
+
+def _merge_execution(current: dict, patch: dict) -> dict:
+    if not isinstance(patch, dict):
+        raise ValueError("execution должен быть объектом")
+    # Проверяем patch отдельно: deep_merge не должен скрывать неизвестные метаполя.
+    unknown = patch.keys() - current.keys()
+    if unknown:
+        raise ValueError(f"Неизвестные поля execution: {', '.join(sorted(unknown))}")
+    for key in ("protection", "market_data", "spot"):
+        if key in patch:
+            if not isinstance(patch[key], dict) or patch[key].keys() - current[key].keys():
+                raise ValueError(f"Недопустимые поля execution.{key}")
+    result = validate_trading_settings(deep_merge(current, patch))
+    if result != current:
+        reason = _execution_change_block_reason()
+        if reason:
+            logger.warning("⚠️ Изменение исполнения заблокировано: %s", reason)
+            raise HTTPException(status_code=409, detail=reason)
+    return result
+
+
+@router.get("/execution")
+async def get_execution_config(_user: dict = Depends(get_current_user)) -> dict:
+    """Сохранённый конфиг, не снимок отдельного процесса панели."""
+    try:
+        return read_trading_settings(CONFIG_DIR / "trading.json")
+    except (OSError, ValueError):
+        raise HTTPException(status_code=500, detail="Не удалось прочитать настройки исполнения")
+
+
+@router.put("/execution")
+async def update_execution_config(request: Request, _user: dict = Depends(get_current_user)) -> dict:
+    try:
+        patch = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Некорректный JSON")
+    if not _use_new_config_system():
+        raise HTTPException(status_code=400, detail="Модульная конфигурация недоступна")
+    try:
+        with _trading_write_lock():
+            path = CONFIG_DIR / "trading.json"
+            current_execution = read_trading_settings(path)
+            execution = _merge_execution(current_execution, patch)
+            current = _load_json(path)
+            current["execution"] = execution
+            _save_json(path, current)
+    except ValueError as exc:
+        logger.warning("⚠️ Неверные настройки исполнения: %s", exc)
+        raise HTTPException(status_code=422, detail=str(exc))
+    except OSError as exc:
+        logger.error("❌ Не удалось сохранить настройки исполнения: %s", exc)
+        raise HTTPException(status_code=500, detail="Не удалось сохранить настройки исполнения")
+    return {"status": "ok", "execution": execution, "needs_restart": execution != current_execution}
 
 
 def _normalize_symbol_key(symbol: str) -> str:
@@ -132,7 +297,11 @@ def _load_profile_with_inheritance(profile: str, seen: set[str] | None = None) -
     parent_name = config.get("_inherits")
     if parent_name and parent_name != "default":
         parent = _load_profile_with_inheritance(str(parent_name), seen)
-        return {**parent, **config}
+        result = {**parent, **config}
+        for key in ("ai", "AI_SETTINGS"):
+            if key in config and key in parent:
+                result[key] = deep_merge({key: parent[key]}, {key: config[key]})[key]
+        return result
     return config
 
 
@@ -193,11 +362,11 @@ def _validate_strategy_instance(raw: dict) -> dict:
 
 
 def _runtime_exchange(exchange: str | None = None) -> str:
-    return str(exchange or os.getenv("EXCHANGE", "bingx")).lower()
+    return str(exchange or read_trading_settings(CONFIG_DIR / "trading.json")["exchange"]).lower()
 
 
 def _runtime_market() -> str:
-    return os.getenv("MARKET_TYPE", "perpetual").lower()
+    return read_trading_settings(CONFIG_DIR / "trading.json")["market_type"]
 
 
 def _get_exchange_symbols(active: dict, exchange: str) -> list[str]:
@@ -303,15 +472,10 @@ def validate_config_values(config: dict) -> list[str]:
                 if not isinstance(lev, (int, float)) or lev < 1 or lev > 125:
                     errors.append(f"STYLE_PRESETS.{style}.leverage: must be between 1 and 125")
 
-    # Validate AI_SETTINGS sub-fields
-    ai = config.get("AI_SETTINGS")
-    if isinstance(ai, dict):
-        temp = ai.get("temperature")
-        if temp is not None and (not isinstance(temp, (int, float)) or temp < 0 or temp > 2):
-            errors.append("AI_SETTINGS.temperature: must be between 0 and 2")
-        max_tokens = ai.get("max_tokens")
-        if max_tokens is not None and (not isinstance(max_tokens, int) or max_tokens < 1):
-            errors.append("AI_SETTINGS.max_tokens: must be a positive integer")
+    try:
+        guard_config_ai(config)
+    except AISettingsError as exc:
+        errors.append(str(exc))
 
     return errors
 
@@ -367,7 +531,7 @@ def _build_merged_config() -> dict:
 
         # Base config sections
         merged["EXCHANGE_FEES"] = base.get("exchange", {}).get("fees", {})
-        merged["AI_SETTINGS"] = base.get("ai", {})
+        merged["AI_SETTINGS"] = normalize_ai_settings(base.get("ai", {}))
         merged["CHART_RANGES"] = base.get("chart_ranges", {})
         merged["PLOTTER_RANGES"] = base.get("plotter_ranges", {})
         merged["TECHNICAL_ANALYSIS"] = base.get("technical_analysis", {})
@@ -390,7 +554,7 @@ def _build_merged_config() -> dict:
         return merged
 
     # Legacy fallback
-    return reader.read_config()
+    return _public_config(reader.read_config())
 
 
 @router.get("")
@@ -414,7 +578,7 @@ async def validate_config(request: Request, _user: dict = Depends(get_current_us
     """Validate config without saving."""
     try:
         body = await request.body()
-        new_config = json.loads(body)
+        new_config = _guard_ai_request(json.loads(body))
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
@@ -437,7 +601,7 @@ async def update_config(request: Request, _user: dict = Depends(get_current_user
     """Update config — routes to appropriate config file in new system."""
     try:
         body = await request.body()
-        new_config = json.loads(body)
+        new_config = _guard_ai_request(json.loads(body))
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
@@ -466,6 +630,11 @@ async def update_config(request: Request, _user: dict = Depends(get_current_user
                 "ENABLE_NEWS", "AGGRESSIVE_MODE",
             }
 
+            # Общий legacy PUT также обязан сохранять AI, а не молча игнорировать.
+            ai_changes = new_config.get("AI_SETTINGS", new_config.get("ai"))
+            if ai_changes is not None:
+                await asyncio.to_thread(_update_base_document, {"ai": ai_changes})
+
             # Update active.json
             active_changes = {k: v for k, v in new_config.items() if k in active_keys}
             if active_changes:
@@ -487,27 +656,30 @@ async def update_config(request: Request, _user: dict = Depends(get_current_user
             # Update trading.json
             trading_changes = {k: v for k, v in new_config.items() if k in trading_keys}
             if trading_changes:
-                trading = _load_json(CONFIG_DIR / "trading.json")
-                pos = trading.setdefault("position", {})
-                risk = trading.setdefault("risk", {})
-                features = trading.setdefault("features", {})
-                if "POSITION_SIZE_PERCENT" in trading_changes:
-                    pos["size_percent"] = trading_changes["POSITION_SIZE_PERCENT"]
-                if "MIN_TRADE_AMOUNT_USDT" in trading_changes:
-                    pos["min_trade_amount_usdt"] = trading_changes["MIN_TRADE_AMOUNT_USDT"]
-                if "MIN_CONFIDENCE_THRESHOLD" in trading_changes:
-                    risk["min_confidence_threshold"] = trading_changes["MIN_CONFIDENCE_THRESHOLD"]
-                if "MIN_RISK_REWARD_RATIO" in trading_changes:
-                    risk["min_risk_reward_ratio"] = trading_changes["MIN_RISK_REWARD_RATIO"]
-                if "TAKE_PROFIT_PERCENT" in trading_changes:
-                    risk["take_profit_percent"] = trading_changes["TAKE_PROFIT_PERCENT"]
-                if "STOP_LOSS_PERCENT" in trading_changes:
-                    risk["stop_loss_percent"] = trading_changes["STOP_LOSS_PERCENT"]
-                if "ENABLE_NEWS" in trading_changes:
-                    features["enable_news"] = trading_changes["ENABLE_NEWS"]
-                if "AGGRESSIVE_MODE" in trading_changes:
-                    features["aggressive_mode"] = trading_changes["AGGRESSIVE_MODE"]
-                _save_json(CONFIG_DIR / "trading.json", trading)
+                with _trading_write_lock():
+                    trading = _load_json(CONFIG_DIR / "trading.json")
+                    pos = trading.setdefault("position", {})
+                    risk = trading.setdefault("risk", {})
+                    features = trading.setdefault("features", {})
+                    if "POSITION_SIZE_PERCENT" in trading_changes:
+                        pos["size_percent"] = trading_changes["POSITION_SIZE_PERCENT"]
+                    if "MIN_TRADE_AMOUNT_USDT" in trading_changes:
+                        pos["min_trade_amount_usdt"] = trading_changes["MIN_TRADE_AMOUNT_USDT"]
+                    if "MIN_CONFIDENCE_THRESHOLD" in trading_changes:
+                        risk["min_confidence_threshold"] = trading_changes["MIN_CONFIDENCE_THRESHOLD"]
+                    if "MIN_RISK_REWARD_RATIO" in trading_changes:
+                        risk["min_risk_reward_ratio"] = trading_changes["MIN_RISK_REWARD_RATIO"]
+                    if "TAKE_PROFIT_PERCENT" in trading_changes:
+                        risk["take_profit_percent"] = trading_changes["TAKE_PROFIT_PERCENT"]
+                    if "STOP_LOSS_PERCENT" in trading_changes:
+                        risk["stop_loss_percent"] = trading_changes["STOP_LOSS_PERCENT"]
+                    if "ENABLE_NEWS" in trading_changes:
+                        if type(trading_changes["ENABLE_NEWS"]) is not bool:
+                            raise HTTPException(status_code=422, detail="ENABLE_NEWS должен быть boolean")
+                        features["enable_news"] = trading_changes["ENABLE_NEWS"]
+                    if "AGGRESSIVE_MODE" in trading_changes:
+                        features["aggressive_mode"] = trading_changes["AGGRESSIVE_MODE"]
+                    _save_json(CONFIG_DIR / "trading.json", trading)
 
             logger.info("Config saved to new config system. Changes: %s", changes)
         except OSError as e:
@@ -515,7 +687,7 @@ async def update_config(request: Request, _user: dict = Depends(get_current_user
             raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
     else:
         try:
-            reader.write_config(new_config)
+            reader.write_config(_guard_ai_request(new_config))
             logger.info("Config saved to legacy file. Changes: %s", changes)
         except OSError as e:
             logger.error("Failed to write config: %s", e)
@@ -586,7 +758,7 @@ async def update_active_config(request: Request, _user: dict = Depends(get_curre
     """Update active.json configuration."""
     try:
         body = await request.body()
-        new_data = json.loads(body)
+        new_data = _guard_ai_request(json.loads(body))
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
@@ -639,35 +811,34 @@ async def update_trading_config(request: Request, _user: dict = Depends(get_curr
     """Update trading.json configuration."""
     try:
         body = await request.body()
-        new_data = json.loads(body)
+        new_data = _guard_ai_request(json.loads(body))
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
     if not _use_new_config_system():
         raise HTTPException(status_code=400, detail="New config system not available")
 
+    if not isinstance(new_data, dict):
+        raise HTTPException(status_code=422, detail="Конфигурация должна быть объектом")
     trading_path = CONFIG_DIR / "trading.json"
-    current = _load_json(trading_path)
-
-    # Deep merge
-    def deep_merge(base: dict, override: dict) -> dict:
-        result = base.copy()
-        for key, value in override.items():
-            if key.startswith("_"):
-                continue
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = deep_merge(result[key], value)
-            else:
-                result[key] = value
-        return result
-
-    current = deep_merge(current, new_data)
-
     try:
-        _save_json(trading_path, current)
-        logger.info("Trading config updated")
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
+        with _trading_write_lock():
+            current_execution = read_trading_settings(trading_path)
+            execution = _merge_execution(current_execution, new_data.get("execution", {}))
+            current = deep_merge(_load_json(trading_path), new_data)
+            current["execution"] = execution
+            if not isinstance(current.get("features", {}), dict):
+                raise ValueError("features должен быть объектом")
+            if type(current.get("features", {}).get("enable_news", False)) is not bool:
+                raise ValueError("features.enable_news должен быть boolean")
+            _save_json(trading_path, current)
+            logger.info("✅ Торговая конфигурация обновлена")
+    except ValueError as exc:
+        logger.warning("⚠️ Неверная торговая конфигурация: %s", exc)
+        raise HTTPException(status_code=422, detail=str(exc))
+    except OSError as exc:
+        logger.error("❌ Не удалось сохранить торговую конфигурацию: %s", exc)
+        raise HTTPException(status_code=500, detail="Не удалось сохранить торговую конфигурацию")
 
     return {"status": "ok", "config": current}
 
@@ -677,7 +848,7 @@ async def get_base_config(_user: dict = Depends(get_current_user)) -> dict:
     """Get base.json configuration (infrastructure, AI, etc.)."""
     if not _use_new_config_system():
         return {}
-    return _load_json(CONFIG_DIR / "base.json")
+    return _public_config(_read_config_document(CONFIG_DIR / "base.json"))
 
 
 @router.put("/base")
@@ -685,37 +856,16 @@ async def update_base_config(request: Request, _user: dict = Depends(get_current
     """Update base.json configuration."""
     try:
         body = await request.body()
-        new_data = json.loads(body)
+        new_data = _guard_ai_request(json.loads(body))
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
     if not _use_new_config_system():
         raise HTTPException(status_code=400, detail="New config system not available")
 
-    base_path = CONFIG_DIR / "base.json"
-    current = _load_json(base_path)
-
-    # Deep merge
-    def deep_merge(base: dict, override: dict) -> dict:
-        result = base.copy()
-        for key, value in override.items():
-            if key.startswith("_"):
-                continue
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = deep_merge(result[key], value)
-            else:
-                result[key] = value
-        return result
-
-    current = deep_merge(current, new_data)
-
-    try:
-        _save_json(base_path, current)
-        logger.info("Base config updated")
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
-
-    return {"status": "ok", "config": current}
+    current = await asyncio.to_thread(_update_base_document, new_data)
+    logger.info("✅ Базовая конфигурация обновлена")
+    return {"status": "ok", "config": _public_config(current)}
 
 
 @router.post("/active/symbol")
@@ -1019,7 +1169,7 @@ async def update_strategy(name: str, request: Request, _user: dict = Depends(get
 
     try:
         body = await request.body()
-        new_data = json.loads(body)
+        new_data = _guard_ai_request(json.loads(body))
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
@@ -1030,17 +1180,6 @@ async def update_strategy(name: str, request: Request, _user: dict = Depends(get
     current = _load_json(path)
 
     # Deep merge (preserve _description, _version)
-    def deep_merge(base: dict, override: dict) -> dict:
-        result = base.copy()
-        for key, value in override.items():
-            if key.startswith("_"):
-                continue
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = deep_merge(result[key], value)
-            else:
-                result[key] = value
-        return result
-
     current = deep_merge(current, new_data)
 
     try:
@@ -1098,6 +1237,8 @@ def _get_profile_schema() -> dict:
             valid_sections["loops"] = []
             valid_sections["regime_overrides"] = []
             valid_sections["interaction_rules"] = []
+            valid_sections["ai"] = []
+            valid_sections["AI_SETTINGS"] = []
             valid_sections["ai_integration"] = []
             valid_sections["ai_filter"] = []
             valid_sections["sessions"] = []
@@ -1236,7 +1377,7 @@ async def update_profile(name: str, request: Request, _user: dict = Depends(get_
 
     try:
         body = await request.body()
-        new_data = json.loads(body)
+        new_data = _guard_ai_request(json.loads(body))
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
@@ -1264,7 +1405,8 @@ async def update_profile(name: str, request: Request, _user: dict = Depends(get_
             continue
         if key in current and isinstance(current[key], dict) and isinstance(value, dict):
             # For dict sections, merge but don't add new keys
-            current[key] = {**current[key], **value}
+            current[key] = (deep_merge({key: current[key]}, {key: value})[key]
+                            if key in {"ai", "AI_SETTINGS"} else {**current[key], **value})
         else:
             current[key] = value
 

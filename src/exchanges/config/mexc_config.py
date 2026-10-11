@@ -1,12 +1,33 @@
 """Конфигурации MEXC Spot и USDT-M perpetual."""
 
 import os
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
+
+from src.trading_settings import get_trading_settings, validate_trading_settings
 
 from .base import ExchangeConfig
 
 
 class _MEXCConfigBase(ExchangeConfig):
+    def __init__(self, is_demo: bool = False, settings: Optional[Dict[str, Any]] = None):
+        selected = validate_trading_settings(settings) if settings is not None else get_trading_settings()
+        if settings is None and selected["exchange"] != "mexc":
+            selected["execution_mode"] = "read_only"
+        selected["exchange"] = "mexc"
+        selected["market_type"] = "spot" if isinstance(self, MEXCSpotConfig) else "perpetual"
+        if selected["market_type"] == "spot" and settings is None:
+            selected.update(position_mode="one_way", grid_mode="inventory")
+            selected["protection"]["trigger_price"] = "last"
+        if is_demo:
+            selected["execution_mode"] = "read_only"
+        self._settings = validate_trading_settings(selected)
+        # read_only работает с production API; is_demo не должен притворяться sandbox.
+        super().__init__(is_demo=False)
+
+    @property
+    def execution_mode(self) -> str:
+        return self._settings["execution_mode"]
+
     @property
     def name(self) -> str:
         return "mexc"
@@ -34,11 +55,11 @@ class _MEXCConfigBase(ExchangeConfig):
 
     @property
     def live_trading_enabled(self) -> bool:
-        return os.getenv("MEXC_ENABLE_LIVE_TRADING", "false").lower() in {"1", "true", "yes", "on"}
+        return self.execution_mode == "live"
 
     @property
     def settle_asset(self) -> str:
-        return os.getenv("MEXC_SETTLE_ASSET", "USDT").upper()
+        return self._settings["settle_asset"]
 
     def _load_from_env(self) -> None:
         self._api_key = os.getenv("MEXC_API_KEY", "")
@@ -60,7 +81,7 @@ class MEXCFuturesConfig(_MEXCConfigBase):
 
     @property
     def default_leverage(self) -> int:
-        return int(os.getenv("MEXC_DEFAULT_LEVERAGE", "10"))
+        return 10
 
     @property
     def max_leverage(self) -> int:
@@ -68,11 +89,11 @@ class MEXCFuturesConfig(_MEXCConfigBase):
 
     @property
     def margin_mode(self) -> str:
-        return os.getenv("MEXC_MARGIN_MODE", "isolated").lower()
+        return self._settings["margin_mode"]
 
     @property
     def position_mode(self) -> str:
-        return os.getenv("MEXC_POSITION_MODE", "hedge").lower()
+        return self._settings["position_mode"]
 
 
 class MEXCSpotConfig(_MEXCConfigBase):

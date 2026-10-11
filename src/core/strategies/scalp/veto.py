@@ -5,7 +5,7 @@ import re
 import time
 from typing import Dict, Optional
 
-from src.config import AI_VETO_OVERRIDE, AI_REGIME_OVERRIDE, AI_MODEL
+from src import config as runtime_config
 from src.utils.logger import info, warning
 
 
@@ -21,13 +21,9 @@ class ScalpVetoProcessor:
         ai_cfg = config.get("ai_integration", {})
         self._regime_ai_enabled = ai_cfg.get("regime_enabled", True)
         self._regime_interval_sec = ai_cfg.get("regime_interval_seconds", 300)
-        self._regime_model = AI_REGIME_OVERRIDE.get("model", None) or AI_MODEL
-        self._regime_temperature = AI_REGIME_OVERRIDE.get("temperature", 0.2)
-        self._regime_max_tokens = AI_REGIME_OVERRIDE.get("max_tokens", 150)
+
         self._veto_enabled = ai_cfg.get("veto_enabled", True)
-        self._veto_model = AI_VETO_OVERRIDE.get("model", None) or AI_MODEL
-        self._veto_temperature = AI_VETO_OVERRIDE.get("temperature", 0.1)
-        self._veto_max_tokens = AI_VETO_OVERRIDE.get("max_tokens", 100)
+
         self._veto_staleness_sec = ai_cfg.get("veto_staleness_seconds", 10)
         self._veto_max_cycles = ai_cfg.get("veto_max_stale_cycles", 2)
         self._borderline_quality = ai_cfg.get("borderline_quality_threshold", 0.3)
@@ -112,9 +108,8 @@ class ScalpVetoProcessor:
             prompt = ScalpVetoStrategy().get_strategy_section(veto_ctx)
             raw_response = get_prediction(
                 prompt,
-                model=self._veto_model,
-                max_tokens=self._veto_max_tokens,
-                temperature=self._veto_temperature,
+                role="veto",
+                config=runtime_config.BOT_CONFIG,
             )
             ai_result = parse_response(raw_response)
 
@@ -199,9 +194,8 @@ class ScalpVetoProcessor:
             prompt = ScalpRegimeStrategy().get_strategy_section(regime_ctx)
             raw_response = get_prediction(
                 prompt,
-                model=self._regime_model,
-                max_tokens=self._regime_max_tokens,
-                temperature=self._regime_temperature,
+                role="regime",
+                config=runtime_config.BOT_CONFIG,
             )
 
             ai_result = self._parse_regime_response(raw_response)

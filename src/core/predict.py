@@ -1,136 +1,34 @@
 import json
-import requests
 import time
-from src.config import AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_PROVIDER, AI_TEMPERATURE, AI_MAX_TOKENS, AI_REASONING, AI_RETRY_COUNT, AI_PROVIDER_ROUTING, AI_FALLBACK_MODELS, AI_REQUEST_TIMEOUT, AI_RETRY_BACKOFF_BASE, VALIDATION
+from src import config as runtime_config
+from src.config import VALIDATION
+from src.ai_settings import resolve_ai_role, migrate_ai_settings, AISettingsError
+from src.ai.client import complete, AIProviderError
 from src.utils.logger import info, error, warning
 
-# HTTP status codes worth retrying
-_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
-def get_prediction(prompt, model=None, max_tokens=None, temperature=None):
-    """Отправляет промпт в AI (OpenRouter) и получает ответ.
+def get_prediction(prompt, model=None, max_tokens=None, temperature=None, *, role=None, config=None):
+    """Запрос к актуальному провайдеру; при любой ошибке безопасный HOLD."""
+    try:
+        settings = runtime_config.get_current_ai_settings(config)
+        selected = resolve_ai_role(settings, role)
+        if model is not None:
+            selected["model"] = model
+        if max_tokens is not None:
+            selected["max_tokens"] = max_tokens
+        if temperature is not None:
+            selected["temperature"] = temperature
+        migrate_ai_settings({"provider": selected["provider"], "model": selected["model"],
+                             "temperature": selected["temperature"], "max_tokens": selected["max_tokens"]})
+        return complete(selected, prompt, use_fallbacks=role is None and model is None)
+    except (AIProviderError, AISettingsError) as exc:
+        code = exc.code if isinstance(exc, AIProviderError) else "invalid_settings"
+        error(f"❌ Запрос AI отклонён: код={code}", category="llm")
+    except Exception:
+        code = "internal_error"
+        error("❌ Внутренняя ошибка запроса AI", category="llm")
+    return {"action": "hold", "confidence": 0.0, "reason": f"Ошибка API: {code}"}
 
-    Args:
-        prompt: Текст промпта
-        model: Опциональная модель (по умолчанию AI_MODEL из конфига)
-        max_tokens: Опциональный лимит токенов (по умолчанию AI_MAX_TOKENS)
-        temperature: Опциональная температура (по умолчанию AI_TEMPERATURE)
-    """
-    url = AI_BASE_URL
-    headers = {
-        "Authorization": f"Bearer {AI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    use_model = model or AI_MODEL
-    use_max_tokens = max_tokens if max_tokens is not None else AI_MAX_TOKENS
-    use_temperature = temperature if temperature is not None else AI_TEMPERATURE
-
-    if AI_PROVIDER == "openrouter":
-        headers["HTTP-Referer"] = "https://github.com/xierongchuan/ServoEngine" # Replace with actual site if exists
-        headers["X-Title"] = "Servo Engine"
-    payload = {
-        "model": use_model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": use_max_tokens,
-        "temperature": use_temperature,
-    }
-
-    if AI_REASONING.get("enabled", False):
-        reasoning = {}
-        if "effort" in AI_REASONING:
-            reasoning["effort"] = AI_REASONING["effort"]
-        elif "max_tokens" in AI_REASONING:
-            reasoning["max_tokens"] = AI_REASONING["max_tokens"]
-        if "exclude" in AI_REASONING:
-            reasoning["exclude"] = AI_REASONING["exclude"]
-        payload["reasoning"] = reasoning
-
-    # OpenRouter: provider routing and model fallbacks (only for default model)
-    if AI_PROVIDER == "openrouter" and not model:
-        if AI_PROVIDER_ROUTING:
-            payload["provider"] = AI_PROVIDER_ROUTING
-        if AI_FALLBACK_MODELS:
-            payload["models"] = [use_model] + AI_FALLBACK_MODELS
-            del payload["model"]
-
-    last_error = None
-    for attempt in range(AI_RETRY_COUNT + 1):
-        try:
-            response = requests.post(url, json=payload, headers=headers, timeout=AI_REQUEST_TIMEOUT)
-
-            # Check for retryable HTTP errors (502, 429, etc.)
-            if response.status_code in _RETRYABLE_STATUS_CODES:
-                error(f"❌ API ответ ({response.status_code}): {response.text[:500]}")
-                if attempt < AI_RETRY_COUNT:
-                    delay = AI_RETRY_BACKOFF_BASE ** (attempt + 1)
-                    warning(f"⚠️ Retryable HTTP {response.status_code}. Повтор через {delay} сек (попытка {attempt+1}/{AI_RETRY_COUNT})...")
-                    time.sleep(delay)
-                    continue
-                response.raise_for_status()
-
-            if response.status_code != 200:
-                error(f"❌ API ответ ({response.status_code}): {response.text[:500]}")
-            response.raise_for_status()
-            data = response.json()
-
-            # Логируем структуру ответа для отладки
-            info(f"📡 API response keys: {list(data.keys())}")
-
-            # Проверяем структуру ответа — может быть ошибка внутри JSON (OpenRouter)
-            if "error" in data and "choices" not in data:
-                err_msg = json.dumps(data, ensure_ascii=False)[:1000]
-                error(f"❌ Полный ответ API: {err_msg}")
-                if attempt < AI_RETRY_COUNT:
-                    delay = AI_RETRY_BACKOFF_BASE ** (attempt + 1)
-                    warning(f"⚠️ API вернул ошибку в JSON. Повтор через {delay} сек (попытка {attempt+1}/{AI_RETRY_COUNT})...")
-                    time.sleep(delay)
-                    continue
-                raise ValueError("Некорректный ответ API: нет поля choices")
-
-            if "choices" not in data or not data["choices"]:
-                error(f"❌ Полный ответ API: {json.dumps(data, ensure_ascii=False)[:1000]}")
-                raise ValueError("Некорректный ответ API: нет поля choices")
-
-            msg = data["choices"][0]["message"]
-            content = msg.get("content", "")
-            # Reasoning-модели (R1) могут вернуть пустой content, а ответ — в reasoning_content/reasoning
-            reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
-            if not content and reasoning:
-                info(f"📝 Reasoning model: content пуст, используем reasoning ({len(reasoning)} символов)")
-                content = reasoning
-            if not content:
-                refusal = msg.get("refusal") or ""
-                warning(f"⚠️ Empty content. Message keys: {list(msg.keys())}, reasoning len: {len(reasoning)}, refusal: '{refusal}'")
-                if attempt < AI_RETRY_COUNT:
-                    delay = AI_RETRY_BACKOFF_BASE ** (attempt + 1)
-                    warning(f"⚠️ Пустой content от API. Повтор через {delay} сек (попытка {attempt+1}/{AI_RETRY_COUNT})...")
-                    time.sleep(delay)
-                    continue
-                raise ValueError("Пустой content от API после всех попыток")
-
-
-            return content
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-            last_error = e
-            error(f"❌ Ошибка сети: {str(e)}")
-            if attempt < AI_RETRY_COUNT:
-                delay = 2 ** (attempt + 1)
-                warning(f"⚠️ Ошибка соединения. Повтор через {delay} сек (попытка {attempt+1}/{AI_RETRY_COUNT})...")
-                time.sleep(delay)
-                continue
-        except Exception as e:
-            last_error = e
-            error(f"❌ Ошибка AI API: {str(e)}")
-            break  # Non-retryable error
-
-    # All retries exhausted or non-retryable error
-    error(f"❌ Все попытки исчерпаны ({AI_RETRY_COUNT + 1})")
-    return {
-        "action": "hold",
-        "confidence": 0.0,
-        "reason": f"Ошибка API: {str(last_error)}"
-    }
 
 def parse_response(response):
     """Парсит ответ AI в структурированный формат"""
@@ -217,7 +115,7 @@ def parse_response(response):
             "reason": "Ошибка парсинга ответа AI"
         }
 
-def smart_filter(analysis):
+def smart_filter(analysis, config=None):
     """
     Интеллектуальный фильтр для экономии токенов.
     Возвращает (bool, str):
@@ -232,6 +130,12 @@ def smart_filter(analysis):
         BOT_CONFIG as bot_config # Import full config to access dynamic keys
     )
 
+    if config is not None:
+        bot_config = config
+        AI_THRESHOLDS = config.get("AI_THRESHOLDS", AI_THRESHOLDS)
+        ENABLE_AI_SKIP_ON_RSI = config.get("ENABLE_AI_SKIP_ON_RSI", ENABLE_AI_SKIP_ON_RSI)
+        MOMENTUM_STRATEGY = config.get("MOMENTUM_STRATEGY", MOMENTUM_STRATEGY)
+        TECHNICAL_ANALYSIS = config.get("TECHNICAL_ANALYSIS", TECHNICAL_ANALYSIS)
     analysis_rsi = analysis["rsi"]
     analysis["current_price"]
     volume_ratio = analysis.get("volume_ratio", 1.0)
@@ -304,9 +208,9 @@ def smart_filter(analysis):
     # D. DEFAULT (Active Market)
     return True, f"Active Market (RSI={analysis_rsi})"
 
-def should_call_ai(analysis):
+def should_call_ai(analysis, config=None):
     """Wrapper для совместимости, вызывает smart_filter и логирует результат."""
-    should_call, reason = smart_filter(analysis)
+    should_call, reason = smart_filter(analysis, config=config)
 
     symbol = analysis["symbol"]
     if should_call:
@@ -321,10 +225,16 @@ def should_call_ai(analysis):
 
     return should_call, reason
 
-def process_analysis(analysis):
-    """Обрабатывает один анализ: проверяет условия, делает запрос к ИИ (с ретраями) и возвращает прогноз"""
+def process_analysis(analysis, config=None):
+    """Прогноз только для пригодного source/instance snapshot, без повторного чтения legacy цен."""
+    from src.core.data.reader import runtime_data_config, validate_analysis_market_data
+    config = runtime_data_config(config)
+    if not validate_analysis_market_data(analysis, config):
+        warning(f"⚠️ {analysis.get('symbol')}: прогноз отклонён — устаревшие или чужие рыночные данные")
+        return {**analysis, "action": "hold", "confidence": 0.0, "reason": "Непригодный market-data snapshot", "execution_allowed": False}
+
     # Технический пре-фильтр
-    should_call, skip_reason = should_call_ai(analysis)
+    should_call, skip_reason = should_call_ai(analysis, config=config)
     if not should_call:
         return {
             **analysis,
@@ -343,16 +253,8 @@ def process_analysis(analysis):
         if attempt > 0:
             info(f"🔄 Повторная попытка (Logic/API Retry) {attempt}/{max_retries}...")
 
-        response = get_prediction(current_prompt)
-
-        # Логируем очищенный ответ от AI (без markdown)
-        if isinstance(response, str):
-            import re
-            cleaned = re.sub(r'```json\s*', '', response)
-            cleaned = re.sub(r'```', '', cleaned)
-            info(f"📨 Ответ AI ({analysis['symbol']}, Попытка {attempt+1}): {cleaned}")
-        else:
-            info(f"📨 Ответ AI ({analysis['symbol']}, Попытка {attempt+1}): (dict) {response}")
+        response = get_prediction(current_prompt, config=config)
+        info(f"📨 Запрос AI завершён ({analysis['symbol']}, попытка {attempt+1})", category="llm")
 
         prediction = parse_response(response)
 
@@ -401,6 +303,9 @@ def process_analysis(analysis):
                 "take_profit": final_prediction.get("take_profit"),
             }
 
+    if not validate_analysis_market_data(analysis, config):
+        warning(f"⚠️ {analysis.get('symbol')}: данные устарели во время AI-запроса")
+        return {**analysis, "action": "hold", "confidence": 0.0, "reason": "Snapshot устарел во время AI-запроса", "execution_allowed": False}
     return {
         **analysis,
         "action": final_prediction["action"],
@@ -479,9 +384,12 @@ def validate_prediction(prediction, current_price, has_position=False):
 
     return prediction
 
-def main(analyses):
-    """Основная функция прогнозирования (Multi-threaded or Sequential)"""
+def main(analyses, config=None):
+    """Прогнозы используют тот же instance/source config, что анализ."""
     from src.config import ENABLE_PARALLEL_PROCESSING
+    from src.core.data.reader import runtime_data_config
+    config = runtime_data_config(config)
+    ENABLE_PARALLEL_PROCESSING = config.get("ENABLE_PARALLEL_PROCESSING", ENABLE_PARALLEL_PROCESSING)
     import concurrent.futures
 
     predictions = []
@@ -497,7 +405,7 @@ def main(analyses):
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks
-            future_to_symbol = {executor.submit(process_analysis, analysis): analysis['symbol'] for analysis in analyses}
+            future_to_symbol = {executor.submit(process_analysis, analysis, config=config): analysis['symbol'] for analysis in analyses}
 
             for future in concurrent.futures.as_completed(future_to_symbol):
                 symbol = future_to_symbol[future]
@@ -511,7 +419,7 @@ def main(analyses):
         info(f"🐌 Запуск последовательного анализа для {len(analyses)} активов...")
         for analysis in analyses:
             try:
-                result = process_analysis(analysis)
+                result = process_analysis(analysis, config=config)
                 predictions.append(result)
             except Exception as exc:
                 error(f"❌ Ошибка при обработке {analysis['symbol']}: {exc}")

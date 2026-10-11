@@ -2,9 +2,7 @@
 .git
 .github
 .env
-.env.*
 **/.env
-**/.env.*
 *.key
 **/*.key
 **/credentials.json
