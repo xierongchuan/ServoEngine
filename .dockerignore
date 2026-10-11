@@ -24,6 +24,10 @@ htmlcov
 build
 data
 charts
+config/*.lock
+config/**/*.lock
+config/*.tmp
+config/**/*.tmp
 experiments
 tests
 **/*.log

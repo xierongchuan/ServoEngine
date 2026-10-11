@@ -10,15 +10,12 @@ __pycache__
 # Servo Engine Project Specific
 # ========================================
 
-# Trading data and logs
-data/steps.log
-data/trades.log
-data/cron.log
-data/prices/
-data/news/
-data/positions_cache.json
-data/logs/
-data/trade_history.json
+# Рабочие данные целиком локальные; в Git остаётся только правило исключения.
+/data/*
+!/data/.gitignore
+/config/*.lock
+/config/*.tmp
+/.config/
 
 # Generated charts
 charts/
@@ -62,6 +59,7 @@ htmlcov/
 # Build artifacts
 build/
 dist/
+node_modules/
 *.egg-info/
 
 # Local binaries

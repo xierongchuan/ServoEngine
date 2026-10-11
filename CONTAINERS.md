@@ -148,6 +148,14 @@ podman compose --profile panel down             # Весь стек
 - Общие SELinux mounts используют `:z`, не приватную `:Z`.
 - Bot healthcheck проверяет supervisor и отсутствие `crashed`; остановленная из панели торговля остаётся healthy. Panel healthcheck проверяет `/api/health`, не биржу или Telegram. `unhealthy` сам по себе не вызывает перезапуск.
 
+## Очистка локальных данных
+
+```bash
+./scripts/clean_project.sh --mode reset       # Только предварительный просмотр
+```
+
+Применение (`--apply`) допускается только после остановки bot, panel и других писателей. Команда сама ничего не останавливает/не запускает, не получает `.env` как окружение и работает без сети в отдельном Podman-контейнере. Сброс архивирует известные generated данные, историю, логи и control-файлы; торговые ledgers/ownership и rate-limit cooldown сохраняются. Pending/UNKNOWN и неизвестная SQLite блокируют reset. Инструкция и восстановление: [CLEANUP.md](CLEANUP.md).
+
 ## Проверки и зависимости
 
 Smoke без исходников, ключей и внешней сети:

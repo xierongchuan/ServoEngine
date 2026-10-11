@@ -112,9 +112,20 @@ Telegram-команды: `/start`, `/status`, `/trades`, `/chart`, `/logs`, `/co
 |---|---|
 | `data/active_trades.json`, `data/position_owners.json` | Позиции и их владельцы |
 | `data/trade_history.json`, `data/decision_journal.json` | Сделки и решения |
-| `data/prices/`, `data/news/` | Рыночные данные |
+| `data/prices/`, `data/news/`, `data/market_data/`, `data/instances/*/prices/` | Рыночные данные |
 | `data/logs/`, `data/steps.log`, `data/trades.log` | Логи |
 | `charts/` | PNG-графики |
+
+### Очистка проекта
+
+Рабочие данные, кэши и runtime lock-файлы исключены из Git и контекста сборки. Безопасная команда очистки работает в Podman и по умолчанию **только показывает план**:
+
+```bash
+./scripts/clean_project.sh                    # Просмотр восстанавливаемого кэша
+./scripts/clean_project.sh --mode reset       # Просмотр сброса истории/логов с архивом
+```
+
+Для применения нужен `--apply` и остановка всех писателей, включая bot и panel. `reset` архивирует выбранные файлы в `.cache/cleanup-backups/`; `.env`, `config/`, торговые журналы/владение и rate limiter сохраняются. Открытое/UNKNOWN-состояние блокирует сброс. **Торговая память не является временными данными.** Порядок чистого запуска, ограничения и восстановление: [CLEANUP.md](CLEANUP.md).
 
 ### Структурированные логи
 
