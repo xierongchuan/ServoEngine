@@ -56,6 +56,30 @@ def read_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
+class SymbolCommandReader:
+    """Каждая ревизия control-файла проверяется один раз, включая отклонённые команды."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self._last_revision: tuple[int, ...] | None = None
+
+    def read(self) -> dict[str, Any] | None:
+        try:
+            stat = self.path.stat()
+        except FileNotFoundError:
+            self._last_revision = None
+            return None
+        except OSError:
+            return read_json(self.path)
+        revision = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        if revision == self._last_revision:
+            return None
+        # Не удаляем старую команду и не переносим её в новый runtime. Atomic replace
+        # или правка файла даст новую ревизию, которая снова проходит все safety-проверки.
+        self._last_revision = revision
+        return read_json(self.path)
+
+
 def validate_symbol_command_context(command: dict[str, Any]) -> None:
     """Команда worker не меняет execution и не переносится в другой runtime."""
     validate_runtime_config_source(command)

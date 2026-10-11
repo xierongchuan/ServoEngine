@@ -45,6 +45,7 @@ class ManagedMarketDataProvider(WebSocketProvider):
         self._jobs = queue.Queue()
         self._pending = {}
         self._last_reconcile = {}
+        self._ws_errors = {}
         self._dirty = set()
         self._retired = {}
         self._publish_event = threading.Event()
@@ -85,10 +86,11 @@ class ManagedMarketDataProvider(WebSocketProvider):
             self._pending.clear()
             self._jobs = queue.Queue()
             self._last_reconcile.clear()
+            self._ws_errors.clear()
             self._ws = None
             for key in self._streams:
                 self._epochs[key] = self._revision
-                self.store.mark(key, status="recovering", error=None, connected=False, subscribed=False)
+                self.store.mark(key, status="recovering", error=None, ws_error=None, connected=False, subscribed=False)
                 self.request_reconcile(key)
                 self._emit(key)
         self._running = True
@@ -134,6 +136,7 @@ class ManagedMarketDataProvider(WebSocketProvider):
                 self._epochs.pop(key, None)
                 self._pending.pop(key, None)
                 self._last_reconcile.pop(key, None)
+                self._ws_errors.pop(key, None)
                 self._retired[key.id] = self.store.mark(key, status="stopped", connected=False, subscribed=False)
                 self.store.remove(key)
                 self._dirty.discard(key)
@@ -255,7 +258,7 @@ class ManagedMarketDataProvider(WebSocketProvider):
             with self._lock:
                 if self._stop_event.is_set() or self._epochs.get(key) != epoch:
                     return
-                status = "live" if self._connected and key in self._acked else "rest"
+                status = "live" if self._connected and key in self._acked and key not in self._ws_errors else "rest"
                 self.store.merge(key, rows, source="rest", received_at=started, status=status)
                 self._emit(key)
         except Exception as exc:
@@ -411,8 +414,19 @@ class ManagedMarketDataProvider(WebSocketProvider):
                 return
             try:
                 # Первый валидный kline — также неявное подтверждение подписки.
-                previous = self.store.snapshot(key)["candles"]
-                snapshot = self.store.merge(key, [row], source="ws")
+                before = self.store.snapshot(key)
+                previous = before["candles"]
+                fault = self._ws_errors.get(key)
+                # Пока WS неисправен, только принятый свежий tail возвращает статус live.
+                # Старый/replayed валидный кадр не доказывает восстановление потока.
+                status = "rest" if fault and before["status"] == "rest" else None
+                snapshot = self.store.merge(key, [row], source="ws", status=status)
+                if (fault and snapshot["last_valid_update"] > (before.get("last_valid_update") or 0)
+                        and snapshot["candles"][-1]["source"] == "ws"):
+                    self._ws_errors.pop(key)
+                    snapshot = self.store.mark(key, ws_error=None,
+                                               status="live" if snapshot["status"] == "rest" else snapshot["status"])
+                    logger.info("✅ WS-поток %s восстановлен после %s отклонённых свечей", key.id, fault["rejected"])
                 self.acknowledge(key)
                 if snapshot["gaps"]:
                     self.request_reconcile(key, start_ms=snapshot["gaps"][0]["start_ms"])
@@ -422,8 +436,15 @@ class ManagedMarketDataProvider(WebSocketProvider):
                 self._emit(key)
                 self._notify_kline(key.id, row)
             except (TypeError, ValueError, OverflowError) as exc:
-                logger.warning("⚠️ Отклонена некорректная свеча %s: %s", key.id, exc)
-                self.store.mark(key, status="error", error=str(exc))
+                fault = self._ws_errors.get(key)
+                if fault:
+                    # Кадр уже отвергнут строгим валидатором. Не сбиваем здоровый REST
+                    # и не добавляем запрос на каждый тик; watchdog продолжает сверку.
+                    fault["rejected"] += 1
+                    return
+                self._ws_errors[key] = {"rejected": 1}
+                logger.warning("⚠️ Отклонена некорректная свеча %s: %s; восстанавливаем через REST", key.id, exc)
+                self.store.mark(key, status="error", error=str(exc), ws_error=str(exc))
                 self.request_reconcile(key)
                 self._emit(key)
 

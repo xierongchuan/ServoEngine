@@ -16,7 +16,7 @@ from typing import Mapping
 _INTERVAL_ALIASES = {
     "MINUTE_1": "1m", "MINUTE_5": "5m", "MINUTE_15": "15m", "MINUTE_30": "30m",
     "HOUR_1": "1h", "HOUR_2": "2h", "HOUR_4": "4h", "HOUR_6": "6h", "HOUR_8": "8h", "DAY_1": "1d",
-    "1min": "1m", "3min": "3m", "5min": "5m", "15min": "15m", "30min": "30m",
+    "1min": "1m", "3min": "3m", "5min": "5m", "15min": "15m", "30min": "30m", "60min": "1h",
     "1hour": "1h", "2hour": "2h", "4hour": "4h", "6hour": "6h", "8hour": "8h", "12hour": "12h",
         "1day": "1d", "1week": "1w", "1month": "1M",
     "Min1": "1m", "Min5": "5m", "Min15": "15m", "Min30": "30m", "Min60": "1h",
@@ -180,7 +180,10 @@ def normalize_candle(raw, key, *, source="rest", now=None, received_at=None, fut
     c = _number(_field(raw, ("closePrice", "close", "c")), "close")
     v = _number(_field(raw, ("volume", "v", "vol", "q", "lastTradedVolume")), "volume")
     if min(o, h, l, c) <= 0 or v < 0 or h < max(o, c, l) or l > min(o, c, h):
-        raise ValueError("Нарушены OHLCV-инварианты свечи")
+        raise ValueError(
+            f"Нарушены OHLCV-инварианты свечи: t={ts}, "
+            f"O={o!r}, H={h!r}, L={l!r}, C={c!r}, V={v!r}"
+        )
     observed_at = min(now, float(received_at)) if source == "rest" and received_at is not None else now
     elapsed = next_start(ts, key.interval) <= int(observed_at * 1000)
     flag = next((raw[name] for name in ("is_closed", "closed", "x") if name in raw), None)

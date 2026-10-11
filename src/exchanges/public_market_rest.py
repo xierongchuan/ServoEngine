@@ -15,9 +15,11 @@ MEXC_INTERVALS = {
     "1m": "Min1", "5m": "Min5", "15m": "Min15", "30m": "Min30", "1h": "Min60",
     "4h": "Hour4", "8h": "Hour8", "1d": "Day1", "1w": "Week1", "1M": "Month1",
 }
-BINGX_WS_INTERVALS = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "12h", "1d", "1w", "1M"}
-# REST и WS имеют разные enum: не подменяем 2h/6h/8h ближайшим WS-интервалом.
-BINGX_INTERVALS = BINGX_WS_INTERVALS | {"2h", "6h", "8h"}
+# Календарный WS BingX не подтверждён как UTC: дневное окно начинается в 16:00 UTC.
+# UTC REST с timeZone=0 не смешиваем с таким WS и не сдвигаем его OHLCV timestamps.
+BINGX_WS_INTERVALS = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "12h"}
+# REST и WS имеют разные enum: сохраняем точный TF для REST-only потоков.
+BINGX_INTERVALS = BINGX_WS_INTERVALS | {"2h", "6h", "8h", "1d", "1w", "1M"}
 _RETRY_HTTP = {429, 500, 502, 503, 504}
 # https://bingx-api.github.io/docs/: FREQUENCY_LIMIT, INTERNAL_SERVER_ERROR, SERVER_BUSY.
 # Остальные коды повторяют явный allowlist текущего impl/bingx_client.py, без импорта private client.

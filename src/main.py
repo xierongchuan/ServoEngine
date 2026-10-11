@@ -162,7 +162,7 @@ def run_multiprocess_pipeline():
     from src.config import CHART_SETTINGS
     from src.config_loader import clear_config_cache, get_strategy_instances, resolve_strategy_instance_config
     from src.core.process_worker import run_strategy_instance_pipeline
-    from src.symbol_runtime_control import COMMAND_PATH, STATUS_PATH, atomic_write_json, read_json, utc_now
+    from src.symbol_runtime_control import COMMAND_PATH, STATUS_PATH, SymbolCommandReader, atomic_write_json, utc_now
     from src.runtime import normalize_symbol_key, run_runtime_chart_worker
     from src.trading_settings import get_trading_settings, execution_account_label
     from src.core.data.reader import build_streams_for_configs
@@ -227,7 +227,8 @@ def run_multiprocess_pipeline():
     chart_process = None
     chart_stop_event = None
     last_symbol_command_id = None
-    existing_symbol_command = read_json(COMMAND_PATH)
+    command_reader = SymbolCommandReader(COMMAND_PATH)
+    existing_symbol_command = command_reader.read()
     if existing_symbol_command and existing_symbol_command.get("id"):
         last_symbol_command_id = str(existing_symbol_command["id"])
 
@@ -351,7 +352,7 @@ def run_multiprocess_pipeline():
 
     def handle_symbol_runtime_command():
         nonlocal last_symbol_command_id
-        command = read_json(COMMAND_PATH)
+        command = command_reader.read()
         if not command:
             return
         command_id = str(command.get("id") or "")

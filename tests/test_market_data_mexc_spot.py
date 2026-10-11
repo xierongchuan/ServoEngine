@@ -320,7 +320,7 @@ class SpotFactoryTests(unittest.TestCase):
         self.assertEqual(set(cache), {five.id})
 
     def test_bingx_rest_only_intervals_do_not_reject_or_silently_change_tf(self):
-        keys = [StreamKey("bingx", "perpetual", "BTCUSDT", tf) for tf in ("1m", "2h", "6h", "8h")]
+        keys = [StreamKey("bingx", "perpetual", "BTCUSDT", tf) for tf in ("1m", "2h", "6h", "8h", "1d", "1w", "1M")]
         factory.start_ws_provider(streams=keys, cache=self.cache, ready=self.ready, publisher=Mock())
         for key in keys[1:]:
             capability = factory.provider_capabilities(key.exchange, key.market_type, key.interval)

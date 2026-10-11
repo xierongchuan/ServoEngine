@@ -15,7 +15,7 @@ class BingXWebSocketDataProvider(ManagedMarketDataProvider):
     WS_URL = "wss://open-api-ws.bingx.com/market"
     INTERVALS = {
         "1m": "1min", "3m": "3min", "5m": "5min", "15m": "15min", "30m": "30min",
-        "1h": "1hour", "4h": "4hour", "12h": "12hour", "1d": "1day", "1w": "1week", "1M": "1month",
+        "1h": "60min", "4h": "4hour", "12h": "12hour",
     }
 
     def __init__(self, manager=None, **kwargs):
