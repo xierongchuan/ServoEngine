@@ -28,11 +28,12 @@
 
 | Проверка | Результат |
 |---|---|
-| Полный offline pytest | **2559 passed, 6 skipped, 58 subtests passed** |
-| Frontend Node regression tests | **44 passed** |
+| Полный offline pytest | **2589 passed, 6 skipped, 58 subtests passed** |
+| Frontend Node regression tests | **57 passed** |
 | Frontend `tsc && vite build` | Успешно |
 | Оба образа, `podman build --format docker` | Успешно, healthcheck сохранён |
-| Автономный старт/healthcheck/SIGTERM без сети и ключей | Bot и panel успешно проверены |
+| Автономный старт/healthcheck/SIGTERM без сети и ключей | Supervisor в stopped и panel успешно проверены |
+| Настоящий read_only runtime после создания логовой БД | В обоих образах: running, BTC MACDX worker alive, затем stopped по SIGTERM; сеть отключена |
 | `git diff --check` | Без ошибок |
 | BingX public WS | BTC-USDT, 1m/5m, live candles и heartbeat подтверждены |
 | MEXC Futures public WS | BTC_USDT, 1m/5m на отдельных shards, live candles и heartbeat подтверждены |
@@ -52,8 +53,22 @@
 
 Платные AI completions не выполнялись; GET `/models` не отправлял торговые prompts. Успешный каталог не подтверждает генерацию сигнала.
 
+### Исправления запуска и панели
+
+Read-only диагностика работающего стека выявила две конкретные причины ошибок: guard смены execution не распознавал инфраструктурную `data/logs/events.sqlite3`, поэтому supervisor отказывал в первом запуске; история была сохранена как `{}`, а API вызывал у неё `.reverse()`.
+
+- Guard распознаёт логовую БД и rate limiter по известной версии и точным наборам таблиц/колонок, а не по имени или каталогу. Читает committed WAL без `immutable`, миграций и удаления файлов. Неизвестная/изменённая infrastructure-схема, pending execution journal и владение по-прежнему блокируют смену исполнения.
+- История нормализуется из списка и legacy mapping только в памяти; некорректные записи пропускаются, исходный файл не переписывается. Пустой `{}` больше не вызывает ошибку history/stats API.
+- Панель разделяет успешное сохранение и применение worker-команды: обновляет карточки после PUT, при stopped/crashed не отправляет start/restart worker и объясняет необходимость общего «Старт». Отказ команды после успешного сохранения — предупреждение, не предложение повторить PUT. Ручной worker restart доступен только при свежем running с PID и execution snapshot.
+- Worker API возвращает 409 при отсутствии актуального runtime, 422 для JSON не-объекта и безопасный 503 при ошибке записи. Общий «Стоп» доступен и при crashed, чтобы подтвердить stopped перед изменением execution.
+- 404 графика показывается как ожидание данных с автоматическим повтором и повторным поиском источников; auth/другие ошибки остаются ошибками. Фиктивные свечи не создаются, backend 404 не скрывается.
+- Ошибки API сохраняют request ID, шаблон маршрута и последние места traceback без текста исключения, query, locals или исходных строк.
+
+Регрессии: `tests/test_runtime_panel_regressions.py`, `tests/test_runtime_panel_frontend.cjs`. Дополнительный `tests/container_runtime_smoke.py` проверяет настоящий spawn runtime/worker после создания логовой БД в одноразовом контейнере. Прежний `tests/container_smoke.py` проверял supervisor только в stopped и не покрывал эту причину падения. Сбор свечей с реальной биржи после исправления **не проверялся**: все новые проверки выполнялись без сети и ключей; обработка данных и графиков покрыта offline-тестами.
+
 ### Воспроизводимые bounded probes
 
+- `podman run --rm --network none -i localhost/servo-engine-bot:dev python - < tests/container_runtime_smoke.py` — настоящий read_only runtime/worker и SIGTERM, без mounts рабочих данных, сети и ключей; тот же тест проходит в panel image.
 - `tests/probe_perpetual_ws.py bingx|mexc` — публичные проверки без `.env`.
 - `tests/probe_mexc_spot_ws.py` — публичная protobuf-проверка без `.env`.
 - `tests/probe_bingx_demo_read_only.py` — GET-only VST, env через `--env-file .env`.
@@ -79,7 +94,9 @@
 
 Образы `localhost/servo-engine-bot:dev` и `localhost/servo-engine-panel:dev` пересобраны. Рабочий Compose-стек автоматически не пересоздавался и торговля не запускалась. Рабочие `.env`, позиции и история не редактировались; демо leverage изменялся только в bounded VST probe. Коммитов нет. Сохранённый execution остаётся read_only.
 
-Перед обновлением остановите сервисы, сохраните `config/` и `data/` согласованным backup, адресно проверьте legacy managed orders. Пересоздайте контейнеры по [CONTAINERS.md](CONTAINERS.md). Не запускайте старый и новый runtime одновременно с общим аккаунтом/volume. В рабочий `.env` добавляйте только нужные AI-ключи, не заменяйте его шаблоном.
+Исправления запуска и панели ещё **не применены** к работающим контейнерам: пересборка тега не заменяет уже запущенный image. На момент диагностики bot runtime — crashed, execution — read_only. Рабочие контейнеры в этой исправляющей итерации не останавливались/не пересоздавались; их config, data, история и журналы не редактировались.
+
+Контролируемое применение требует согласования с оператором. Сохраните согласованный backup `config/` и `data/` с учётом SQLite WAL, затем адресно проверьте legacy managed orders. Для ngrok-панели учтите передачу URL через `scripts/start_panel.sh`: простое пересоздание panel без этого окружения может потерять актуальный адрес. Пересоздайте контейнеры по [CONTAINERS.md](CONTAINERS.md). Не запускайте старый и новый runtime одновременно с общим аккаунтом/volume. В рабочий `.env` добавляйте только нужные AI-ключи, не заменяйте его шаблоном.
 
 ## Источники
 

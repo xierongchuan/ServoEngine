@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { AuthenticationError, getChartData, getChartSources, getDashboard } from '../api/client';
+import { APIError, AuthenticationError, getChartData, getChartSources, getDashboard } from '../api/client';
 import { chartStreamKey, type ChartSnapshot, type ChartStream } from '../api/chartTypes';
 import { InteractiveChart } from '../components/InteractiveChart';
 import { Spinner } from '../components/Spinner';
@@ -14,6 +14,7 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
   const [selectedSource, setSelectedSource] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [waitingForData, setWaitingForData] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const fsContainerRef = useRef<HTMLDivElement>(null);
   const [symbolsWithPositions, setSymbolsWithPositions] = useState<Set<string>>(new Set());
@@ -47,6 +48,7 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
     setLoading(true);
     setChartData(null);
     setError(null);
+    setWaitingForData(false);
 
     const refresh = async () => {
       if (disposed || authFailed) return;
@@ -66,6 +68,7 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
         if (!disposed) {
           setChartData(data);
           setError(null);
+          setWaitingForData(false);
           setSymbolsWithPositions(previous => {
             const next = new Set(previous);
             if (data.position) next.add(selectedSymbol); else next.delete(selectedSymbol);
@@ -75,7 +78,13 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
       } catch (err) {
         if (!disposed) {
           authFailed = err instanceof AuthenticationError;
-          setError(err instanceof Error && err.name !== 'AbortError' ? err.message : 'Обновление графика не завершено. Повторим автоматически.');
+          const unavailable = err instanceof APIError && err.status === 404;
+          setWaitingForData(unavailable);
+          // После запуска runtime могут появиться новые источники; пустой каталог нельзя кэшировать навсегда.
+          if (unavailable) sources = null;
+          setError(unavailable
+            ? 'Данные графика ещё не появились. Проверьте запуск общего runtime в Настройках и дождитесь загрузки свечей. Обновление выполняется автоматически; read_only тоже собирает данные.'
+            : err instanceof Error && err.name !== 'AbortError' ? err.message : 'Обновление графика не завершено. Повторим автоматически.');
         }
       } finally {
         clearTimeout(timeout);
@@ -174,7 +183,7 @@ export function Charts({ subscribe }: { subscribe: (type: string, cb: (data: Rec
       )}
 
       {error && !loading && (
-        <div role="alert" className="text-center py-3 text-red-400 text-sm">{error}{chartData && ' Показан последний успешно загруженный снимок.'}</div>
+        <div role={waitingForData ? 'status' : 'alert'} className={`text-center py-3 text-sm leading-relaxed ${waitingForData ? 'text-tg-hint' : 'text-red-400'}`}>{error}{chartData && ' Показан последний успешно загруженный снимок.'}</div>
       )}
 
       {!loading && chartData && (

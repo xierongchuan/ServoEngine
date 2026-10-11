@@ -41,8 +41,20 @@ class DataReader:
             return {}
         return data
 
-    def read_trade_history(self) -> list:
-        return self._read_json(self.data_dir / "trade_history.json", default=[])
+    def read_trade_history(self) -> list[dict]:
+        """Нормализует legacy {} / mapping и список, не меняя историю на диске."""
+        data = self._read_json(self.data_dir / "trade_history.json", default=[])
+        if isinstance(data, dict):
+            rows = [row for value in data.values() for row in (value if isinstance(value, list) else [value])]
+        elif isinstance(data, list):
+            rows = data
+        else:
+            logger.warning("⚠️ Некорректный формат истории сделок: %s", type(data).__name__)
+            return []
+        history = [row for row in rows if isinstance(row, dict)]
+        if len(history) != len(rows):
+            logger.warning("⚠️ Пропущены некорректные записи истории сделок: %s", len(rows) - len(history))
+        return history
 
     def read_config(self) -> dict:
         return self._read_json(self.config_path, default={})

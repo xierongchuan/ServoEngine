@@ -153,6 +153,8 @@ async def enqueue_symbol_runtime_command(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=422, detail="Ожидается JSON-объект команды worker")
     symbol = data.get("symbol")
     instance_id = data.get("instance_id")
     instance_ids = data.get("instance_ids")
@@ -170,9 +172,12 @@ async def enqueue_symbol_runtime_command(
             instance_ids=instance_ids,
             reason=data.get("reason") or "panel",
         )
-    except (OSError, ValueError) as exc:
-        logger.error("Не удалось записать symbol runtime command: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to write symbol runtime command: {exc}")
+    except ValueError as exc:
+        logger.warning("⚠️ Команда worker отклонена: %s", exc)
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except OSError:
+        logger.error("❌ Не удалось записать команду worker")
+        raise HTTPException(status_code=503, detail="Не удалось записать команду worker; повторите позже") from None
 
     logger.info("Symbol runtime command queued: %s by %s", action, command["requested_by"])
     return {"status": "queued", "command": command}

@@ -487,6 +487,7 @@ export function closePosition(symbol: string) {
 // ============================================================================
 
 export interface RuntimeStatus {
+  execution?: Record<string, unknown> | null;
   state: 'running' | 'stopped' | 'starting' | 'stopping' | 'restarting' | 'crashed' | 'unavailable' | string;
   control_enabled: boolean;
   supervisor_pid: number | null;

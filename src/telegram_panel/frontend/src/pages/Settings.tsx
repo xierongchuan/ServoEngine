@@ -38,6 +38,7 @@ import { ProfileCard } from '../components/ProfileCard';
 import { ProfileEditor } from '../components/ProfileEditor';
 import { ExecutionSettings } from '../components/config/ExecutionSettings';
 import { AISettings } from '../components/config/AISettings';
+import { applyRuntimeConfigChange, canControlWorker } from '../components/config/runtimeActions';
 import { Spinner } from '../components/Spinner';
 import { Button } from '../components/ui/Button';
 import { Card as Section } from '../components/ui/Card';
@@ -205,21 +206,15 @@ export function Settings() {
               if (instancesToRestart.length > 0 && !confirmRestartForInstances(instancesToRestart, 'Position & Risk')) {
                 return;
               }
-              const result = await updateTradingConfig(data);
-              if (instancesToRestart.length > 0) {
-                await restartSymbolRuntimeBatch(
-                  instancesToRestart.map((instance) => instance.id),
-                  'trading_config_changed'
-                );
-              }
-              setTradingConfig(result.config);
-              showMessage({
-                type: 'success',
-                text: instancesToRestart.length > 0
-                  ? `Trading settings saved; restart queued for ${instancesToRestart.length} instance(s)`
-                  : 'Trading settings saved',
+              const notice = await applyRuntimeConfigChange({
+                save: () => updateTradingConfig(data),
+                refresh: fetchAll,
+                queue: instancesToRestart.length ? () => restartSymbolRuntimeBatch(
+                  instancesToRestart.map((instance) => instance.id), 'trading_config_changed'
+                ) : undefined,
               });
-              hapticFeedback('success');
+              showMessage(notice);
+              hapticFeedback(notice.type);
             } catch (err) {
               showMessage({ type: 'error', text: 'Failed to save settings' });
               hapticFeedback('error');
@@ -239,6 +234,7 @@ export function Settings() {
           symbolProfiles={symbolProfiles}
           activeTrades={activeTrades}
           onRefresh={fetchAll}
+          onNotice={showMessage}
         />
       )}
 
@@ -253,6 +249,7 @@ export function Settings() {
             showMessage({ type: 'success', text });
             hapticFeedback('success');
           }}
+          onWarning={(text) => showMessage({ type: 'warning', text })}
           onError={(text) => {
             showMessage({ type: 'error', text });
             hapticFeedback('error');
@@ -445,11 +442,13 @@ function ProfilesTab({
   symbolProfiles,
   activeTrades,
   onRefresh,
+  onNotice,
 }: {
   profiles: ProfilesResponse;
   symbolProfiles: SymbolProfilesResponse | null;
   activeTrades: Trade[];
   onRefresh: () => void;
+  onNotice: (notice: Message) => void;
 }) {
   const [profileUsages, setProfileUsages] = useState<Record<string, { isUsed: boolean; usageCount: number }>>({});
   const [cloneModal, setCloneModal] = useState<{ open: boolean; sourceName: string }>({ open: false, sourceName: '' });
@@ -662,15 +661,15 @@ function ProfilesTab({
               if (affectedInstances.length > 0 && !confirmProfileRestart(affectedInstances, editModal.name)) {
                 return;
               }
-              await updateProfile(editModal.name, updatedProfile as unknown as Record<string, unknown>);
-              if (affectedInstances.length > 0) {
-                await restartSymbolRuntimeBatch(
-                  affectedInstances.map((instance) => instance.id),
-                  `profile_${editModal.name}_changed`
-                );
-              }
+              const notice = await applyRuntimeConfigChange({
+                save: () => updateProfile(editModal.name, updatedProfile as unknown as Record<string, unknown>),
+                refresh: onRefresh,
+                queue: affectedInstances.length ? () => restartSymbolRuntimeBatch(
+                  affectedInstances.map((instance) => instance.id), `profile_${editModal.name}_changed`
+                ) : undefined,
+              });
               setEditModal({ open: false, name: '', profile: null });
-              onRefresh();
+              onNotice(notice);
             } catch (err) {
               const message = err instanceof Error ? err.message : 'Failed to update profile';
               setEditError(message);
@@ -742,6 +741,7 @@ function RuntimeTab({
   strategies,
   onRefresh,
   onSuccess,
+  onWarning,
   onError,
 }: {
   symbolProfiles: SymbolProfilesResponse;
@@ -750,6 +750,7 @@ function RuntimeTab({
   strategies: StrategiesResponse | null;
   onRefresh: () => void;
   onSuccess: (text: string) => void;
+  onWarning: (text: string) => void;
   onError: (text: string) => void;
 }) {
   const [savingSymbol, setSavingSymbol] = useState<string | null>(null);
@@ -765,7 +766,11 @@ function RuntimeTab({
   const runtimeBusy = runtimeAction !== null || ['starting', 'stopping', 'restarting'].includes(runtimeState);
   const runtimeControlEnabled = !!runtimeStatus?.control_enabled && !runtimeStatus?.stale;
   const runtimeRunning = ['running', 'starting', 'restarting'].includes(runtimeState);
-  const runtimeStopped = ['stopped', 'crashed'].includes(runtimeState);
+  const runtimeStopped = runtimeState === 'stopped';
+  const workerControlEnabled = canControlWorker(runtimeStatus) && !runtimeBusy;
+  const reportChange = (notice: { type: 'success' | 'warning'; text: string }) => {
+    if (notice.type === 'warning') onWarning(notice.text); else onSuccess(notice.text);
+  };
 
   const getCompatibleProfiles = useCallback((strategy: string): string[] => {
     const strategyUpper = strategy.toUpperCase();
@@ -847,10 +852,11 @@ function RuntimeTab({
     setSavingSymbol(instanceId || symbol);
     try {
       if (instanceId) {
-        await setSymbolProfile(symbol, profile, instanceId);
-        await restartSymbolRuntime(instanceId, symbol, 'profile_changed');
-        onRefresh();
-        onSuccess(`${instanceId} profile set to ${profile}; restart queued`);
+        reportChange(await applyRuntimeConfigChange({
+          save: () => setSymbolProfile(symbol, profile, instanceId),
+          refresh: onRefresh,
+          queue: () => restartSymbolRuntime(instanceId, symbol, 'profile_changed'),
+        }));
       }
     } catch (err) {
       onError(getRuntimeErrorMessage(err, 'Failed to update profile'));
@@ -865,15 +871,14 @@ function RuntimeTab({
     const selectedProfile = getFallbackProfile(selectedStrategy, newProfile);
     setAdding(true);
     try {
-      const result = await createStrategyInstance({
-        symbol: newSymbol.trim().toUpperCase(),
-        strategy: selectedStrategy,
-        profile: selectedProfile,
-        enabled: true,
-      });
-      await startSymbolRuntime(result.instance.id, result.instance.symbol, 'instance_created');
-      onRefresh();
-      onSuccess(`${newSymbol.trim().toUpperCase()} ${selectedStrategy} instance added; start queued`);
+      reportChange(await applyRuntimeConfigChange({
+        save: () => createStrategyInstance({
+          symbol: newSymbol.trim().toUpperCase(), strategy: selectedStrategy,
+          profile: selectedProfile, enabled: true,
+        }),
+        refresh: onRefresh,
+        queue: result => startSymbolRuntime(result.instance.id, result.instance.symbol, 'instance_created'),
+      }));
       setNewSymbol('');
     } catch (err) {
       onError(getRuntimeErrorMessage(err, 'Failed to add strategy instance'));
@@ -907,16 +912,13 @@ function RuntimeTab({
 
     setSavingSymbol(instance.id);
     try {
-      await updateStrategyInstance(instance.id, data);
-      if (disabling) {
-        await stopSymbolRuntime(instance.id, instance.symbol, 'instance_disabled');
-      } else if (enabling) {
-        await startSymbolRuntime(instance.id, instance.symbol, 'instance_enabled');
-      } else if (configChanged) {
-        await restartSymbolRuntime(instance.id, instance.symbol, 'instance_config_changed');
-      }
-      onRefresh();
-      onSuccess(`${instance.id} updated`);
+      const queue = disabling ? () => stopSymbolRuntime(instance.id, instance.symbol, 'instance_disabled')
+        : enabling ? () => startSymbolRuntime(instance.id, instance.symbol, 'instance_enabled')
+        : configChanged ? () => restartSymbolRuntime(instance.id, instance.symbol, 'instance_config_changed')
+        : undefined;
+      reportChange(await applyRuntimeConfigChange({
+        save: () => updateStrategyInstance(instance.id, data), refresh: onRefresh, queue,
+      }));
     } catch (err) {
       onError(getRuntimeErrorMessage(err, 'Failed to update strategy instance'));
     } finally {
@@ -929,10 +931,15 @@ function RuntimeTab({
     if (!confirmActivePositionAction(instance.symbol, 'удалить instance и остановить процесс этого символа')) return;
     setSavingSymbol(instance.id);
     try {
-      await stopSymbolRuntime(instance.id, instance.symbol, 'instance_delete');
+      const status = await getRuntimeStatus();
+      if (canControlWorker(status)) {
+        await stopSymbolRuntime(instance.id, instance.symbol, 'instance_delete');
+      } else if (status.stale || status.runtime_pid || !['stopped', 'crashed'].includes(status.state)) {
+        throw new Error('Для удаления instance нужен актуальный статус работающего или остановленного runtime.');
+      }
       await deleteStrategyInstance(instance.id);
-      onRefresh();
-      onSuccess(`${instance.id} removed`);
+      await onRefresh();
+      onSuccess(`${instance.id}: конфигурация удалена`);
     } catch (err) {
       onError(getRuntimeErrorMessage(err, 'Failed to remove strategy instance'));
     } finally {
@@ -941,6 +948,7 @@ function RuntimeTab({
   };
 
   const handleRestartInstance = async (instance: StrategyInstance) => {
+    if (!workerControlEnabled) return;
     if (!confirmActivePositionAction(instance.symbol, 'перезапустить процесс этого символа')) return;
     setSavingSymbol(instance.id);
     try {
@@ -1032,6 +1040,12 @@ function RuntimeTab({
         )}
       </Section>
 
+      {!workerControlEnabled && <p role="status" className="text-sm text-tg-hint leading-relaxed">
+        Включение instance сохраняет конфигурацию, но не запускает общий runtime. Нажмите «Старт» в блоке выше.
+        Если runtime завершился с ошибкой, сначала устраните указанную причину. Графики появятся после начала сбора данных;
+        в read_only сделки не открываются.
+      </p>}
+
       <Section title="Runtime Overview">
         <div className="grid grid-cols-3 gap-2">
           <div className="rounded-xl bg-tg-bg p-3 border border-white/10">
@@ -1083,7 +1097,7 @@ function RuntimeTab({
           <Button
             variant="secondary"
             onClick={handleAddInstance}
-            disabled={adding || !newSymbol.trim()}
+            disabled={adding || savingSymbol !== null || !newSymbol.trim()}
           >
             Add
           </Button>
@@ -1114,6 +1128,7 @@ function RuntimeTab({
                         {instance.symbol}
                       </span>
                       <span className="text-[10px] text-tg-hint truncate">{instance.id}</span>
+                      {!isDisabled && !workerControlEnabled && <span className="text-xs text-tg-hint">Ожидает запуска runtime</span>}
                     </div>
                     <div className="flex items-center gap-2">
                       <button
@@ -1125,13 +1140,13 @@ function RuntimeTab({
                             : 'border-red-500/30 text-red-400 bg-red-500/10'
                         } disabled:opacity-50`}
                       >
-                        {instance.enabled ? 'enabled' : 'disabled'}
+                        {instance.enabled ? 'Включён' : 'Выключен'}
                       </button>
                       <button
                         onClick={() => handleRestartInstance(instance)}
-                        disabled={isSaving || isDisabled}
+                        disabled={isSaving || isDisabled || !workerControlEnabled}
                         className="text-xs px-2 py-1 rounded-lg border border-sky-500/30 text-sky-400 bg-sky-500/10 disabled:opacity-50"
-                        title="Restart instance"
+                        title={workerControlEnabled ? 'Перезапустить worker' : 'Сначала запустите общий runtime'}
                       >
                         restart
                       </button>

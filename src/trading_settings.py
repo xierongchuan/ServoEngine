@@ -221,6 +221,22 @@ _SPOT_SCHEMA = {
     "wallets": {"account", "asset", "total"},
     "movements": {"account", "asset", "amount"},
 }
+# Эти БД не хранят владение/заявки. Распознаём схему, не имя файла или каталог:
+# неизвестная/смешанная схема по-прежнему блокирует смену исполнения.
+_INFRA_SCHEMAS = (
+    (0, {
+        "log_meta": {"key", "value"},
+        "log_catalog": {"kind", "value"},
+        "log_events": {"sequence", "event_id", "timestamp", "level", "category", "exchange", "symbol",
+                       "instance_id", "order_id", "request_id", "source", "service", "message", "payload"},
+    }),
+    (1, {
+        "clock_state": {"id", "identity", "boot", "tick", "logical"},
+        "budgets": {"key", "capacity", "period"},
+        "events": {"seq", "key", "at", "weight"},
+        "cooldowns": {"key", "until"},
+    }),
+)
 _ORDER_TERMINAL = {"FILLED", "CANCELED", "REJECTED", "EXPIRED"}
 
 
@@ -247,13 +263,20 @@ def _sqlite_has_managed_state(path: Path) -> bool:
         elif _SPOT_SCHEMA.keys() <= tables:
             schema, version = _SPOT_SCHEMA, 0
         else:
-            raise ValueError("Неизвестная схема SQLite-журнала")
+            match = next(((expected_version, known) for expected_version, known in _INFRA_SCHEMAS
+                          if tables - {"sqlite_sequence"} == known.keys()), None)
+            if match is None:
+                raise ValueError("Неизвестная схема SQLite-журнала")
+            version, schema = match
         if db.execute("PRAGMA user_version").fetchone()[0] != version:
             raise ValueError("Неизвестная версия SQLite-журнала")
+        infrastructure = any(schema is known for _, known in _INFRA_SCHEMAS)
         for table, required in schema.items():
             columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
-            if not required <= columns:
-                raise ValueError(f"Неполная схема SQLite-журнала: {table}")
+            if not required <= columns or (infrastructure and columns != required):
+                raise ValueError(f"Неполная или неизвестная схема SQLite-журнала: {table}")
+        if infrastructure:
+            return False
         # Проверяем все аккаунты: новый account_id не вправе скрывать старое владение.
         if schema is _JOURNAL_SCHEMA:
             for table in ("intents", "wires"):

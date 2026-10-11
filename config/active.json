@@ -22,30 +22,27 @@
       "symbol": "LTCUSDT",
       "strategy": "MACDX",
       "profile": "macdx_1d",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "ethusdt",
       "symbol": "ETHUSDT",
       "strategy": "MACDX",
       "profile": "macdx_1h",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "zecusdt",
       "symbol": "ZECUSDT",
       "strategy": "MACDX",
       "profile": "macdx_30m",
-      "enabled": true
+      "enabled": false
     }
   ],
   "symbols": {
     "bingx": [
       "BNBUSDT",
-      "BTCUSDT",
-      "ETHUSDT",
-      "LTCUSDT",
-      "ZECUSDT"
+      "BTCUSDT"
     ]
   },
   "disabled_symbols": []

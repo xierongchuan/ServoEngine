@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import time
+import traceback
 import uuid
 from urllib.parse import urlparse
 from contextlib import asynccontextmanager
@@ -64,7 +65,13 @@ app = FastAPI(title="Servo Engine Panel", lifespan=lifespan)
 async def global_exception_handler(request: Request, exc: Exception):
     """Не раскрывает исключения, пути и потенциальные секреты клиенту или логам."""
     request_id = getattr(request.state, "request_id", uuid.uuid4().hex)
-    logger.error("❌ Внутренняя ошибка панели; request_id=%s, тип=%s", request_id, type(exc).__name__)
+    frames = traceback.extract_tb(exc.__traceback__)[-6:]
+    location = " → ".join(f"{Path(frame.filename).name}:{frame.lineno} ({frame.name})" for frame in frames)
+    route = getattr(request.scope.get("route"), "path", "неизвестен")
+    from src.utils.logger import log_context
+    with log_context(category="panel", request_id=request_id):
+        logger.error("❌ Внутренняя ошибка панели; request_id=%s, маршрут=%s, тип=%s, место=%s",
+                     request_id, route, type(exc).__name__, location)
     return JSONResponse(status_code=500,
                         content={"detail": "Внутренняя ошибка панели", "request_id": request_id},
                         headers={"X-Request-ID": request_id})
@@ -110,16 +117,18 @@ async def request_logging_middleware(request: Request, call_next):
     if path.startswith(("/assets/", "/ws")):
         return await call_next(request)
 
-    logger.info("→ %s %s", method, path)
-
-    try:
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = request.state.request_id
-        duration = (time.monotonic() - start_time) * 1000
-        logger.info("← %s %s → %d (%.1fms)", method, path, response.status_code, duration)
-        return response
-    except Exception as exc:
-        return await global_exception_handler(request, exc)
+    from src.utils.logger import log_context
+    with log_context(category="panel", request_id=request.state.request_id):
+        logger.info("→ %s %s", method, path)
+        try:
+            response = await call_next(request)
+            response.headers["X-Request-ID"] = request.state.request_id
+            duration = (time.monotonic() - start_time) * 1000
+            route = getattr(request.scope.get("route"), "path", path)
+            logger.info("← %s %s → %d (%.1fms)", method, route, response.status_code, duration)
+            return response
+        except Exception as exc:
+            return await global_exception_handler(request, exc)
 
 
 @app.middleware("http")
