@@ -124,7 +124,8 @@ def test_reset_archives_exact_bytes_preserves_durable_state_and_is_idempotent(pr
             assert (archive / relative).read_bytes() == before[relative]
         else:
             # mode=ro может создать SQLite sidecars; архив включает их после guard.
-            assert relative in {"data/logs/events.sqlite3-wal", "data/logs/events.sqlite3-shm"}
+            assert relative in {"data/logs/events.sqlite3-wal", "data/logs/events.sqlite3-shm",
+                                "data/exchange_rate_limits.sqlite3-wal", "data/exchange_rate_limits.sqlite3-shm"}
             assert (archive / relative).exists()
         assert not (project / relative).exists()
     for relative, content in before.items():
@@ -133,10 +134,74 @@ def test_reset_archives_exact_bytes_preserves_durable_state_and_is_idempotent(pr
     assert (project / "data/active_trades.json").read_text() == "{}"
     assert (project / "data/position_owners.json").read_text() == "{}"
     assert journal.path.exists()
+    assert all(not (project / "data" / name).exists() for name in cleanup.RATE_LIMIT_FILES)
+    assert "data/exchange_rate_limits.sqlite3" in manifest["moved"]
+    assert "data/exchange_rate_limits.sqlite3.guard" in manifest["moved"]
     assert run(project, monkeypatch, "--mode", "reset", "--apply") == 0
     assert list((project / ".cache/cleanup-backups").iterdir()) == archives
     with sqlite3.connect(archive / "data/logs/events.sqlite3") as database:
         assert database.execute("SELECT event_id FROM log_events").fetchone() == ("test",)
+
+
+def test_full_reset_recreates_rate_limiter_automatically_with_fresh_budget(project, monkeypatch):
+    data = project / "data"
+    limiter = ExchangeRateLimiter("cleanup-test", capacity=5, period=60, data_dir=data)
+    limiter.cooldown(60)
+    guard = data / "exchange_rate_limits.sqlite3.guard"
+    identity = guard.read_bytes()
+    assert run(project, monkeypatch, "--mode", "reset", "--apply") == 0
+    assert all(not (data / name).exists() for name in cleanup.RATE_LIMIT_FILES)
+    fresh = ExchangeRateLimiter("cleanup-test", capacity=5, period=60, data_dir=data, max_wait=0.2)
+    fresh.acquire()
+    assert guard.is_file() and guard.read_bytes() != identity
+    with sqlite3.connect(data / "exchange_rate_limits.sqlite3") as database:
+        assert database.execute("SELECT count(*) FROM cooldowns").fetchone()[0] == 0
+        assert database.execute("SELECT count(*) FROM events").fetchone()[0] == 1
+    archive = next((project / ".cache/cleanup-backups").iterdir())
+    with sqlite3.connect(archive / "data/exchange_rate_limits.sqlite3") as database:
+        assert database.execute("SELECT count(*) FROM cooldowns").fetchone()[0] == 1
+
+
+def test_cache_cleanup_keeps_rate_limiter_identity_and_cooldown(project, monkeypatch):
+    data = project / "data"
+    ExchangeRateLimiter("cleanup-test", capacity=5, period=60, data_dir=data).cooldown(60)
+    guard = data / "exchange_rate_limits.sqlite3.guard"
+    identity = guard.read_bytes()
+    database = data / "exchange_rate_limits.sqlite3"
+    before = database.read_bytes()
+    assert run(project, monkeypatch, "--mode", "cache", "--apply") == 0
+    assert database.read_bytes() == before and guard.read_bytes() == identity
+
+
+def test_reset_archives_residual_guard_and_all_orphan_sidecars(project, monkeypatch):
+    data = project / "data"
+    for name in cleanup.RATE_LIMIT_FILES[1:]:
+        put(project, "data/" + name, "остаточное состояние")
+    assert run(project, monkeypatch, "--mode", "reset", "--apply") == 0
+    assert all(not (data / name).exists() for name in cleanup.RATE_LIMIT_FILES)
+    archive = next((project / ".cache/cleanup-backups").iterdir())
+    for name in cleanup.RATE_LIMIT_FILES[1:]:
+        assert (archive / "data" / name).read_text() == "остаточное состояние"
+    ExchangeRateLimiter("cleanup-test", capacity=5, period=60, data_dir=data, max_wait=0.2).acquire()
+    assert (data / "exchange_rate_limits.sqlite3").exists()
+
+
+def test_rate_limiter_filename_cannot_hide_execution_journal(project, monkeypatch):
+    database = project / "data/exchange_rate_limits.sqlite3"
+    ExecutionJournal(database)
+    before = database.read_bytes()
+    assert run(project, monkeypatch, "--mode", "reset", "--apply") == 1
+    assert database.read_bytes() == before
+    assert (project / "data/trade_history.json").exists()
+
+
+def test_rate_limiter_kit_is_not_removed_with_active_container(project, monkeypatch):
+    data = project / "data"
+    ExchangeRateLimiter("cleanup-test", capacity=5, period=60, data_dir=data)
+    before = snapshot(project)
+    inventory = [{"State": {"Running": True}, "Mounts": [{"Source": str(data)}]}]
+    assert run(project, monkeypatch, "--mode", "reset", "--apply", inventory=inventory) == 1
+    assert snapshot(project) == before
 
 
 @pytest.mark.parametrize("busy", ["running", "paused", "restarting"])

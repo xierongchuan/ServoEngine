@@ -8,35 +8,35 @@
       "symbol": "BTCUSDT",
       "strategy": "MACDX",
       "profile": "macdx_5m",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "bnbusdt",
       "symbol": "BNBUSDT",
       "strategy": "MACDX",
       "profile": "macdx_5m",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "trxusdt",
       "symbol": "LTCUSDT",
       "strategy": "MACDX",
       "profile": "macdx_5m",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "ethusdt",
       "symbol": "ETHUSDT",
       "strategy": "MACDX",
       "profile": "macdx_5m",
-      "enabled": true
+      "enabled": false
     },
     {
       "id": "zecusdt",
       "symbol": "ZECUSDT",
       "strategy": "MACDX",
       "profile": "macdx_5m",
-      "enabled": true
+      "enabled": false
     }
   ],
   "symbols": {

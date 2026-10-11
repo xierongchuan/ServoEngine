@@ -29,6 +29,8 @@ RESET_FILES = (
     "trade_history.json", "decision_journal.json", "backtest_result.json", "web_tokens.json",
     "runtime_command.json", "runtime_status.json", "symbol_runtime_command.json", "symbol_runtime_status.json",
 )
+RATE_LIMIT_FILES = tuple("exchange_rate_limits.sqlite3" + suffix
+                         for suffix in ("", "-wal", "-shm", "-journal", ".guard"))
 DURABLE_PREFIXES = (
     "active_trades", "position_owners", "positions_cache", "managed_state", "grid_state",
     "pending_orders", "unknown_orders", "order_journal", "execution_journal", "spot_ledger",
@@ -108,6 +110,10 @@ def build_plan(root: Path, mode: str) -> list[Path]:
         selected.update(files_under(root, directory))
 
     if mode == "reset":
+        for name in RATE_LIMIT_FILES:
+            path = checked_path(root, data / name)
+            if path.is_file():
+                selected.add(path)
         for name in RESET_FILES:
             for path in [data / name, data / (name + ".lock"), *data.glob(f".{name}.*.tmp")]:
                 checked_path(root, path)
@@ -124,9 +130,10 @@ def build_plan(root: Path, mode: str) -> list[Path]:
             if not protected(path) or path in {log_database, *[Path(str(log_database) + suffix)
                                                             for suffix in ("-wal", "-shm", "-journal")] }:
                 selected.add(path)
-    return sorted(path for path in selected if not protected(path) or (
-        mode == "reset" and path.parent == data / "logs" and path.name in {
-            "events.sqlite3", "events.sqlite3-wal", "events.sqlite3-shm", "events.sqlite3-journal"}))
+    return sorted(path for path in selected if not protected(path) or (mode == "reset" and (
+        (path.parent == data and path.name in RATE_LIMIT_FILES) or
+        (path.parent == data / "logs" and path.name in {
+            "events.sqlite3", "events.sqlite3-wal", "events.sqlite3-shm", "events.sqlite3-journal"}))))
 
 
 def assert_no_writers(root: Path, inventory, host_root: Path) -> None:
@@ -198,17 +205,21 @@ def assert_reset_safe(root: Path) -> None:
             from src.trading_settings import _INFRA_SCHEMAS
             if reason:
                 raise CleanupError("Сброс запрещён: " + reason)
-            database = checked_path(root, root / "data/logs/events.sqlite3")
-            if database.exists():
+            # Имя infrastructure-файла не даёт права стереть спрятанный под ним ledger.
+            for relative, (version, schema) in zip(
+                ("data/logs/events.sqlite3", "data/exchange_rate_limits.sqlite3"), _INFRA_SCHEMAS
+            ):
+                database = checked_path(root, root / relative)
+                if not database.exists():
+                    continue
                 with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=1)) as connection:
                     tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                    version, schema = _INFRA_SCHEMAS[0]
                     valid = tables - {"sqlite_sequence"} == schema.keys()
                     valid = valid and connection.execute("PRAGMA user_version").fetchone()[0] == version
                     for table, columns in schema.items():
                         valid = valid and {row[1] for row in connection.execute(f"PRAGMA table_info({table})")} == columns
                     if not valid:
-                        raise CleanupError("events.sqlite3 не является известной логовой БД; она сохраняется")
+                        raise CleanupError(f"{database.name} не является ожидаемой служебной БД; она сохраняется")
         except subprocess.TimeoutExpired:
             raise CleanupError("Истёк срок проверки торгового состояния; сброс запрещён") from None
 
@@ -308,7 +319,12 @@ def main(argv=None) -> int:
             print("  " + str(path.relative_to(root)))
         if len(plan) > 25:
             print(f"  ... ещё {len(plan) - 25} файлов")
-        print("Сохраняются: .env, config, durable trading state, rate limiter и неизвестные данные.")
+        print("Сохраняются: .env, config, durable trading state и неизвестные данные.")
+        if args.mode == "reset":
+            print("Rate limiter сбрасывается целиком: SQLite, WAL/SHM и guard уйдут в архив.")
+            print("⚠️ Сохранённый cooldown будет забыт; после запуска возможен ответ биржи 429/Retry-After.")
+        else:
+            print("Rate limiter сохраняется; для полного сброса используйте --mode reset.")
         if not args.apply:
             print("Предварительный просмотр. Для применения: scripts/clean_project.sh --mode " + args.mode + " --apply")
             return 0

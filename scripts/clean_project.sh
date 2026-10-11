@@ -12,9 +12,10 @@ usage() {
 
 scripts/clean_project.sh [--mode cache|reset] [--apply|--dry-run]
   cache    Восстановимые свечи, новости, графики, Python/test/build-кэш.
-  reset    Также история, решения, логи и control-файлы; всё сначала в архив.
+  reset    Также история, логи, control-файлы и весь rate limiter; всё в архив.
   --apply  Применить после остановки bot/panel и остальных писателей.
-По умолчанию только просмотр. .env, config, trading state и rate limiter сохраняются.
+По умолчанию только просмотр. .env, config и trading state сохраняются.
+В reset cooldown сбрасывается; при следующем запуске rate limiter создастся заново.
 Архив reset: .cache/cleanup-backups/. Узнать подробности: CLEANUP.md.
 Образ можно выбрать через SERVO_CLEANUP_IMAGE; .env не передаётся, сеть отключена.
 EOF
